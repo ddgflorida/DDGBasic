@@ -1,0 +1,2470 @@
+import re
+import sys
+import math
+import random
+import os
+import sqlite3
+import duckdb
+import csv
+import io
+import json
+import glob
+import subprocess
+import requests
+from datetime import datetime, timedelta
+import xlrd3
+
+csv.field_size_limit(1024 * 1024)
+
+class SqliteStringFunctions:
+    """
+    A class to encapsulate custom string functions for SQLite.
+    All methods are static as they don't depend on instance state.
+    """
+    @staticmethod
+    def reverse(s):
+      if not isinstance(s, str): return None
+      return s[::-1]
+
+    @staticmethod
+    def stuff(s, start, length, insert_str):
+      if not all(isinstance(arg, (str, int)) for arg in [s, start, length, insert_str]):
+          if not isinstance(s, str) or not isinstance(insert_str, str) or \
+             not isinstance(start, int) or not isinstance(length, int):
+              return None
+      start_index = start - 1
+      if start_index < 0 or start_index > len(s): return s
+      part1 = s[:start_index]
+      part2 = s[start_index + length:]
+      return part1 + insert_str + part2
+
+    @staticmethod
+    def left(s, num_chars):
+      if not isinstance(s, str) or not isinstance(num_chars, int): return None
+      return s[:num_chars]
+
+    @staticmethod
+    def right(s, num_chars):
+      if not isinstance(s, str) or not isinstance(num_chars, int): return None
+      if num_chars <= 0: return ""
+      return s[-num_chars:]
+
+    @staticmethod
+    def lpad(s, length, pad_str):
+      if not isinstance(s, str) or not isinstance(length, int) or not isinstance(pad_str, str): return None
+      if len(s) >= length: return s[:length]
+      return (pad_str * (length - len(s) + len(pad_str) -1))[:length - len(s)] + s
+
+    @staticmethod
+    def rpad(s, length, pad_str):
+      if not isinstance(s, str) or not isinstance(length, int) or not isinstance(pad_str, str): return None
+      if len(s) >= length: return s[:length]
+      return (s + pad_str * (length - len(s) + len(pad_str) -1))[:length]
+
+    @staticmethod
+    def replicate(s, count):
+      if not isinstance(s, str) or not isinstance(count, int): return None
+      return s * count
+
+    @staticmethod
+    def charindex(substring, s):
+      if not isinstance(s, str) or not isinstance(substring, str): return None
+      try:
+        return s.find(substring) + 1
+      except:
+        return 0
+
+    @classmethod
+    def register_all(cls, conn):
+        functions_to_register = {
+            "REVERSE": (1, cls.reverse), "STUFF": (4, cls.stuff), "LEFT$": (2, cls.left),
+            "RIGHT$": (2, cls.right), "LPAD": (3, cls.lpad), "RPAD": (3, cls.rpad),
+            "REPLICATE": (2, cls.replicate), "CHARINDEX": (2, cls.charindex),
+        }
+        for name, (num_params, func) in functions_to_register.items():
+            conn.create_function(name, num_params, func)
+
+# =================================================================
+# GLOBAL STATE AND CONFIGURATION
+# =================================================================
+class OutputConfig:
+    def __init__(self):
+        self.mode = "CONSOLE"
+        self.format = "TEXT"
+        self.file_path = ""
+
+g_output_config = OutputConfig()
+
+# =================================================================
+# Exception class for loop exits
+# =================================================================
+class LoopExit(Exception):
+    """Exception raised to exit from a loop early."""
+    pass
+
+class ProgramEnd(Exception):
+    """Exception raised to signal the END of the program."""
+    pass
+    
+# =================================================================
+# APPLICATION LOGIC
+# =================================================================
+def preprocess_continuations(source_code):
+    result, i, in_string, in_comment, string_char = [], 0, False, False, None
+    while i < len(source_code):
+        char = source_code[i]
+        if not in_string and not in_comment:
+            if char.upper() == 'R' and source_code[i:i+3].upper() == 'REM': in_comment = True
+            elif char == "'": in_comment = True
+            elif char in ['"', '`']: in_string, string_char = True, char
+        elif in_string and char == string_char:
+            if char == '"' and i + 1 < len(source_code) and source_code[i + 1] == '"':
+                result.append(char); i += 1; result.append(source_code[i]); i += 1; continue
+            else: in_string, string_char = False, None
+        elif char == '\n': in_comment = False
+        if (char == '_' and not in_string and not in_comment and i + 1 < len(source_code) and source_code[i + 1] == '\n'):
+            result.append(' '); i += 2; continue
+        result.append(char); i += 1
+    return ''.join(result)
+
+class Lexer:
+    def __init__(self, source_code):
+        self.raw_source_code = source_code
+        self.line_starts = [0]
+        for match in re.finditer(r"\n", source_code):
+            self.line_starts.append(match.end())
+        self.tokens = self._tokenize()
+
+    def get_line_col(self, pos):
+        line = 1
+        for i, start in enumerate(self.line_starts):
+            if start > pos: break
+            line = i + 1
+        col = pos - self.line_starts[line-1] + 1
+        return line, col
+
+    def _tokenize(self):
+        replacements = {r'\bEND\s+IF\b': 'ENDIF', r'\bLINE\s+INPUT\b': 'LINEINPUT', r'\bEND\s+LOOP\b': 'ENDLOOP',
+                        r'\bFOR\s+EACH\b': 'FOREACH', r'\bEND\s+TRANSACTION\b': 'ENDTRANSACTION', r'\bREAD\s+FILE\b': 'READFILE',
+                        r'\bTO\s+FILE\b': 'TOFILE', r'\bINTO\s+FILE\b': 'INTOFILE', r'\bANALYZE\s+CSV\b': 'ANALYZECSV',
+                        r'\bANALYZE\s+JSON\b': 'ANALYZEJSON', r'\bANALYZE\s+FILE\b': 'ANALYZEFILE'}
+        code = self.raw_source_code
+        for pattern, repl in replacements.items():
+            code = re.sub(pattern, repl, code, flags=re.IGNORECASE)
+        self.modified_source_code = code
+        
+        token_specification = [
+            ('STRING', r'"([^"]|"")*"'), ('BACKTICK_STRING', r'`[^`]*`'), ('NUMBER', r'\d+(\.\d*)?'), ('ASSIGN', r'='),
+            ('REM', r'REM[^\n]*'), ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
+            ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZEFILE', r'\bANALYZEFILE\b'),
+            ('LINEINPUT', r'\bLINEINPUT\b(?!\$)'), ('TOFILE', r'\bTOFILE\b(?!\$)'), ('READFILE', r'\bREADFILE\b(?!\$)'),
+            ('ENDLOOP', r'\bENDLOOP\b(?!\$)'), ('DATABASE', r'\bDATABASE\b(?!\$)'), ('SELECT', r'\bSELECT\b(?!\$)'),
+            ('INSERT', r'\bINSERT\b(?!\$)'), ('DELETE', r'\bDELETE\b(?!\$)'), ('DESCRIBE', r'\bDESCRIBE\b(?!\$)'),
+            ('UPDATE', r'\bUPDATE\b(?!\$)'), ('CREATE', r'\bCREATE\b(?!\$)'), ('DROP', r'\bDROP\b(?!\$)'),
+            ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
+            ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
+            ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'),
+            ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'), ('HASH', r'\bHASH\b(?!\$)'),
+            ('ARRAY', r'\bARRAY\b(?!\$)'), ('GOSUB', r'\bGOSUB\b(?!\$)'), ('RETURN', r'\bRETURN\b(?!\$)'),
+            ('SHELL', r'\bSHELL\b(?!\$)'), ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),
+            ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('TABLE', r'\bTABLE\b(?!\$)'),
+            ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('REPLACE', r'\bREPLACE\b(?!\$)'),
+            ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
+            ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
+            ('SET', r'\bSET\b(?!\$)'), ('OUTPUT', r'\bOUTPUT\b(?!\$)'), ('AS', r'\bAS\b(?!\$)'),
+            ('PRINT', r'\bPRINT\b(?!\$)'), ('LET', r'\bLET\b(?!\$)'), ('IF', r'\bIF\b(?!\$)'), ('THEN', r'\bTHEN\b(?!\$)'),
+            ('ELSE', r'\bELSE\b(?!\$)'), ('ENDIF', r'\bENDIF\b(?!\$)'), ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),
+            ('STEP', r'\bSTEP\b(?!\$)'), ('NEXT', r'\bNEXT\b(?!\$)'), ('IN', r'\bIN\b(?!\$)'), ('LOOP', r'\bLOOP\b(?!\$)'),
+            ('WHILE', r'\bWHILE\b(?!\$)'), ('WEND', r'\bWEND\b(?!\$)'), ('NOT', r'\bNOT\b(?!\$)'), ('END', r'\bEND\b(?!\$)'),
+            ('EXIT', r'\bEXIT\b(?!\$)'), ('FILES', r'\bFILES\b(?!\$)'), ('CHDIR', r'\bCHDIR\b(?!\$)'),
+            ('MKDIR', r'\bMKDIR\b(?!\$)'), ('RMDIR', r'\bRMDIR\b(?!\$)'), ('KILL', r'\bKILL\b(?!\$)'),
+            ('DETAILS', r'\bDETAILS\b(?!\$)'), ('ID', r'(?!INTO\b)[a-zA-Z][a-zA-Z0-9_]*\$?'), ('OP', r"[+\-*/]"),
+            ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), ('COMMA', r','),
+            ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('COMMENT', r"'[^\n]*"), ('NEWLINE', r'\n'),
+            ('SKIP', r'[ \t\u00A0]+'), ('MISMATCH', r'.'),
+        ]
+        tok_regex = '|'.join('(?P<%s>%s)' % pair for pair in token_specification)
+        raw_tokens, tokens, is_start_of_line = [], [], True
+        for mo in re.finditer(tok_regex, code, re.IGNORECASE):
+            kind, value, pos = mo.lastgroup, mo.group(), mo.start()
+            if kind in ['SKIP', 'REM', 'COMMENT']: continue
+            if kind == 'MISMATCH':
+                line, col = self.get_line_col(pos); raise RuntimeError(f"Unexpected character '{value}' at line {line}, col {col}")
+            raw_tokens.append((kind, value, pos))
+        i = 0
+        while i < len(raw_tokens):
+            kind, value, pos = raw_tokens[i]
+            if kind == 'NEWLINE': is_start_of_line = True; tokens.append((kind, value, pos)); i += 1; continue
+            if is_start_of_line and kind in Interpreter.SQL_KEYWORDS:
+                semicolon_pos = self.modified_source_code.find(';', pos)
+                if semicolon_pos != -1:
+                    sql_end_pos = semicolon_pos + 1
+                    sql_text = self.modified_source_code[pos:sql_end_pos].strip()
+                    tokens.append(('SQL_STRING', sql_text, pos))
+                    while i < len(raw_tokens) and raw_tokens[i][2] < sql_end_pos: i += 1
+                    is_start_of_line = False; continue
+            if (kind in ('IN', 'EXISTS', 'ASSIGN')) and i + 1 < len(raw_tokens) and raw_tokens[i+1][0] == 'LPAREN':
+                if i + 2 < len(raw_tokens) and raw_tokens[i+2][0] in Interpreter.SQL_KEYWORDS:
+                    tokens.append((kind, value, pos)); lp_pos = raw_tokens[i+1][2]; nesting, search_pos, end_paren_pos, in_string = 1, lp_pos + 1, -1, False
+                    while search_pos < len(self.modified_source_code):
+                        char = self.modified_source_code[search_pos]
+                        if char == "'": in_string = not in_string
+                        elif not in_string and char == '(': nesting += 1
+                        elif not in_string and char == ')': nesting -= 1
+                        if nesting == 0: end_paren_pos = search_pos; break
+                        search_pos += 1
+                    if nesting != 0: raise RuntimeError("Unmatched parens in SQL expression")
+                    sql_text = self.modified_source_code[lp_pos + 1 : end_paren_pos]
+                    tokens.extend([('LPAREN', '(', lp_pos), ('SQL_STRING', sql_text.strip(), lp_pos + 1), ('RPAREN', ')', end_paren_pos)])
+                    while i < len(raw_tokens) and raw_tokens[i][2] <= end_paren_pos: i += 1
+                    is_start_of_line = False
+                    if kind == 'EXISTS':
+                        text_after_paren = self.modified_source_code[end_paren_pos + 1:].lstrip()
+                        next_token_is_then = (i < len(raw_tokens) and raw_tokens[i][0] == 'THEN')
+                        if text_after_paren.upper().startswith('THEN') and not next_token_is_then:
+                            tokens.append(('THEN', 'THEN', end_paren_pos + 1))
+                    continue
+            u_value = value.upper()
+            if kind != 'STRING': value = u_value
+            if kind == 'BACKTICK_STRING': kind = 'STRING'
+            if u_value == 'ENDIF': kind, value = 'END IF', 'END IF'
+            elif u_value == 'LINEINPUT': kind, value = 'LINE INPUT', 'LINE INPUT'
+            elif u_value == 'READFILE': kind, value = 'READ FILE', 'READ FILE' 
+            elif u_value == 'TOFILE': kind, value = 'TO FILE', 'TO FILE'
+            elif u_value == 'INTOFILE': kind, value = 'INTO FILE', 'INTO FILE'
+            elif u_value == 'ENDLOOP': kind, value = 'END LOOP', 'END LOOP'
+            elif u_value == 'FOREACH': kind, value = 'FOR EACH', 'FOR EACH'
+            elif u_value == 'ENDTRANSACTION': kind, value = 'END TRANSACTION', 'END TRANSACTION'
+            elif u_value == 'ANALYZECSV': kind, value = 'ANALYZE CSV', 'ANALYZE CSV'
+            elif u_value == 'ANALYZEJSON': kind, value = 'ANALYZE JSON', 'ANALYZE JSON'
+            elif u_value == 'ANALYZEFILE': kind, value = 'ANALYZE FILE', 'ANALYZE FILE'
+            tokens.append((kind, value, pos)); is_start_of_line = False; i += 1
+        return tokens
+        
+class Formatter:
+    @staticmethod
+    def format(format_string, values):
+        output, val_idx, fmt_idx = "", 0, 0
+        while val_idx < len(values):
+            if fmt_idx >= len(format_string): break
+            char = format_string[fmt_idx]
+            if char in '#0*!&\\' or (char in '<>^' and format_string[fmt_idx+1:fmt_idx+2] == '\\'):
+                mask_regex = re.compile(r"([<>^]?\\ *\\[\s]*|!|&+|[#0\*,]+\.?[#0]*\^*)")
+                match = mask_regex.match(format_string, fmt_idx)
+                if match:
+                    mask = match.group(0)
+                    output += Formatter._format_value(values[val_idx], mask)
+                    val_idx += 1; fmt_idx += len(mask)
+                else: output += char; fmt_idx += 1
+            else: output += char; fmt_idx += 1
+        return output
+    @staticmethod
+    def _format_value(value, mask):
+        return Formatter._format_numeric(value, mask) if isinstance(value, (int, float)) else Formatter._format_string(str(value), mask)
+    @staticmethod
+    def _format_scientific(value, mask, is_negative):
+        caret_pos = mask.find('^^^^')
+        before_caret = mask[:caret_pos]
+        mantissa_str, exponent_str = f"{value:e}".split('e')
+        mantissa, exponent = float(mantissa_str), int(exponent_str)
+        mantissa_formatted = Formatter._format_numeric(mantissa, before_caret, force_positive=True)
+        exp_sign = '+' if exponent >= 0 else ''
+        result = f"{mantissa_formatted}E{exp_sign}{exponent:02d}"
+        if is_negative:
+            if ' ' in result: return result.replace(' ', '-', 1)
+            else: return '-' + result
+        return result
+    @staticmethod
+    def _format_numeric(value, mask, force_positive=False):
+        is_negative = value < 0 and not force_positive
+        if is_negative: value = abs(value)
+        if '^^^^' in mask: return Formatter._format_scientific(value, mask, is_negative)
+        decimal_pos = mask.find('.')
+        decimals = 0
+        integer_mask = mask
+        if decimal_pos != -1:
+            decimals = len(re.findall(r'[#0]', mask[decimal_pos+1:]))
+            integer_mask = mask[:decimal_pos]
+        formatted_num = f"{value:.{decimals}f}"
+        int_part, dec_part = formatted_num.split('.') if '.' in formatted_num else (formatted_num, "")
+        result, int_idx, digit_count = "", len(int_part) - 1, 0
+        has_leading_asterisk = integer_mask.strip().startswith('*')
+        for i in range(len(integer_mask) - 1, -1, -1):
+            mask_char = integer_mask[i]
+            if mask_char in '#0*':
+                if int_idx >= 0: result, int_idx, digit_count = int_part[int_idx] + result, int_idx - 1, digit_count + 1
+                elif mask_char == '0': result, digit_count = '0' + result, digit_count + 1
+                elif mask_char == '*' and has_leading_asterisk: result = '*' + result
+                else: result = ' ' + result
+            elif mask_char == ',':
+                if digit_count > 0 and int_idx >= 0: result = ',' + result
+                elif has_leading_asterisk: result = '*' + result
+                else: result = ' ' + result
+            else: result = mask_char + result
+        if int_idx >= 0: result = int_part[:int_idx+1] + result
+        if decimal_pos != -1: result += '.' + dec_part
+        if is_negative:
+            if ' ' in result: return result.replace(' ', '-', 1)
+            elif '*' in result: return result.replace('*', '-', 1)
+            else: return '-' + result
+        return result
+    @staticmethod
+    def _format_string(value, mask):
+        backslash_match = re.match(r'([<>^]?)\\(\s*)\\', mask)
+        if backslash_match:
+            justify, field_width = backslash_match.group(1) or '<', len(backslash_match.group(2)) + 2
+            truncated_str = value[:field_width]
+            if justify == '<': return truncated_str.ljust(field_width)
+            if justify == '>': return truncated_str.rjust(field_width)
+            if justify == '^': return truncated_str.center(field_width)
+        if mask == '!': return value[0] if value else ' '
+        if '&' in mask: return value.ljust(len(mask))
+        return value
+
+class Interpreter:
+    SQL_KEYWORDS = {'SELECT', 'INSERT', 'DELETE', 'UPDATE', 'CREATE', 'DROP', 'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'END TRANSACTION'}
+
+    def __init__(self, lexer, cmd_args=None, debug=False): # <-- Add debug=False here
+        self.lexer = lexer
+        self.tokens = self.lexer.tokens
+        self.token_index = 0
+        self.variables = {}
+        self.file_handles = {}
+        self.command_args = cmd_args if cmd_args is not None else []
+        self.gosub_stack = []
+        self.labels = {}
+        self.db_engine = 'sqlite' # Set SQLite as the default engine
+        self.db_connection = None
+        self.sql_fatal_errors = True
+        
+        self.debug_mode = debug # <-- And add this line
+        self.jump_map = {}
+        self._pre_scan_for_jumps()
+        self._init_db()
+        self._scan_for_labels()
+
+    def _pre_scan_for_jumps(self):
+        """
+        Scans the token list to map all control structures (IF/ELSE/END IF, etc.)
+        This version correctly handles the distinction between single-line and multi-line IFs.
+        """
+        stack = []
+        # We can add 'FOR', 'WHILE' etc. to this list to upgrade them later
+        control_keywords_start = {'IF'}
+        
+        for index, token in enumerate(self.tokens):
+            token_type = token[0]
+
+            if token_type in control_keywords_start:
+                # To determine if an IF is multi-line, find its THEN.
+                # If a NEWLINE comes right after THEN, it's a multi-line block.
+                is_multi_line = False
+                temp_index = index + 1
+                while temp_index < len(self.tokens):
+                    if self.tokens[temp_index][0] == 'THEN':
+                        if (temp_index + 1) < len(self.tokens) and self.tokens[temp_index + 1][0] == 'NEWLINE':
+                            is_multi_line = True
+                        break
+                    # If we hit a newline before THEN, it's a syntax error the parser will catch.
+                    # For the scanner, it's just a single-line statement.
+                    if self.tokens[temp_index][0] == 'NEWLINE':
+                        break
+                    temp_index += 1
+
+                if is_multi_line:
+                    stack.append((token_type, index))
+
+            elif token_type == 'ELSE':
+                if not stack or stack[-1][0] != 'IF':
+                    self._error(f"Mismatched ELSE without IF at index {index}")
+                if_type, if_index = stack[-1]
+                self.jump_map[if_index] = {'else': index}
+
+            elif token_type == 'END IF':
+                if not stack or stack[-1][0] != 'IF':
+                    self._error(f"Mismatched END IF at index {index}")
+                
+                if_type, if_index = stack.pop()
+                if if_index in self.jump_map:
+                    self.jump_map[if_index]['endif'] = index
+                else: 
+                    self.jump_map[if_index] = {'else': None, 'endif': index}
+        
+        if stack:
+            start_type, start_index = stack[-1]
+            line, _ = self.lexer.get_line_col(self.tokens[start_index][2])
+            self._error(f"Mismatched '{start_type}' on line {line} without a corresponding closing statement.")
+
+                   
+    def _debug_state(self, message):
+        """A helper function to print the current parser state."""
+        if not self.debug_mode:
+            return
+
+        token = self._current_token()
+        if token:
+            line, col = self.lexer.get_line_col(token[2])
+            print(f"DEBUG | {message:<40} | Token: {str(token[0]):<15} | Value: {str(token[1]):<15} | Line: {line}")
+        else:
+            print(f"DEBUG | {message:<40} | Token: None")
+
+    def _error(self, message):
+        tok = self._current_token()
+        if tok:
+            line, col = self.lexer.get_line_col(tok[2]); raise RuntimeError(f"{message} at line {line}, col {col}: token {tok}")
+        else: raise RuntimeError(message)
+
+    def _parse_database_statement(self):
+        self._expect('DATABASE')
+        token = self._current_token()
+
+        if token and token[0] == 'OPEN':
+            self._next_token()
+            filename = self._parse_expression()
+            self._init_db(filename)
+        elif token and token[0] == 'CLOSE':
+            self._next_token()
+            self._init_db() # Re-initializes a new in-memory database
+        elif token and token[0] == 'ID' and token[1] == 'ENGINE':
+            # --- ADD THIS LOGIC ---
+            self._next_token() # Consume ENGINE
+            engine_token = self._expect('ID')
+            engine_name = engine_token[1].lower()
+            if engine_name in ['sqlite', 'duckdb']:
+                self.db_engine = engine_name
+                print(f"Database engine set to {self.db_engine}.")
+                # Close any existing connection when switching engines
+                if self.db_connection:
+                    self.db_connection.close()
+                    self.db_connection = None
+            else:
+                self._error("Unsupported engine. Use SQLITE or DUCKDB.")
+        else:
+            self._error("Expected OPEN, CLOSE, or ENGINE after DATABASE")
+            
+    def _init_db(self, filename=":memory:"):
+        if self.db_connection: 
+            self.db_connection.close()
+        print(f"(Connecting using {self.db_engine} engine...)") # Optional debug message
+        if self.db_engine == 'duckdb':
+            self.db_connection = duckdb.connect(database=filename, read_only=False)
+        else:
+            self.db_connection = sqlite3.connect(filename, isolation_level=None)
+            SqliteStringFunctions.register_all(self.db_connection)
+        self.db_cursor = self.db_connection.cursor()
+
+    def _scan_for_labels(self):
+        for i, token in enumerate(self.tokens):
+            if token[0] == 'ID' and i + 1 < len(self.tokens) and self.tokens[i+1][0] == 'COLON':
+                label_name = token[1]
+                if label_name in self.labels: self._error(f"Duplicate label found: {label_name}")
+                self.labels[label_name] = i + 2
+
+    def close(self):
+        self._close_all_files()
+        if self.db_connection: self.db_connection.close(); self.db_connection = None
+
+    def __del__(self): self.close()
+
+    def _close_all_files(self):
+        for handle_info in self.file_handles.values(): handle_info['handle'].close()
+        self.file_handles = {}
+
+    def _current_token(self): return self.tokens[self.token_index] if self.token_index < len(self.tokens) else None
+    def _peek_token(self): return self.tokens[self.token_index + 1] if self.token_index + 1 < len(self.tokens) else None
+    
+    def _next_token(self):
+        if self.token_index < len(self.tokens): self.token_index += 1
+        return self._current_token()
+    
+    def _expect(self, kind):
+        token = self._current_token()
+        if token and token[0] == kind: self._next_token(); return token
+        self._error(f'Expected token {kind} but got {token[0] if token else "None"}')
+
+    def _extract_sql_from_parens(self):
+        self._expect('LPAREN'); sql_token = self._expect('SQL_STRING'); self._expect('RPAREN'); return sql_token[1]
+
+    def _execute_sql(self, sql_string, is_query=False):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': "", 'SQL_ROWCOUNT': 0.0, 'SQL_FOUND': 0.0, 'SQL_NOTFOUND': -1.0})
+        bind_vars = re.findall(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', sql_string)
+        params = [self.variables[var.upper()] for var in bind_vars if var.upper() in self.variables or self._error(f"Bind variable ':{var}' not found.")]
+        final_sql = re.sub(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', '?', sql_string)
+        try:
+            result = self.db_cursor.execute(final_sql, params)
+            if not is_query:
+                row_count = self.db_cursor.rowcount
+                self.variables['SQL_ROWCOUNT'] = float(row_count if row_count != -1 else 0)
+                if row_count > 0: self.variables['SQL_FOUND'], self.variables['SQL_NOTFOUND'] = -1.0, 0.0
+                else: self.variables['SQL_FOUND'], self.variables['SQL_NOTFOUND'] = 0.0, -1.0
+            
+            if is_query:
+                # DuckDB returns a relation object, SQLite's cursor is the iterable
+                return result.fetchall() if self.db_engine == 'duckdb' else self.db_cursor.fetchall()
+            return None
+        except (sqlite3.Error, duckdb.Error) as e: # Catch errors from either library
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            if self.sql_fatal_errors:
+                self._error(f"Fatal DB Error: {e}")
+            return None
+
+    def run_block(self, end_tokens):
+        while True:
+            token = self._current_token()
+            if not token or token[0] in end_tokens:
+                break
+            self._parse_line()
+
+    def _skip_block(self, start_token, end_token):
+        level = 1
+        while self._current_token() and level > 0:
+            current_token = self._current_token()
+            self._next_token()
+            if not current_token: break
+            if current_token[0] == start_token: level += 1
+            elif current_token[0] == end_token: level -= 1
+
+    def _parse_line(self):
+        if not self._current_token() or self._current_token()[0] == 'END': return False
+        if self._current_token()[0] == 'NEWLINE': self._next_token(); return True
+        self._parse_statement()
+        if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+        return True
+
+    def _parse_end_statement(self):
+        self._expect('END')
+        raise ProgramEnd()
+
+    def _parse_statement(self):
+        token = self._current_token()
+        
+        # Skip label
+        if token and token[0] == 'ID' and self._peek_token() and self._peek_token()[0] == 'COLON':
+            self._next_token()
+            self._next_token()
+            if not self._current_token() or self._current_token()[0] in ['NEWLINE', 'END']:
+                return
+
+        token = self._current_token()
+        if not token: return
+
+        if token[0] == 'SQL_STRING':
+            sql_text = token[1].strip()
+            self._next_token()
+            is_select = sql_text.upper().startswith(('SELECT', 'WITH'))
+            if is_select:
+                if g_output_config.mode == "OFF": return
+                results = self._execute_sql(sql_text, is_query=True)
+                column_names = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
+                self._handle_output(results, column_names)
+            else:
+                self._execute_sql(sql_text)
+        
+        # --- ADDED THIS BLOCK TO HANDLE THE 'END' STATEMENT ---
+        elif token[0] == 'END':
+            self._parse_end_statement()
+        # --- END OF FIX ---
+
+        elif token[0] == 'SET':
+            self._parse_set_statement()
+        elif token[0] == 'IF':
+            self._parse_if_statement()
+        elif token[0] == 'FOR EACH': 
+            self._parse_for_each_statement()
+        elif token[0] == 'FOR':
+            if "IN" in [t[0] for t in self.tokens[self.token_index:self.token_index+5]]:
+                # A bit of a lookahead to distinguish FOR...IN from FOR...TO
+                self._parse_for_in_sql_loop() # Assuming SQL, can be refined
+            else:
+                self._parse_for_statement()
+        elif token[0] == 'FILES':
+            self._parse_files_statement()
+        elif token[0] == 'ID' and token[1] == 'NAME':
+            self._parse_name_statement()
+        elif token[0] == 'CHDIR':           
+            self._parse_chdir_statement()
+        elif token[0] == 'MKDIR':           
+            self._parse_mkdir_statement()
+        elif token[0] == 'RMDIR':           
+            self._parse_rmdir_statement()
+        elif token[0] == 'KILL':           
+            self._parse_kill_statement()
+        elif token[0] == 'SHELL':
+            self._parse_shell_statement()
+        elif token[0] == 'EXIT':
+            self._parse_exit_statement()
+        elif token[0] == 'FETCH':
+            self._parse_fetch_statement()
+        elif token[0] == 'PARSE': 
+            self._parse_json_statement()
+        elif token[0] == 'LOAD':
+            self._parse_load_statement()
+        elif token[0] == 'ANALYZE FILE':
+            self._parse_analyze_file_statement()
+        elif token[0] == 'ANALYZE CSV':
+            self._parse_analyze_csv_statement()
+        elif token[0] == 'ANALYZE JSON':
+            self._parse_analyze_json_statement()
+        elif token[0] == 'PRINT':
+            self._parse_print_statement()
+        elif token[0] == 'DESCRIBE':
+            self._parse_describe_statement()
+        elif token[0] == 'WRITE':
+            self._parse_write_statement()
+        elif token[0] == 'DATABASE':
+            self._parse_database_statement()
+        elif token[0] == 'LET' or token[0] == 'ID':
+             self._parse_assignment_statement()
+        elif token[0] == 'DIM':
+            self._parse_dim_statement()
+        elif token[0] == 'REDIM':
+            self._parse_redim_statement()
+        elif token[0] == 'WHILE':
+            self._parse_while_statement()
+        elif token[0] == 'OPEN':
+            self._parse_open_statement()
+        elif token[0] == 'CLOSE':
+            self._parse_close_statement()
+        elif token[0] == 'READ FILE':
+            self._parse_read_file_statement()
+        elif token[0] == 'LINE INPUT':
+            self._parse_line_input_statement()
+        elif token[0] == 'INPUT':
+            self._parse_input_statement()
+        elif token[0] == 'GOSUB':
+            self._parse_gosub_statement()
+        elif token[0] == 'RETURN':
+            self._parse_return_statement()
+        elif token[0] in ['ELSE', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
+            self._error(f"Unexpected '{token[0]}'")
+        else:
+            self._error(f"Unknown statement: {token[0]}")
+
+    def run(self):
+        try:
+            while self._current_token() and self._current_token()[0] != 'END':
+                self._parse_line()
+        except ProgramEnd:
+            # The END statement was executed. Terminate gracefully.
+            pass
+        except LoopExit as e:
+            self._error(f"'{e.args[0]}' without matching loop structure")
+
+    def run(self):
+        try:
+            while self._current_token() and self._current_token()[0] != 'END':
+                self._parse_line()
+        except ProgramEnd:
+            # The END statement was executed. Terminate gracefully.
+            pass
+        except LoopExit as e:
+            self._error(f"'{e.args[0]}' without matching loop structure")
+
+    def _parse_condition(self): return self._parse_or_condition()
+    def _parse_or_condition(self):
+        left = self._parse_and_condition()
+        while self._current_token() and self._current_token()[0] == 'OR':
+            self._next_token(); right = self._parse_and_condition(); left = (-1.0 if left != 0 or right != 0 else 0.0)
+        return left
+    def _parse_and_condition(self):
+        left = self._parse_comparison()
+        while self._current_token() and self._current_token()[0] == 'AND':
+            self._next_token(); right = self._parse_comparison(); left = (-1.0 if left != 0 and right != 0 else 0.0)
+        return left
+
+    def _parse_comparison(self):
+        token = self._current_token()
+        if self._current_token() and self._current_token()[0] == 'NOT':
+            self._next_token(); result = self._parse_comparison(); return -1.0 if result == 0 else 0.0
+        if self._current_token() and self._current_token()[0] == 'EXISTS':
+            self._next_token() # Consume EXISTS
+            sql_query = self._extract_sql_from_parens()
+            results = self._execute_sql(sql_query, is_query=True)
+            # EXISTS is true if the query returns one or more rows.
+            return -1.0 if results else 0.0
+        left = self._parse_expression()
+        token = self._current_token()
+        if token and token[0] in ['RELOP', 'ASSIGN']:
+            op_token = token; self._next_token(); op = op_token[1]; right = self._parse_expression()
+            if op == '=': return -1.0 if left == right else 0.0
+            if op == '<>': return -1.0 if left != right else 0.0
+            if op == '<': return -1.0 if left < right else 0.0
+            if op == '>': return -1.0 if left > right else 0.0
+            if op == '<=': return -1.0 if left <= right else 0.0
+            if op == '>=': return -1.0 if left >= right else 0.0
+            self._error(f"Unknown relational operator: {op}")
+        else:
+            if token and token[0] == 'RPAREN': return left
+            return -1.0 if left != 0 else 0.0
+
+    def _parse_set_statement(self):
+        self._expect('SET'); token = self._current_token()
+        if token[0] == 'ID' and token[1] == 'SQL_FATAL_ERRORS':
+            self._next_token(); setting_token = self._current_token()
+            if not setting_token or setting_token[0] != 'ID' or setting_token[1] not in ['ON', 'OFF']:
+                self._error("Expected ON or OFF after SET SQL_FATAL_ERRORS")
+            self.sql_fatal_errors = (setting_token[1] == 'ON'); self._next_token()
+        elif token[0] == 'OUTPUT':
+            self._next_token(); g_output_config.mode = "CONSOLE"; token = self._current_token()
+            if token and token[0] == 'ID':
+                if token[1] == 'CONSOLE': self._next_token()
+                elif token[1] == 'FILE':
+                    self._next_token(); filename = self._parse_expression()
+                    g_output_config.mode, g_output_config.file_path = "FILE", str(filename)
+                elif token[1] == 'OFF': self._next_token(); g_output_config.mode = "OFF"
+            token = self._current_token()
+            if token and token[0] == 'ID' and token[1] == 'FORMAT':
+                self._next_token(); format_token = self._current_token()
+                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL']:
+                    output_format = format_token[1].upper()
+                    if output_format in ["TEXT", "CSV", "JSON", "JSONL"]: g_output_config.format = output_format; self._next_token()
+                    else: self._error(f"Unknown format type '{output_format}'")
+                else: self._error("Missing or invalid format type after FORMAT")
+        else: self._error(f"Unknown option for SET command: {token[1]}")
+
+    def _handle_output(self, results, column_names):
+        if g_output_config.mode == "CONSOLE":
+            writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}"); writer_function(results, column_names, sys.stdout)
+        elif g_output_config.mode == "FILE":
+            try:
+                with open(g_output_config.file_path, "w", encoding="utf-8", newline='') as f:
+                    writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}"); writer_function(results, column_names, f)
+                print(f"{len(results)} rows written to {g_output_config.file_path}")
+            except IOError as e: self._error(f"Error writing to file: {e}")
+
+    def _write_as_text(self, results, headers, stream):
+        if not results: stream.write("(0 rows returned)\n"); return
+        widths = {h: len(h) for h in headers}
+        for row in results:
+            for i, h in enumerate(headers):
+                cell_content = str(row[i])
+                max_line_len = max(len(line) for line in cell_content.splitlines()) if cell_content else 0
+                widths[h] = max(widths[h], max_line_len)
+        header_line = " | ".join([f"{h:<{widths[h]}}" for h in headers])
+        separator = "-+-".join(["-" * widths[h] for h in headers])
+        stream.write(f"+-{separator}-+\n| {header_line} |\n+-{separator}-+\n")
+        for row in results:
+            processed_cells = [[str(v)] if v is not None else ["NULL"] for v in row]
+            cell_lines = [str(v).splitlines() if v is not None else ["NULL"] for v in row]
+            for cell in cell_lines:
+                if not cell: cell.append("")
+            max_lines_in_row = max(len(lines) for lines in cell_lines) if any(cell_lines) else 1
+            for i in range(max_lines_in_row):
+                row_parts = [f"{(cell_lines[j][i] if i < len(cell_lines[j]) else ''):<{widths[h]}}" for j, h in enumerate(headers)]
+                stream.write(f"| {' | '.join(row_parts)} |\n")
+            stream.write(f"+-{separator}-+\n")
+        stream.write(f"({len(results)} rows returned)\n")
+
+    def _write_as_csv(self, results, headers, stream):
+        csv_writer = csv.writer(stream); csv_writer.writerow(headers); csv_writer.writerows(results)
+    def _write_as_json(self, results, headers, stream):
+        json.dump([dict(zip(headers, row)) for row in results], stream, indent=2)
+    
+    def _write_as_jsonl(self, results, headers, stream):
+        for row in results: stream.write(json.dumps(dict(zip(headers, row))) + "\n")
+            
+    def _parse_if_statement(self):
+        start_if_index = self.token_index
+        self._expect('IF')
+        
+        # 1. Look up the pre-calculated locations from the jump_map.
+        jump_locations = self.jump_map.get(start_if_index)
+        
+        condition_true = self._parse_condition() != 0
+        self._expect('THEN')
+
+        is_single_line = self._current_token() and self._current_token()[0] != 'NEWLINE'
+        if is_single_line:
+            # Single-line IFs don't use the jump map.
+            if not condition_true:
+                while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ELSE']:
+                    self._next_token()
+            if self._current_token() and self._current_token()[0] == 'ELSE':
+                self._next_token()
+                if not condition_true: self._parse_statement()
+            elif condition_true:
+                self._parse_statement()
+            while self._current_token() and self._current_token()[0] != 'NEWLINE': self._next_token()
+            return
+        
+        # --- Multi-line IF logic using the jump_map ---
+        self._expect('NEWLINE')
+        if not jump_locations:
+            self._error("Mismatched multi-line IF statement; no corresponding END IF found during pre-scan.")
+
+        else_index = jump_locations['else']
+        endif_index = jump_locations['endif']
+
+        try:
+            if condition_true:
+                # Execute the THEN block. run_block will stop at the ELSE or END IF.
+                stop_at = else_index if else_index is not None else endif_index
+                while self.token_index < stop_at:
+                    self._parse_line()
+            else: # Condition is false
+                if else_index is not None:
+                    # Jump the pointer straight to the ELSE block to execute it.
+                    self.token_index = else_index + 1
+                    if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+                    
+                    while self.token_index < endif_index:
+                        self._parse_line()
+            
+            # After running the correct block, jump the pointer to the END IF.
+            self.token_index = endif_index
+            self._expect('END IF')
+
+        except LoopExit as e:
+            # An EXIT happened. Instantly jump to the end of the IF block and re-raise.
+            self.token_index = endif_index + 1
+            raise e
+
+
+
+    def _format_output_value(self, value):
+        if isinstance(value, (int, float)) and value >= 0:
+            return " " + (str(int(value)) if isinstance(value, float) and value.is_integer() else str(value))
+        if isinstance(value, float) and value.is_integer(): return str(int(value))
+        return str(value)
+        
+    def _parse_date_string(self, date_str):
+        date_str = date_str.replace('-', '')
+        if len(date_str) == 8 and date_str.isdigit(): return datetime.strptime(date_str, '%Y%m%d').date()
+        raise ValueError(f"Invalid date format: {date_str}")
+        
+    def _python_to_basic_data(self, data):
+        if isinstance(data, dict): return {str(k).upper(): self._python_to_basic_data(v) for k, v in data.items()}
+        if isinstance(data, list): return [self._python_to_basic_data(item) for item in data]
+        if data is None: return ""
+        if isinstance(data, bool): return -1.0 if data else 0.0
+        return data
+        
+    def _basic_to_json_serializable(self, data):
+        if isinstance(data, dict): return {k: self._basic_to_json_serializable(v) for k, v in data.items()}
+        if isinstance(data, list): return [self._basic_to_json_serializable(item) for item in data]
+        if isinstance(data, float) and data.is_integer(): return int(data)
+        return data
+        
+    def _execute_function(self, name, args):
+        name = name.upper()
+        if name == 'RND':
+            if not args: return random.random()
+            if len(args) == 1: max_val = int(args[0]); return float(random.randint(1, max_val)) if max_val >= 1 else self._error("RND arg must be >= 1")
+            self._error("RND takes 0 or 1 arguments.")
+        elif name == 'UBOUND':
+            if len(args) != 1 or not isinstance(args[0], list): self._error("UBOUND requires one array argument.")
+            return float(len(args[0]) - 1 if args[0] else -1)
+        elif name == 'JSON_SERIALIZE$':
+            if len(args) != 1 or not isinstance(args[0], (dict, list)): self._error("JSON_SERIALIZE$ requires one hash/array argument.")
+            return json.dumps(self._basic_to_json_serializable(args[0]))
+        elif name == 'HASH_EXISTS':
+            if len(args) != 2 or not isinstance(args[0], dict): self._error("HASH_EXISTS requires hash_var, key$.")
+            return -1.0 if str(args[1]) in args[0] else 0.0
+        elif name == 'HASH_DELETE':
+            if len(args) != 2 or not isinstance(args[0], dict): self._error("HASH_DELETE requires hash_var, key$.")
+            if str(args[1]) in args[0]: del args[0][str(args[1])]; return 0
+        elif name == 'HASH_COUNT':
+            if len(args) != 1 or not isinstance(args[0], dict): self._error("HASH_COUNT requires a hash argument.")
+            return float(len(args[0]))
+        elif name == 'IS_HASH': return -1.0 if isinstance(args[0], dict) else 0.0
+        elif name == 'IS_ARRAY': return -1.0 if isinstance(args[0], list) else 0.0
+        elif name == 'COMMAND$':
+            if len(args) != 1: self._error("COMMAND$ requires 1 argument.")
+            idx = int(args[0]); return self.command_args[idx-1] if 1 <= idx <= len(self.command_args) else ""
+        elif name == 'CURDIR$':
+            if args: self._error("CURDIR$ takes no arguments."); return os.getcwd()
+        elif name == 'FREEFILE':
+            if args:
+                self._error("FREEFILE function takes no arguments.")
+            # This initialization must happen outside the 'if args:' check.
+            file_num = 1
+            while file_num in self.file_handles:
+                file_num += 1
+            return float(file_num)
+        elif name == 'EOF':
+            file_num = int(args[0]); handle_info = self.file_handles.get(file_num);
+            if not handle_info: self._error(f"File #{file_num} is not open.")
+            pos = handle_info['handle'].tell(); is_eof = handle_info['handle'].read(1) == ''; handle_info['handle'].seek(pos)
+            return -1.0 if is_eof else 0.0
+        elif name == 'FILE_EXISTS':
+            if len(args) != 1: self._error("FILE_EXISTS requires 1 argument."); return -1.0 if os.path.exists(str(args[0])) else 0.0
+        elif name == 'DATE$': return datetime.now().strftime('%Y-%m-%d')
+        elif name == 'TIME$': return datetime.now().strftime('%H:%M:%S')
+        elif name == 'DATEADD': return (self._parse_date_string(args[0]) + timedelta(days=int(args[1]))).strftime('%Y-%m-%d')
+        elif name == 'DATEDIFF': return float((self._parse_date_string(args[0]) - self._parse_date_string(args[1])).days)
+        elif name == 'YEAR': return float(self._parse_date_string(args[0]).year)
+        elif name == 'MONTH': return float(self._parse_date_string(args[0]).month)
+        elif name == 'DAY': return float(self._parse_date_string(args[0]).day)
+        elif name == 'WEEKDAY': return float((self._parse_date_string(args[0]).weekday() + 1) % 7 + 1)
+        elif name == 'FORMATDATE$':
+            date_obj, format_mask = self._parse_date_string(args[0]), str(args[1]).upper()
+            format_map = {'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d', 'HH': '%H', 'MI': '%M', 'SS': '%S'}
+            py_format_str = format_mask
+            for b, p in format_map.items(): py_format_str = py_format_str.replace(b, p)
+            return date_obj.strftime(py_format_str)
+        elif name == 'LEN': return float(len(str(args[0])))
+        elif name == 'SPLIT':
+            if not (2 <= len(args) <= 3): self._error("SPLIT requires 2 or 3 arguments.")
+            source_str, delimiter_str = str(args[0]), str(args[1])
+            if not delimiter_str: return list(source_str)
+            if len(args) == 3: limit = int(args[2]); return source_str.split(delimiter_str, limit - 1) if limit > 0 else self._error("Limit must be > 0")
+            return source_str.split(delimiter_str)
+        elif name == 'LEFT$': return str(args[0])[:int(args[1])]
+        elif name == 'RIGHT$': return str(args[0])[-int(args[1]):]
+        elif name == 'MID$': s, st = str(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
+        elif name == 'UCASE$': return str(args[0]).upper()
+        elif name == 'LCASE$': return str(args[0]).lower()
+        elif name == 'REPLACE$':
+            if not (3 <= len(args) <= 5): self._error("REPLACE$ requires 3 to 5 arguments.")
+            source_str, old_str, new_str = str(args[0]), str(args[1]), str(args[2])
+            count = int(args[3]) if len(args) >= 4 else -1
+            ignore_case = (args[4] != 0) if len(args) == 5 else False
+            if ignore_case: return re.sub(re.escape(old_str), new_str, source_str, count=count if count != -1 else 0, flags=re.IGNORECASE)
+            return source_str.replace(old_str, new_str, count)
+        elif name == 'HEX$': return hex(int(args[0]))[2:]
+        elif name == 'OCT$': return oct(int(args[0]))[2:]
+        elif name == 'SPACE$': return ' ' * int(args[0])
+        elif name == 'TRIM$': return str(args[0]).strip()
+        elif name == 'LTRIM$': return str(args[0]).lstrip()
+        elif name == 'RTRIM$': return str(args[0]).rstrip()
+        elif name == 'STR$': return self._format_output_value(args[0])
+        elif name == 'VAL': return float(args[0])
+        elif name == 'INT': return float(math.floor(args[0]))
+        elif name == 'FIX': return float(math.trunc(args[0]))
+        elif name == 'ATN': return math.atan(args[0])
+        elif name == 'COS': return math.cos(args[0])
+        elif name == 'SIN': return math.sin(args[0])
+        elif name == 'TAN': return math.tan(args[0])
+        elif name == 'EXP': return math.exp(args[0])
+        elif name == 'LOG': return math.log(args[0])
+        elif name == 'SGN': n = args[0]; return 1.0 if n > 0 else -1.0 if n < 0 else 0.0
+        elif name == 'SQR': return math.sqrt(args[0])
+        else: self._error(f"Unknown function: {name}")
+        
+    def _parse_factor(self):
+        token = self._current_token()
+        if token[0] == 'OP' and token[1] in '+-':
+            op = token[1]; self._next_token(); res = self._parse_factor(); return -res if op == '-' else res
+        if token[0] == 'NUMBER': self._next_token(); return float(token[1])
+        elif token[0] in ('STRING', 'BACKTICK_STRING'):
+            self._next_token(); raw_value = token[1]
+            if raw_value.startswith('"'): return raw_value[1:-1].replace('""', '"')
+            return raw_value[1:-1]
+        elif token[0] == 'LPAREN':
+            if self._peek_token() and self._peek_token()[0] == 'SQL_STRING':
+                results = self._execute_sql(self._extract_sql_from_parens(), is_query=True)
+                if len(results) != 1 or len(results[0]) != 1: self._error("Scalar subquery must return one row/column.")
+                return results[0][0]
+            else: self._next_token(); res = self._parse_condition(); self._expect('RPAREN'); return res
+        elif token[0] == 'SQL_STRING':
+            self._next_token(); results = self._execute_sql(token[1], is_query=True)
+            if len(results) != 1 or len(results[0]) != 1: self._error("Scalar subquery must return one row/column.")
+            return results[0][0]
+        elif token[0] == 'ID':
+            var_name = token[1]
+            if var_name not in self.variables:
+                if not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                    self.variables[var_name] = "" if var_name.endswith('$') else 0.0
+            if var_name in ['DATE$', 'TIME$', 'FREEFILE', 'RND'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                self._next_token(); return self._execute_function(var_name, [])
+            self._next_token(); current_value = self.variables.get(var_name)
+            while self._current_token():
+                token = self._current_token()
+                if token[0] == 'LPAREN':
+                    self._next_token()
+                    if not isinstance(current_value, (list, dict)):
+                        args = [];
+                        if self._current_token()[0] != 'RPAREN':
+                            while True:
+                                args.append(self._parse_expression())
+                                if self._current_token()[0] == 'RPAREN': break
+                                self._expect('COMMA')
+                        self._expect('RPAREN'); current_value = self._execute_function(var_name, args); continue
+                    if self._current_token()[0] == 'RPAREN': self._expect('RPAREN'); break
+                    key_or_index = self._parse_expression(); self._expect('RPAREN')
+                    if isinstance(current_value, list):
+                        index = int(key_or_index)
+                        if not 0 <= index < len(current_value): self._error("Array index out of bounds.")
+                        current_value = current_value[index]
+                    elif isinstance(current_value, dict):
+                        current_value = current_value.get(str(key_or_index).upper(), "" if var_name.endswith('$') else 0.0)
+                    continue
+                elif token[0] == 'DOT':
+                    if not isinstance(current_value, dict): self._error("Dot notation only for HASH.")
+                    self._next_token(); key_token = self._expect('ID'); key_name = key_token[1].upper()
+                    lookup_key, is_string_access = key_name.rstrip('$'), key_name.endswith('$')
+                    current_value = current_value.get(lookup_key, "" if is_string_access else 0.0)
+                    continue
+                else: break
+            return current_value
+        else:
+            print("\n--- TOKEN DUMP IN LEXER ---")
+            for token in self.tokens:
+                print(token)
+            print("--------------------\n")            
+            self._error(f"Unexpected token in factor: {token}")
+        
+    def _parse_term(self):
+        res = self._parse_factor()
+        while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '*/':
+            op = self._current_token()[1]; self._next_token(); right = self._parse_factor()
+            if op == '*': res *= right
+            elif op == '/': res /= right
+        return res
+        
+    def _parse_expression(self):
+        res = self._parse_term()
+        while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '+-':
+            op = self._current_token()[1]; self._next_token(); right = self._parse_term()
+            if op == '+': res = str(res) + str(right) if isinstance(res, str) or isinstance(right, str) else res + right
+            elif op == '-':
+                if isinstance(res, str) or isinstance(right, str): self._error("Type mismatch: Cannot subtract strings.")
+                res -= right
+        return res
+
+    def _parse_line_input_statement(self):
+        self._expect('LINE INPUT')
+        self._expect('HASH_SYM')
+
+        file_num = int(self._parse_expression())
+
+        self._expect('COMMA')
+        var_name = self._expect('ID')[1]
+        line = self.file_handles[file_num]['handle'].readline()
+        self.variables[var_name] = line.rstrip('\n\r')
+        
+    def _parse_open_statement(self):
+        self._expect('OPEN'); filename = self._parse_expression(); self._expect('FOR')
+        mode_token = self._current_token()
+        if not mode_token or mode_token[0] not in ['OUTPUT', 'INPUT', 'APPEND']: self._error("Expected file mode")
+        self._next_token(); mode_map = {'OUTPUT': 'w', 'INPUT': 'r', 'APPEND': 'a'}; py_mode = mode_map[mode_token[1]]
+        self._expect('AS'); self._expect('HASH_SYM'); file_num = int(self._parse_expression())
+        if file_num in self.file_handles: self._error(f"File #{file_num} is already open.")
+        dialect_params = {}
+        if self._current_token() and self._current_token()[0] == 'WITH':
+            self._next_token(); self._expect('OPTIONS'); options_str = self._parse_expression()
+            for part in options_str.split(): key, value = part.split('='); dialect_params[key.strip()] = value.strip()
+        handle = open(filename, py_mode, newline='', encoding="utf-8")
+        self.file_handles[file_num] = {'handle': handle, 'dialect': dialect_params}
+        
+    def _parse_close_statement(self):
+        self._expect('CLOSE')
+        
+        # Check if a specific file handle is provided (e.g., CLOSE #1)
+        if self._current_token() and self._current_token()[0] == 'HASH_SYM':
+            self._next_token() # Consume the '#'
+            file_num = int(self._parse_expression())
+            
+            handle_info = self.file_handles.get(file_num)
+            if handle_info:
+                handle_info['handle'].close()
+                del self.file_handles[file_num]
+            else:
+                # This makes the command more robust by not crashing on a closed handle.
+                self._error(f"File #{file_num} is not open.")
+        else:
+            # If no file number is given, it's a bare CLOSE. Close all files.
+            self._close_all_files()
+ 
+    def _parse_read_file_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('READ FILE'); filename = str(self._parse_expression()); self._expect('INTO'); var_name = self._expect('ID')[1]
+        if not var_name.endswith('$'): self._error("Destination for READ FILE must be a string variable.")
+        try:
+            with open(filename, 'r', encoding='utf-8') as f: self.variables[var_name] = f.read()
+        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e); self._error(f"File not found: {filename}")
+        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e); self._error(f"Error reading file: {e}")
+            
+    def _parse_line(self):
+        # The faulty check for 'END' has been removed from here.
+        if not self._current_token():
+            return False
+
+        if self._current_token()[0] == 'NEWLINE':
+            self._next_token()
+            return True
+
+        self._parse_statement()
+
+        if self._current_token() and self._current_token()[0] == 'NEWLINE':
+            self._next_token()
+        return True
+        
+    def _parse_input_statement(self):
+        self._expect('INPUT'); prompt = ""
+        if self._current_token()[0] == 'STRING':
+            prompt = self._current_token()[1][1:-1].replace('""', '"'); self._next_token(); self._expect('SEMICOLON')
+        var_name = self._expect('ID')[1]; user_input = input(prompt)
+        if var_name.endswith('$'): self.variables[var_name] = user_input
+        else: self.variables[var_name] = float(user_input)
+        
+    def _parse_print_statement(self):
+        self._expect('PRINT')
+        target = sys.stdout
+        if self._current_token() and self._current_token()[0] == 'HASH_SYM':
+            self._next_token()
+            
+            file_num = int(self._parse_expression())
+            
+            target = self.file_handles[file_num]['handle']
+            self._expect('COMMA')
+        if self._current_token() and self._current_token()[0] == 'USING':
+            self._next_token()
+            format_string = self._parse_expression()
+            self._expect('SEMICOLON')
+            values = []
+            while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
+                values.append(self._parse_expression())
+                if self._current_token() and self._current_token()[0] == 'COMMA': self._next_token()
+                else: break
+            formatted_output = Formatter.format(format_string, values)
+            if target == sys.stdout: print(formatted_output)
+            else: target.write(formatted_output + '\n')
+            return
+        parts = []
+        suppress_nl = False
+        if (self._current_token() is None or 
+            self._current_token()[0] in ['NEWLINE', 'END'] or
+            (self._current_token()[0] in ['PRINT', 'IF', 'FOR', 'WHILE', 'DIM', 'LET', 'GOSUB', 'RETURN'] and 
+             self._current_token()[0] not in ['NEXT', 'WEND', 'END LOOP', 'LOOP'])):
+            parts.append('\n')
+        else:
+            while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
+                value = self._parse_expression()
+                if isinstance(value, dict): parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2))
+                elif isinstance(value, list): 
+                    formatted_list_items = []
+                    for item in value:
+                        if isinstance(item, dict):
+                            # If the item is a hash, format it as a JSON string.
+                            formatted_list_items.append(json.dumps(self._basic_to_json_serializable(item)))
+                        else:
+                            # Otherwise, use the standard formatting.
+                            formatted_list_items.append(self._format_output_value(item))
+                    parts.append("[" + ", ".join(formatted_list_items) + "]")
+                else: 
+                    parts.append(self._format_output_value(value))
+                token = self._current_token()
+                if token and token[0] == 'COMMA':
+                    self._next_token()
+                    parts.append('\t')
+                    suppress_nl = False
+                elif token and token[0] == 'SEMICOLON':
+                    self._next_token()
+                    suppress_nl = True
+                else:
+                    suppress_nl = False
+                    break
+            if not suppress_nl: parts.append('\n')
+        output = "".join(parts)
+        if target == sys.stdout: print(output, end='')
+        else: target.write(output)   
+            
+    def _parse_write_statement(self):
+        self._expect('WRITE'); target_handle, dialect_params = None, {}
+        if self._current_token() and self._current_token()[0] == 'HASH_SYM':
+            self._next_token(); file_num = int(self._parse_expression()); self._expect('COMMA')
+            handle_info = self.file_handles.get(file_num)
+            if not handle_info: self._error(f"File #{file_num} not open.")
+            target_handle, dialect_params = handle_info['handle'], handle_info['dialect']
+        values = []
+        if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
+            while True:
+                values.append(self._parse_expression())
+                if self._current_token() and self._current_token()[0] == 'COMMA': self._next_token()
+                else: break
+        if target_handle is None:
+            output_buffer = io.StringIO(); csv_writer = csv.writer(output_buffer, **dialect_params)
+            csv_writer.writerow(values); print(output_buffer.getvalue().strip())
+        else: csv.writer(target_handle, **dialect_params).writerow(values)
+            
+    def _parse_exit_statement(self):
+        self._expect('EXIT'); token = self._current_token()
+        if not token or token[0] not in ['FOR', 'WHILE']: self._error("EXIT must be followed by FOR or WHILE")
+        exit_type = token[0]; self._next_token(); raise LoopExit(exit_type)
+        
+    def _parse_while_statement(self):
+        start_index = self.token_index
+        self._expect('WHILE')
+
+        try:
+            while True:
+                # On each pass, rewind to re-evaluate the condition
+                self.token_index = start_index + 1
+                if not (self._parse_condition() != 0):
+                    # Normal Exit: condition is false. Find WEND and exit.
+                    self.token_index = start_index + 1
+                    self._skip_block('WHILE', 'WEND')
+                    return
+
+                # Condition was true, execute the body.
+                if self._current_token() and self._current_token()[0] == 'NEWLINE':
+                    self._next_token()
+                
+                self.run_block(end_tokens={'WEND'})
+                self._expect('WEND')
+
+        except LoopExit as e:
+            if e.args[0] == 'WHILE':
+                # An EXIT WHILE was called. Find the WEND from our current position.
+                self._skip_block('WHILE', 'WEND')
+                return
+            else:
+                # Not our EXIT, re-raise for an outer loop to handle
+                raise e
+
+    def _parse_files_statement(self):
+        self.variables['ERR'] = 0.0; self._expect('FILES')
+        path_arg, with_details, into_array_name = ".", False, None
+        if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'INTO', 'WITH']: path_arg = self._parse_expression()
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token(); into_array_name = self._expect('ID')[1]
+            if into_array_name not in self.variables or not isinstance(self.variables.get(into_array_name), list):
+                self._error(f"'{into_array_name}' is not a dimensioned array.")
+        if self._current_token() and self._current_token()[0] == 'WITH':
+            self._next_token(); self._expect('DETAILS'); with_details = True
+        try:
+            expanded_path = os.path.expanduser(str(path_arg))
+            glob_pattern = os.path.join(expanded_path, '*') if os.path.isdir(expanded_path) else expanded_path
+        except Exception: self.variables['ERR'] = 1.0; glob_pattern = path_arg
+        if into_array_name is None:
+            file_paths = sorted(glob.glob(glob_pattern))
+            if not file_paths: print("File not found"); return
+            if with_details:
+                for fp in file_paths:
+                    try:
+                        stats = os.stat(fp); name = os.path.basename(fp)
+                        date_str = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                        size_str = "<DIR>" if os.path.isdir(fp) else str(stats.st_size)
+                        print(f"{name:<25}\t{size_str:>12}\t{date_str}")
+                    except OSError: continue
+            else:
+                for fp in file_paths: print(os.path.basename(fp))
+        else:
+            if with_details:
+                detailed_list = []
+                for fp in glob.glob(glob_pattern):
+                    try:
+                        stats = os.stat(fp)
+                        detailed_list.append({"name": os.path.basename(fp), "size": float(stats.st_size),
+                                              "date": datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                                              "isdir": -1.0 if os.path.isdir(fp) else 0.0})
+                    except OSError: continue
+                self.variables[into_array_name] = detailed_list
+            else: self.variables[into_array_name] = [os.path.basename(p) for p in glob.glob(glob_pattern)]
+
+    def _parse_name_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ID'); old_filename = self._parse_expression(); self._expect('AS'); new_filename = self._parse_expression()
+        try: os.rename(str(old_filename), str(new_filename))
+        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+        except FileExistsError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 17.0, str(e)
+        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+
+    def _parse_chdir_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('CHDIR'); path = self._parse_expression()
+        try: os.chdir(os.path.expanduser(str(path)))
+        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+        except NotADirectoryError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 20.0, str(e)
+        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+
+    def _parse_mkdir_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('MKDIR'); path = self._parse_expression()
+        try: os.makedirs(os.path.expanduser(str(path)), exist_ok=True)
+        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+
+    def _parse_rmdir_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('RMDIR'); path = self._parse_expression()
+        try: os.rmdir(os.path.expanduser(str(path)))
+        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+        except OSError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 39.0, str(e)
+        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+ 
+    def _parse_kill_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('KILL'); filename = self._parse_expression()
+        try: os.remove(os.path.expanduser(str(filename)))
+        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+
+    def _parse_shell_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('SHELL')
+        if self._current_token() and self._current_token()[0] == 'NEWLINE': self._error("SHELL command requires a string argument.")
+        command_string = self._parse_expression(); dest_var = None
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token(); dest_var = self._expect('ID')[1]
+            if not dest_var.endswith('$'): self._error("Destination for SHELL output must be a string variable.")
+        try:
+            if dest_var:
+                result = subprocess.run(str(command_string), shell=True, check=False, capture_output=True, text=True, encoding='utf-8', errors='replace')
+                self.variables[dest_var] = result.stdout
+                if result.stderr: self.variables['ERRMSG$'] = result.stderr
+            else: result = subprocess.run(str(command_string), shell=True, check=False)
+            self.variables['ERR'] = float(result.returncode)
+        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = -1.0, str(e)
+            
+    def _parse_fetch_statement(self):
+        self.variables['ERR'] = 0.0; self._expect('FETCH'); url = self._parse_expression()
+        post_data_hash, headers_hash, upload_file_info, method = None, None, None, 'GET'
+        while self._current_token() and self._current_token()[0] not in ['INTO', 'TO FILE']:
+            clause = self._current_token()
+            if clause[0] == 'POST':
+                method = 'POST'; self._next_token(); hash_name = self._expect('ID')[1]
+                post_data_hash = self.variables.get(hash_name)
+                if self._current_token() and self._current_token()[0] == 'LPAREN': self._next_token(); self._expect('RPAREN')
+            elif clause[0] == 'USING':
+                self._next_token(); next_clause = self._current_token()
+                if next_clause[0] == 'ID' and next_clause[1] == 'FILE':
+                    self._next_token(); field_name = self._parse_expression(); self._expect('ASSIGN'); file_path = self._parse_expression()
+                    upload_file_info = (field_name, file_path)
+                elif next_clause[0] == 'ID' and next_clause[1] == 'HEADERS':
+                    self._next_token(); hash_name = self._expect('ID')[1]; headers_hash = self.variables.get(hash_name)
+                    if self._current_token() and self._current_token()[0] == 'LPAREN': self._next_token(); self._expect('RPAREN')
+                else: self._error("Expected FILE or HEADERS after USING")
+            else: self._error(f"Unexpected token '{clause[0]}' in FETCH statement")
+        destination_token = self._current_token()
+        if not destination_token: self._error("FETCH statement requires an INTO or TO FILE clause.")
+        try:
+            if destination_token[0] == 'TO FILE':
+                self._next_token(); local_filename = self._parse_expression()
+                if method == 'POST':
+                    if upload_file_info:
+                        with open(upload_file_info[1], 'rb') as f:
+                            files = {upload_file_info[0]: f}; response = requests.post(url, data=post_data_hash, headers=headers_hash, files=files, timeout=30, stream=True)
+                    else: response = requests.post(url, data=post_data_hash, headers=headers_hash, timeout=15, stream=True)
+                else: response = requests.get(url, headers=headers_hash, timeout=15, stream=True)
+                response.raise_for_status()
+                with open(local_filename, 'wb') as f:
+                    for chunk in response.iter_content(chunk_size=8192): f.write(chunk)
+                self.variables['ERR'] = float(response.status_code)
+            elif destination_token[0] == 'INTO':
+                self._next_token(); dest_var = self._expect('ID')[1]
+                if upload_file_info and method == 'POST':
+                    with open(upload_file_info[1], 'rb') as f:
+                        files = {upload_file_info[0]: f}; response = requests.post(url, data=post_data_hash, headers=headers_hash, files=files, timeout=30)
+                elif method == 'POST': response = requests.post(url, data=post_data_hash, headers=headers_hash, timeout=15)
+                else: response = requests.get(url, headers=headers_hash, timeout=15)
+                self.variables['ERR'] = float(response.status_code)
+                try: self.variables[dest_var] = response.content.decode('utf-8')
+                except UnicodeDecodeError: self.variables[dest_var] = "Binary data received"
+            else: self._error("FETCH statement requires an INTO or TO FILE clause.")
+        except FileNotFoundError: self.variables['ERR'] = -2.0
+        except requests.exceptions.RequestException: self.variables['ERR'] = -1.0
+
+    def _parse_load_statement(self):
+        peek = self._peek_token()
+        if peek and peek[0] == 'CSV': self._parse_load_csv_statement()
+        elif peek and peek[0] == 'JSON': self._parse_load_json_statement()
+        elif peek and peek[0] == 'EXCEL': self._parse_load_excel_statement()
+        else: self._error("Expected CSV, JSON, or EXCEL after LOAD")
+        
+    def _parse_load_csv_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('LOAD')
+        self._expect('CSV')
+
+        csv_filename = self._parse_expression()
+        destination_mode = None
+        destination_target = None
+        db_mode = None
+
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_expression()
+        
+        # --- THIS IS THE MISSING LOGIC ---
+        elif self._current_token() and self._current_token()[0] == 'INTO FILE':
+            destination_mode = 'INTO_FILE'
+            self._next_token()
+            destination_target = self._parse_expression()
+        # --- END OF MISSING LOGIC ---
+
+        elif self._current_token() and self._current_token()[0] == 'INTO':
+            destination_mode = 'INTO_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_expression()
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+                db_mode = self._current_token()[1]; self._next_token()
+            else:
+                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+        else:
+            self._error("Expected CREATE TABLE, INTO TABLE, or INTO FILE clause.")
+
+        options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 
+                   'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 'fields': ''}
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token(); options_str = self._parse_expression(); temp_options = {}
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key, start_pos = match.group(1).lower(), match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip().strip('"')
+                temp_options[key] = value
+            for key, value in temp_options.items():
+                if key == 'header': options['header'] = value.lower() in ['true', 'y', '1']
+                elif key in ['skip', 'limit', 'batchsize']: options[key] = int(value)
+                else: options[key] = value
+        
+        try:
+            with open(csv_filename, 'r', newline='', encoding=options['encoding']) as infile:
+                for _ in range(options['skip']): next(infile)
+                reader = csv.reader(infile, delimiter=options['delimiter'])
+                
+                original_headers = []
+                if options['header']:
+                    try: original_headers = next(reader)
+                    except StopIteration: return
+
+                final_headers, column_map = original_headers, list(range(len(original_headers))) if original_headers else None
+                
+                # --- File-to-File Transformation Logic ---
+                if destination_mode == 'INTO_FILE':
+                    total_rows_processed = 0
+                    with open(destination_target, 'w', newline='', encoding='utf-8') as outfile:
+                        if options['format'] == 'JSON': outfile.write('[\n')
+                        else: # CSV
+                            writer = csv.writer(outfile)
+                            writer.writerow(final_headers)
+
+                        limit = options['limit']
+                        for i, row in enumerate(reader):
+                            if limit is not None and i >= limit: break
+                            if not row: continue
+                            if column_map is None: column_map = list(range(len(row)))
+                            processed_row = [row[i] for i in column_map if i < len(row)]
+                            
+                            # Apply transformations (simplified for brevity, assumes your logic is here)
+
+                            if options['format'] == 'JSON':
+                                if total_rows_processed > 0: outfile.write(',\n')
+                                json.dump(dict(zip(final_headers, processed_row)), outfile, indent=2)
+                            else: # CSV
+                                writer.writerow(processed_row)
+                            total_rows_processed += 1
+
+                        if options['format'] == 'JSON': outfile.write('\n]\n')
+                    print(f"{total_rows_processed} records written to {destination_target}")
+
+                # --- File-to-Database Logic ---
+                elif destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
+                    cursor = self.db_cursor
+                    if destination_mode == 'CREATE_TABLE':
+                        if not final_headers and not options['fields']: self._error("CREATE TABLE requires header=true or a FIELDS option.")
+                        cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
+                        cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];'); cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+                    if db_mode == 'REPLACE': cursor.execute(f'DELETE FROM [{destination_target}];')
+                    
+                    insert_sql, batch, total_rows_processed = None, [], 0
+                    self.db_connection.execute('BEGIN TRANSACTION;')
+                    try:
+                        for row in reader:
+                            # ... (database loading logic from your file) ...
+                            pass # Placeholder for your existing DB loading code
+                        # ...
+                        # self.db_connection.execute('COMMIT;')
+                        print(f"{total_rows_processed} records loaded into table {destination_target}")
+                    except Exception as e:
+                        self.db_connection.execute('ROLLBACK;'); raise e
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"CSV load error: {e}"
+
+    def _parse_load_csv_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('LOAD')
+        self._expect('CSV')
+
+        csv_filename = self._parse_expression()
+        destination_mode, destination_target, db_mode = None, None, None
+
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'; self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_expression()
+        elif self._current_token() and self._current_token()[0] == 'INTO FILE':
+            destination_mode = 'INTO_FILE'; self._next_token()
+            destination_target = self._parse_expression()
+        elif self._current_token() and self._current_token()[0] == 'INTO':
+            destination_mode = 'INTO_TABLE'; self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_expression()
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+                db_mode = self._current_token()[1]; self._next_token()
+            else: self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+        else: self._error("Expected CREATE TABLE, INTO TABLE, or INTO FILE clause.")
+
+        options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 
+                   'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 'fields': ''}
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token(); options_str = self._parse_expression(); temp_options = {}
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key, start_pos = match.group(1).lower(), match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip()
+                if value.startswith('"') and value.endswith('"'): value = value[1:-1]
+                temp_options[key] = value
+            for key, value in temp_options.items():
+                if key == 'header': options['header'] = value.lower() in ['true', 'y', '1']
+                elif key in ['skip', 'limit', 'batchsize']: options[key] = int(value)
+                else: options[key] = value
+        
+        try:
+            with open(csv_filename, 'r', newline='', encoding=options['encoding']) as infile:
+                for _ in range(options['skip']): next(infile)
+                reader = csv.reader(infile, delimiter=options['delimiter'])
+                
+                original_headers = []
+                if options['header']:
+                    try: original_headers = next(reader)
+                    except StopIteration: return
+
+                final_headers, column_map = original_headers, list(range(len(original_headers))) if original_headers else None
+                
+                if options['fields']:
+                    if not options['header']: self._error("FIELDS option requires header=true.")
+                    field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
+                    
+                    if field_specs[0].strip() == '*':
+                        excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
+                        final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
+                        column_map = [i for i, h in enumerate(original_headers) if h.lower() not in excluded_fields]
+                    else:
+                        header_lookup = {h.lower(): i for i, h in enumerate(original_headers)}
+                        new_headers, new_map = [], []
+                        for spec in field_specs:
+                            match = re.match(r'\[([^\]]*)\](?:\s+as\s+(\w+))?', spec.strip())
+                            if not match: self._error(f"Invalid FIELDS specification: {spec}")
+                            original_name, new_name = match.groups()
+                            if original_name.lower() not in header_lookup:
+                                self._error(f"Field '{original_name}' not found in CSV header.")
+                            new_map.append(header_lookup[original_name.lower()])
+                            final_field_name = new_name.upper() if new_name else original_name.upper()
+                            new_headers.append(final_field_name)
+                        final_headers, column_map = new_headers, new_map
+
+                if destination_mode == 'INTO_FILE':
+                    total_rows_processed = 0
+                    with open(destination_target, 'w', newline='', encoding='utf-8') as outfile:
+                        if options['format'].upper() == 'JSON': outfile.write('[\n')
+                        else: # CSV
+                            writer = csv.writer(outfile); writer.writerow(final_headers)
+
+                        limit = options['limit']
+                        for i, row in enumerate(reader):
+                            if limit is not None and i >= limit: break
+                            if not row: continue
+                            if column_map is None: column_map = list(range(len(row)))
+                            processed_row = [row[i] for i in column_map if i < len(row)]
+                            
+                            # (Your transformation logic would go here)
+
+                            if options['format'].upper() == 'JSON':
+                                if total_rows_processed > 0: outfile.write(',\n')
+                                json.dump(dict(zip(final_headers, processed_row)), outfile, indent=2)
+                            else: writer.writerow(processed_row)
+                            total_rows_processed += 1
+
+                        if options['format'].upper() == 'JSON': outfile.write('\n]\n')
+                    print(f"{total_rows_processed} records written to {destination_target}")
+
+                elif destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
+                    cursor = self.db_cursor
+                    if destination_mode == 'CREATE_TABLE':
+                        if not final_headers and not options['fields']: self._error("CREATE TABLE requires header=true or a FIELDS option.")
+                        cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
+                        cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];'); cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+                    if db_mode == 'REPLACE': cursor.execute(f'DELETE FROM [{destination_target}];')
+                    
+                    insert_sql, batch, total_rows_processed = None, [], 0
+                    self.db_connection.execute('BEGIN TRANSACTION;')
+                    try:
+                        for row in reader:
+                            if column_map is None: column_map = list(range(len(row)))
+                            if not row: continue
+                            processed_row = [row[i] for i in column_map if i < len(row)]
+                            
+                            if insert_sql is None:
+                                num_cols = len(processed_row)
+                                if num_cols == 0: continue
+                                placeholders = ', '.join(['?'] * num_cols)
+                                if final_headers:
+                                    quoted_headers = ", ".join([f'[{h}]' for h in final_headers])
+                                    insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+                                else:
+                                    insert_sql = f'INSERT INTO [{destination_target}] VALUES ({placeholders});'
+                            
+                            batch.append(processed_row)
+                            total_rows_processed += 1
+                            if len(batch) >= options['batchsize']:
+                                cursor.executemany(insert_sql, batch); batch = []
+                        
+                        if batch: cursor.executemany(insert_sql, batch)
+                        self.db_connection.execute('COMMIT;')
+                        print(f"{total_rows_processed} records loaded into table {destination_target}")
+                    except Exception as e:
+                        self.db_connection.execute('ROLLBACK;'); raise e
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {csv_filename}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"CSV load error: {e}"
+            self._error(f"An error occurred during CSV load: {e}")
+
+            
+    def _parse_for_statement(self):
+        start_index = self.token_index
+        self._expect('FOR')
+        var = self._expect('ID')[1]
+        self._expect('ASSIGN')
+        start_val = self._parse_expression()
+        self._expect('TO')
+        end_val = self._parse_expression()
+        step_val = 1.0
+        if self._current_token() and self._current_token()[0] == 'STEP':
+            self._next_token()
+            step_val = self._parse_expression()
+        
+        self.variables[var] = start_val
+        body_start_index = self.token_index
+
+        try:
+            while True:
+                current_val = self.variables.get(var)
+                
+                if (step_val > 0 and current_val > end_val) or \
+                   (step_val < 0 and current_val < end_val):
+                    # --- Normal Completion Path ---
+                    self.token_index = body_start_index
+                    self._skip_block('FOR', 'NEXT')
+                    
+                    # --- START OF FIX ---
+                    # _skip_block leaves us ON the token after NEXT. Consume it.
+                    if self._current_token() and self._current_token()[0] == 'ID':
+                        self._next_token()
+                    # --- END OF FIX ---
+                    return
+
+                # --- Execute One Iteration ---
+                self.token_index = body_start_index
+                if self._current_token() and self._current_token()[0] == 'NEWLINE':
+                    self._next_token()
+                
+                self.run_block(end_tokens={'NEXT'})
+                
+                self._expect('NEXT')
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token()
+                
+                self.variables[var] += step_val
+
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                # --- EXIT FOR Path ---
+                self._skip_block('FOR', 'NEXT')
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token()
+                return
+            else:
+                raise e
+                
+    def _parse_load_excel_statement(self):
+        self._expect('LOAD')
+        self._expect('EXCEL')
+
+        excel_filename = self._parse_expression()
+        destination_mode, destination_target, db_mode = None, None, None
+
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'; self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_expression()
+        elif self._current_token() and self._current_token()[0] == 'INTO FILE':
+            destination_mode = 'INTO_FILE'; self._next_token()
+            destination_target = self._parse_expression()
+        elif self._current_token() and self._current_token()[0] == 'INTO':
+            destination_mode = 'INTO_TABLE'; self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_expression()
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+                db_mode = self._current_token()[1]; self._next_token()
+            else: self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+        else: self._error("Expected CREATE TABLE, INTO TABLE, or INTO FILE clause.")
+
+        options = {'header': True, 'sheetname': None, 'sheetindex': 0, 'batchsize': 10000,
+                   'limit': None, 'fields': '', 'transform': '', 'format': 'CSV'}
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token(); options_str = self._parse_expression(); temp_options = {}
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key, start_pos = match.group(1).lower(), match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip().strip('"')
+                temp_options[key] = value
+            for key, value in temp_options.items():
+                if key == 'header': options['header'] = value.lower() in ['true', '1', 'y']
+                elif key in ['sheetindex', 'batchsize', 'limit']: options[key] = int(value)
+                else: options[key] = value
+
+        try:
+            workbook = xlrd3.open_workbook(excel_filename)
+            sheet = None
+            if options['sheetname']:
+                target_sheet_name = options['sheetname'].lower()
+                sheet_names_lower = [name.lower() for name in workbook.sheet_names()]
+                if target_sheet_name in sheet_names_lower:
+                    sheet = workbook.sheet_by_index(sheet_names_lower.index(target_sheet_name))
+                else: self._error(f"No sheet named '{options['sheetname']}'.")
+            else: sheet = workbook.sheet_by_index(options['sheetindex'])
+
+            start_row = 0
+            original_headers = [str(cell.value) for cell in sheet.row(0)] if options['header'] else [f"Field_{i+1}" for i in range(sheet.ncols)]
+            if options['header']: start_row = 1
+            
+            final_headers, column_map = original_headers, list(range(len(original_headers)))
+            # (Your advanced FIELDS/TRANSFORM logic would go here)
+            
+            if destination_mode == 'INTO_FILE':
+                all_rows = []
+                limit = options.get('limit')
+                for row_idx in range(start_row, sheet.nrows):
+                    if limit is not None and len(all_rows) >= limit: break
+                    raw_row = [sheet.cell_value(row_idx, col_idx) for col_idx in column_map]
+                    all_rows.append(raw_row)
+                
+                with open(destination_target, 'w', newline='', encoding='utf-8') as outfile:
+                    if options['format'].upper() == 'JSON':
+                        json.dump([dict(zip(final_headers, row)) for row in all_rows], outfile, indent=2)
+                    else: # CSV
+                        writer = csv.writer(outfile)
+                        writer.writerow(final_headers)
+                        writer.writerows(all_rows)
+                print(f"{len(all_rows)} records written to {destination_target}")
+
+            elif destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
+                cursor = self.db_cursor
+                if destination_mode == 'CREATE_TABLE':
+                    cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
+                    cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];')
+                    cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+                if db_mode == 'REPLACE': cursor.execute(f'DELETE FROM [{destination_target}];')
+
+                placeholders = ', '.join(['?'] * len(final_headers))
+                quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
+                insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+                
+                batch, total_rows_processed = [], 0
+                limit = options.get('limit')
+                
+                self.db_connection.execute('BEGIN TRANSACTION;')
+                try:
+                    for row_idx in range(start_row, sheet.nrows):
+                        if limit is not None and total_rows_processed >= limit: break
+                        raw_row = [sheet.cell_value(row_idx, col_idx) for col_idx in column_map]
+                        batch.append(raw_row)
+                        total_rows_processed += 1
+                        if len(batch) >= options['batchsize']:
+                            cursor.executemany(insert_sql, batch); batch = []
+                    
+                    if batch: cursor.executemany(insert_sql, batch)
+                    self.db_connection.execute('COMMIT;')
+                    print(f"{total_rows_processed} records loaded into table {destination_target}")
+                except Exception as e:
+                    self.db_connection.execute('ROLLBACK;'); raise e
+
+        except FileNotFoundError: self._error(f"File not found: {excel_filename}")
+        except xlrd3.biffh.XLRDError as e: self._error(f"Excel file error: {e}")
+        except Exception as e: self._error(f"An error occurred during Excel load: {e}")
+ 
+    def _parse_load_json_statement(self):
+        """Loads a JSON file (array of objects) into a database table with data type inference."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('LOAD')
+        self._expect('JSON')
+
+        # --- 1. PARSE CLAUSES ---
+        json_filename = self._parse_expression()
+        destination_mode = None
+        destination_target = None
+        db_mode = None
+
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_expression()
+        elif self._current_token() and self._current_token()[0] == 'INTO':
+            destination_mode = 'INTO_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_expression()
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+                db_mode = self._current_token()[1]
+                self._next_token()
+            else:
+                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+        else:
+            self._error("Expected CREATE TABLE or INTO TABLE clause.")
+
+        options = {'batchsize': 10000}
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
+            if 'batchsize=' in options_str:
+                options['batchsize'] = int(options_str.split('=')[1])
+
+        # --- 2. READ AND PROCESS DATA ---
+        try:
+            with open(json_filename, 'r', encoding='utf-8') as infile:
+                data = json.load(infile)
+
+            if isinstance(data, dict): data = [data] # Allow a single object as well as an array
+            if not isinstance(data, list): self._error("JSON file must contain an array or a single object."); return
+            if not data: print("0 records loaded (JSON is empty)."); return
+            
+            # --- Schema Inference ---
+            headers, seen_keys, col_types = [], set(), {}
+            for record in data:
+                if not isinstance(record, dict): self._error("Elements of the JSON array must be objects.")
+                for key, value in record.items():
+                    if key not in seen_keys:
+                        seen_keys.add(key); headers.append(key); col_types[key] = 'INTEGER'
+                    
+                    current_type = col_types[key]
+                    if value is None or current_type == 'TEXT': continue
+                    if isinstance(value, str): col_types[key] = 'TEXT'
+                    elif isinstance(value, float): col_types[key] = 'REAL'
+                    elif not isinstance(value, int): col_types[key] = 'TEXT' # bool, list, dict -> TEXT
+            
+            # --- Database Operations ---
+            cursor = self.db_cursor
+            if destination_mode == 'CREATE_TABLE':
+                cols_def = ', '.join([f'[{h}] {col_types[h]}' for h in headers])
+                cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];')
+                cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+
+            if db_mode == 'REPLACE':
+                cursor.execute(f'DELETE FROM [{destination_target}];')
+
+            placeholders = ', '.join(['?'] * len(headers))
+            quoted_headers = ', '.join([f'[{h}]' for h in headers])
+            insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+            
+            batch_size = options['batchsize']
+            total_rows_processed = 0
+            
+            self.db_connection.execute('BEGIN TRANSACTION;')
+            try:
+                batch = []
+                for record in data:
+                    # Convert dict/list values to JSON strings for storage
+                    row = [json.dumps(record.get(h)) if isinstance(record.get(h), (dict, list)) else record.get(h) for h in headers]
+                    batch.append(row)
+                    total_rows_processed += 1
+                    if len(batch) >= batch_size:
+                        cursor.executemany(insert_sql, batch); batch = []
+                
+                if batch: cursor.executemany(insert_sql, batch)
+                self.db_connection.execute('COMMIT;')
+                print(f"{total_rows_processed} records loaded into table {destination_target}")
+
+            except Exception as e:
+                self.db_connection.execute('ROLLBACK;'); raise e
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {json_filename}")
+        except json.JSONDecodeError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"JSON parsing error: {e}"
+            self._error(f"JSON parsing error: {e}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"An error occurred during JSON load: {e}"
+            self._error(f"An error occurred during JSON load: {e}")
+            
+    def _parse_for_each_statement(self):
+        start_index = self.token_index
+        self._expect('FOR EACH'); key_var = self._expect('ID')[1]; self._expect('IN'); self._expect('HASH'); hash_var_name = self._expect('ID')[1]
+        if hash_var_name not in self.variables or not isinstance(self.variables[hash_var_name], dict): self._error(f"'{hash_var_name}' is not a hash.")
+        keys_to_iterate = list(self.variables[hash_var_name].keys())
+        body_start_index = self.token_index
+        try:
+            for key in keys_to_iterate:
+                self.variables[key_var] = key; self.token_index = body_start_index
+                if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+                self.run_block(end_tokens={'LOOP'}); self._expect('LOOP')
+            self.token_index = body_start_index; self._skip_block('FOR EACH', 'LOOP');
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                level = 1
+                while self._current_token() and level > 0:
+                    token = self._current_token()
+                    if token[0] == 'FOR EACH': level += 1
+                    elif token[0] == 'LOOP': level -= 1
+                    if level == 0: self._expect('LOOP'); return
+                    self._next_token()
+                self._error("Mismatched FOR EACH without LOOP")
+            else: raise e
+
+    def _parse_for_in_sql_loop(self):
+        start_index = self.token_index
+        self._expect('FOR')
+        loop_var_name = self._expect('ID')[1]
+        self._expect('IN')
+        sql_query = self._extract_sql_from_parens()
+        
+        # --- FIX: Allow an optional LOOP keyword for syntax consistency ---
+        if self._current_token() and self._current_token()[0] == 'LOOP':
+            self._next_token()
+        
+        results = self._execute_sql(sql_query, is_query=True)
+        if not self.db_cursor.description:
+            self._skip_block('LOOP', 'END LOOP')
+            return
+
+        column_names = [desc[0].upper() for desc in self.db_cursor.description]
+        loop_body_start_index = self.token_index
+        original_value = self.variables.get(loop_var_name)
+        
+        try:
+            for row in results:
+                record_hash = {}
+                for i, cell_value in enumerate(row):
+                    final_value = cell_value if cell_value is not None else ""
+                    record_hash[str(i + 1)] = final_value
+                    if i < len(column_names):
+                        record_hash[column_names[i]] = final_value
+                self.variables[loop_var_name] = record_hash
+                
+                self.token_index = loop_body_start_index
+                if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+                
+                self.run_block(end_tokens={'END LOOP'})
+                self._expect('END LOOP')
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                self._skip_block('LOOP', 'END LOOP')
+            else:
+                raise e
+        finally:
+            if original_value is not None:
+                self.variables[loop_var_name] = original_value
+            elif loop_var_name in self.variables:
+                del self.variables[loop_var_name]
+
+    def _parse_for_in_csv_loop(self):
+        self._expect('FOR')
+        loop_var_name = self._expect('ID')[1]
+        self._expect('IN')
+        self._expect('CSV')
+        self._expect('HASH_SYM')
+        file_num = int(self._parse_expression())
+        
+        # --- FIX: Allow an optional LOOP keyword for syntax consistency ---
+        if self._current_token() and self._current_token()[0] == 'LOOP':
+            self._next_token()
+
+        options = {'header': False}
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
+            if 'header=true' in options_str.lower():
+                options['header'] = True
+        
+        handle_info = self.file_handles.get(file_num)
+        if not handle_info:
+            self._error(f"File #{file_num} not open.")
+        
+        handle_info['handle'].seek(0)
+        csv_reader = csv.reader(handle_info['handle'], **handle_info['dialect'])
+        
+        headers = []
+        if options['header']:
+            try:
+                raw_headers = next(csv_reader)
+                headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip().upper() for h in raw_headers]
+            except StopIteration:
+                return
+
+        loop_body_start_index = self.token_index
+        original_value = self.variables.get(loop_var_name)
+        
+        try:
+            for row in csv_reader:
+                record_hash = {}
+                for i, cell_value in enumerate(row):
+                    record_hash[str(i + 1)] = cell_value
+                    if headers and i < len(headers):
+                        record_hash[headers[i]] = cell_value
+                self.variables[loop_var_name] = record_hash
+                
+                self.token_index = loop_body_start_index
+                if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+                
+                self.run_block(end_tokens={'END LOOP'})
+                self._expect('END LOOP')
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                self._skip_block('LOOP', 'END LOOP')
+            else:
+                raise e
+        finally:
+            if original_value is not None:
+                self.variables[loop_var_name] = original_value
+            elif loop_var_name in self.variables:
+                del self.variables[loop_var_name]
+        
+    def _parse_dim_statement(self):
+        self._expect('DIM'); var_name = self._expect('ID')[1]
+        if self._current_token() and self._current_token()[0] == 'AS':
+            self._next_token(); type_token = self._current_token()
+            if not type_token or type_token[0] not in ['HASH', 'ARRAY']: self._error(f"Expected HASH or ARRAY after AS")
+            self._next_token()
+            if type_token[0] == 'HASH': self.variables[var_name] = {}
+            elif type_token[0] == 'ARRAY': self.variables[var_name] = []
+        elif self._current_token() and self._current_token()[0] == 'LPAREN':
+            self._expect('LPAREN')
+            if self._current_token() and self._current_token()[0] == 'RPAREN': self._expect('RPAREN'); self.variables[var_name] = []
+            else:
+                size = int(self._parse_expression()); self._expect('RPAREN')
+                default_value = "" if var_name.endswith('$') else 0.0
+                self.variables[var_name] = [default_value] * (size + 1)
+        else: self._error(f"Invalid DIM statement for '{var_name}'.")
+            
+    def _parse_json_statement(self):
+        self._expect('PARSE'); self._expect('JSON'); json_string = self._parse_expression(); self._expect('INTO'); var_name = self._expect('ID')[1]
+        if self._current_token() and self._current_token()[0] == 'LPAREN': self._next_token(); self._expect('RPAREN')
+        if var_name not in self.variables: self._error(f"Target variable '{var_name}' must be dimensioned.")
+        try: parsed_data = json.loads(json_string)
+        except json.JSONDecodeError as e: self._error(f"Invalid JSON string: {e}")
+        self.variables[var_name] = self._python_to_basic_data(parsed_data)
+        
+    def _parse_redim_statement(self):
+        self._expect('REDIM'); var_name = self._expect('ID')[1]
+        if var_name not in self.variables or not isinstance(self.variables.get(var_name), list): self._error(f"'{var_name}' not dimensioned for REDIM.")
+        self._expect('LPAREN'); size = int(self._parse_expression()); self._expect('RPAREN')
+        default_value = "" if var_name.endswith('$') else 0.0
+        self.variables[var_name] = [default_value] * (size + 1)
+        
+    def _parse_assignment_statement(self):
+        if self._current_token()[0] == 'LET': self._next_token()
+        var_name = self._expect('ID')[1]
+        if self._current_token() and self._current_token()[0] == 'LPAREN':
+            self._expect('LPAREN'); key_or_index_expr = self._parse_expression(); self._expect('RPAREN'); self._expect('ASSIGN'); value = self._parse_expression()
+            if var_name not in self.variables or not isinstance(self.variables.get(var_name), (list, dict)): self._error(f"'{var_name}' is not an array or hash.")
+            collection = self.variables[var_name]
+            if isinstance(collection, list):
+                index = int(key_or_index_expr)
+                if index >= len(collection):
+                    default_value = "" if var_name.endswith('$') else 0.0
+                    collection.extend([default_value] * (index - len(collection) + 1))
+                collection[index] = value
+            elif isinstance(collection, dict): collection[str(key_or_index_expr).upper()] = value
+        elif self._current_token() and self._current_token()[0] == 'DOT':
+            self._next_token(); key_token = self._expect('ID'); key_name = key_token[1].upper(); self._expect('ASSIGN'); value = self._parse_expression()
+            if var_name not in self.variables or not isinstance(self.variables.get(var_name), dict): self._error(f"'{var_name}' is not a HASH for dot notation.")
+            self.variables[var_name][key_name] = value
+        elif self._current_token() and self._current_token()[0] == 'ASSIGN':
+            self._expect('ASSIGN'); value = self._parse_expression()
+            if value is None: self.variables[var_name] = "" if var_name.endswith('$') else 0.0
+            else: self.variables[var_name] = value
+        else: self._error(f"Invalid assignment statement for '{var_name}'")
+
+    def _parse_analyze_csv_statement(self):
+        """Parses and executes ANALYZE CSV, providing a detailed report on the file."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ANALYZE CSV')
+        filename = self._parse_expression()
+        
+        options = {'header': 'auto', 'delimiter': 'auto', 'constraints': '', 'limit': None}
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key = match.group(1).lower()
+                start_pos = match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip().strip('"')
+                
+                if key == 'header':
+                    if value.lower() in ['true', '1', 'y']: options['header'] = True
+                    elif value.lower() in ['false', '0', 'n']: options['header'] = False
+                elif key == 'delimiter': options['delimiter'] = value
+                elif key == 'constraints': options['constraints'] = value
+                elif key == 'limit': options['limit'] = int(value) 
+
+        into_hash_name = None
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            into_hash_name = self._expect('ID')[1]
+            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
+                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+
+        report = {}
+        try:
+            # Stage 1: File-level analysis
+            with open(filename, 'r', newline='', encoding='utf-8', errors='replace') as infile:
+                sample = infile.read(4096)
+                infile.seek(0)
+                
+                # Auto-detect delimiter
+                sniffer = csv.Sniffer()
+                if options['delimiter'] == 'auto':
+                    try: report['DELIMITER'] = sniffer.sniff(sample).delimiter
+                    except csv.Error: report['DELIMITER'] = ','
+                else:
+                    report['DELIMITER'] = options['delimiter']
+
+                # Auto-detect header
+                has_header = options['header']
+                if has_header == 'auto':
+                    try: has_header = sniffer.has_header(sample)
+                    except csv.Error: has_header = False
+                report['HEADER_ROW'] = -1.0 if has_header else 0.0
+                
+                reader = csv.reader(infile, delimiter=report['DELIMITER'])
+                
+                headers = []
+                if has_header:
+                    try: headers = next(reader) 
+                    except StopIteration: pass
+                
+                # Stage 2: Structural and Columnar Analysis
+                record_count = 0
+                field_counts = {}
+                col_stats = {}
+
+                if headers:
+                    col_stats = {h: {'min_len': None, 'max_len': 0, 'empty_count': 0, 'numeric_count': 0} for h in headers}
+
+                limit = options.get('limit')
+                for i, row in enumerate(reader):
+                    if limit is not None and i >= limit: break
+                    record_count += 1
+                    num_fields = len(row)
+                    field_counts[num_fields] = field_counts.get(num_fields, 0) + 1
+
+                    if not headers and not col_stats and row: # Create headers for headerless file
+                        headers = [f"Field_{j+1}" for j in range(num_fields)]
+                        col_stats = {h: {'min_len': None, 'max_len': 0, 'empty_count': 0, 'numeric_count': 0} for h in headers}
+                    
+                    for j, field in enumerate(row):
+                        if j >= len(headers): continue
+                        h = headers[j]
+                        field_len = len(field)
+                        if col_stats[h]['min_len'] is None or field_len < col_stats[h]['min_len']: col_stats[h]['min_len'] = field_len
+                        if field_len > col_stats[h]['max_len']: col_stats[h]['max_len'] = field_len
+                        if not field: col_stats[h]['empty_count'] += 1
+                        try:
+                            float(field); col_stats[h]['numeric_count'] += 1
+                        except (ValueError, TypeError): pass
+                
+                report['DATA_RECORDS'] = record_count
+                report['FIELD_COUNT_DISTRIBUTION'] = self._python_to_basic_data(field_counts)
+                report['COLUMN_STATISTICS'] = self._python_to_basic_data(col_stats)
+
+            # Output the report
+            if into_hash_name:
+                self.variables[into_hash_name] = self._python_to_basic_data(report)
+            else:
+                print(f"--- CSV Analysis Report for: {filename} ---")
+                print(f"  Delimiter Detected : '{report.get('DELIMITER', 'N/A')}'")
+                print(f"  Header Row Detected: {'Yes' if report.get('HEADER_ROW') else 'No'}")
+                print(f"  Total Data Records : {report.get('DATA_RECORDS', 0)}")
+                if 'FIELD_COUNT_DISTRIBUTION' in report and report['FIELD_COUNT_DISTRIBUTION']:
+                    print("  Field Count Distribution:")
+                    for count, num_rows in report['FIELD_COUNT_DISTRIBUTION'].items():
+                        print(f"    - {int(num_rows)} record(s) with {count} field(s)")
+                if 'COLUMN_STATISTICS' in report and report['COLUMN_STATISTICS']:
+                    print("  Column Statistics:")
+                    for col_name, stats in report['COLUMN_STATISTICS'].items():
+                        print(f"    - [{col_name}]")
+                        print(f"      Min/Max Length: {stats.get('MIN_LEN', 0)} / {stats.get('MAX_LEN', 0)}")
+                        print(f"      Empty Fields  : {stats.get('EMPTY_COUNT', 0)} ({stats.get('EMPTY_COUNT', 0) / record_count:.1%})")
+                        print(f"      Numeric Fields: {stats.get('NUMERIC_COUNT', 0)} ({stats.get('NUMERIC_COUNT', 0) / record_count:.1%})")
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {filename}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during CSV analysis: {e}")
+
+    def _format_bytes(self, size):
+        """Helper function to format bytes into KB, MB, etc."""
+        if size < 1024:
+            return f"{size} bytes"
+        elif size < 1024**2:
+            return f"{size/1024:.2f} KB"
+        elif size < 1024**3:
+            return f"{size/1024**2:.2f} MB"
+        else:
+            return f"{size/1024**3:.2f} GB"
+
+    def _parse_analyze_file_statement(self):
+        """Performs a detailed statistical analysis of a text file."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ANALYZE FILE')
+        filename = self._parse_expression()
+
+        into_hash_name = None
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            into_hash_name = self._expect('ID')[1]
+            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
+                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+
+        try:
+            report = {}
+            file_size = os.path.getsize(filename)
+            report['FILE_SIZE_BYTES'] = file_size
+            
+            with open(filename, 'r', encoding='utf-8', errors='replace') as f:
+                lines = f.readlines()
+            
+            full_content = "".join(lines)
+            total_lines = len(lines)
+            empty_lines = sum(1 for line in lines if not line.strip())
+            
+            report['TOTAL_LINES'] = total_lines
+            report['EMPTY_LINES'] = empty_lines
+            report['NON_EMPTY_LINES'] = total_lines - empty_lines
+            report['TOTAL_CHARACTERS'] = len(full_content)
+            report['TOTAL_WORDS'] = len(full_content.split())
+
+            if into_hash_name:
+                self.variables[into_hash_name] = self._python_to_basic_data(report)
+            else:
+                print(f"--- File Analysis Report for: {filename} ---")
+                print(f"  File Size    : {self._format_bytes(file_size)}")
+                print(f"  Total Lines  : {report['TOTAL_LINES']}")
+                print(f"  Empty Lines  : {report['EMPTY_LINES']}")
+                print(f"  Total Chars  : {report['TOTAL_CHARACTERS']}")
+                print(f"  Total Words  : {report['TOTAL_WORDS']}")
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {filename}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during file analysis: {e}")
+
+    def _parse_analyze_json_statement(self):
+        """Parses and executes ANALYZE JSON, reporting on structural consistency."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ANALYZE JSON')
+        filename = self._parse_expression()
+
+        into_hash_name = None
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            into_hash_name = self._expect('ID')[1]
+            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
+                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+
+        report = {}
+        try:
+            with open(filename, 'r', encoding='utf-8') as infile:
+                data = json.load(infile)
+            
+            # If the JSON is a single object, treat it as an array with one element
+            if isinstance(data, dict):
+                data = [data]
+
+            if not isinstance(data, list):
+                self._error("JSON file must contain an array of objects or a single object.")
+                return
+
+            report['TOTAL_RECORDS'] = len(data)
+            
+            # Analyze the consistency of keys across all objects
+            key_sets = [tuple(sorted(d.keys())) for d in data if isinstance(d, dict)]
+            key_distribution = {}
+            for ks in key_sets:
+                key_distribution[ks] = key_distribution.get(ks, 0) + 1
+            
+            report['IS_CONSISTENT'] = -1.0 if len(key_distribution) <= 1 else 0.0
+            report['KEY_SET_DISTRIBUTION'] = self._python_to_basic_data(key_distribution)
+            
+            if into_hash_name:
+                self.variables[into_hash_name] = self._python_to_basic_data(report)
+            else:
+                print(f"--- JSON Analysis Report for: {filename} ---")
+                print(f"  Total Records : {report['TOTAL_RECORDS']}")
+                print(f"  Is Consistent : {'Yes' if report['IS_CONSISTENT'] else 'No'}")
+                print("  Key Set Distribution:")
+                for key_set, count in report['KEY_SET_DISTRIBUTION'].items():
+                    print(f"    - {int(count)} record(s) with keys: {key_set}")
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {filename}")
+        except json.JSONDecodeError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"JSON parsing error: {e}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during JSON analysis: {e}")
+
+
+    def _parse_describe_statement(self):
+        """Parses and executes DESCRIBE TABLE, printing or capturing metadata."""
+        self._expect('DESCRIBE')
+        # The TABLE keyword is optional for usability
+        if self._current_token() and self._current_token()[0] == 'TABLE':
+            self._next_token()
+        
+        table_name = self._parse_expression()
+        
+        into_array_name = None
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            into_array_name = self._expect('ID')[1]
+            if into_array_name not in self.variables or not isinstance(self.variables.get(into_array_name), list):
+                 self._error(f"'{into_array_name}' is not a dimensioned array for use with DESCRIBE INTO.")
+
+        try:
+            # Use PRAGMA to get table info, which is the standard SQLite way
+            pragma_sql = f"PRAGMA table_info('{table_name}')"
+            results = self._execute_sql(pragma_sql, is_query=True)
+            
+            if not results:
+                print(f"Table '{table_name}' not found or has no columns.")
+                return
+
+            # The column names from the PRAGMA result itself
+            headers = [desc[0] for desc in self.db_cursor.description]
+            
+            if into_array_name:
+                # Capture the metadata into an array of hashes
+                metadata_list = []
+                for row in results:
+                    metadata_list.append(dict(zip(headers, row)))
+                self.variables[into_array_name] = self._python_to_basic_data(metadata_list)
+            else:
+                # Print the metadata to the console using the existing table formatter
+                self._handle_output(results, headers)
+
+        except sqlite3.Error as e:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = str(e)
+            if self.sql_fatal_errors:
+                self._error(f"Fatal SQLite Error: {e}")
+        
+    def _parse_gosub_statement(self):
+        self._expect('GOSUB'); label_name = self._expect('ID')[1]
+        if label_name not in self.labels: self._error(f"Label '{label_name}' not found.")
+        self.gosub_stack.append(self.token_index); self.token_index = self.labels[label_name]
+        
+    def _parse_return_statement(self):
+        self._expect('RETURN')
+        if not self.gosub_stack: self._error("RETURN without GOSUB.")
+        self.token_index = self.gosub_stack.pop()
+
+TEST_PROGRAM_SOURCE = """
+REM --- Test complex IF statement ---
+x = 5
+y = 15
+PRINT "x = 5, y = 15"
+IF (y - x) * 2 = 20 THEN
+    PRINT "Test Passed: (15 - 5) * 2 = 20"
+ELSE
+    PRINT "Test Failed"
+END IF
+
+IF (y - x) * 2 <> 20 THEN
+    PRINT "Test Failed"
+ELSE
+    PRINT "Test Passed: (15 - 5) * 2 is not <> 20"
+END IF
+
+z = 1
+IF (y > x) AND (z = 1) THEN
+    PRINT "Test Passed: Logical AND with parentheses"
+END IF
+
+END
+"""
+
+def run_interpreter(source_code, cmd_args=None, source_name="script", debug=False, dump_tokens=True):
+    print(f"--- Running {source_name} ---")
+    if cmd_args is None: cmd_args = []
+    
+    interpreter = None
+    try:
+        lexer = Lexer(preprocess_continuations(source_code))
+
+        # --- ADD THIS BLOCK ---
+        if dump_tokens:
+            print("\n--- TOKEN DUMP ---")
+            for token in lexer.tokens:
+                print(token)
+            print("--------------------\n")
+        # --- END OF BLOCK ---
+
+        interpreter = Interpreter(lexer, cmd_args, debug=debug)
+        interpreter.run()
+    except (RuntimeError, ValueError, sqlite3.Error) as e:
+        print(f"Error: {e}", file=sys.stderr)
+    finally:
+        if interpreter: interpreter.close()
+        print(f"\n--- Finished {source_name} ---", file=sys.stderr)
+
+def main():
+    if len(sys.argv) < 2:
+        run_interpreter(TEST_PROGRAM_SOURCE, source_name="Internal Test Program")
+        print("\n" + "="*50)
+        print("Usage: python basic.py <filename.bas | -> [args...] [--debug] [--dump-tokens]", file=sys.stderr)
+        return
+ 
+    args = sys.argv[1:]
+    is_debug = False
+    if "--debug" in args:
+        is_debug = True
+        args.remove("--debug")
+
+    # --- ADD THIS BLOCK ---
+    dump_tokens_flag = False
+    if "--dump-tokens" in args:
+        dump_tokens_flag = True
+        args.remove("--dump-tokens")
+    # --- END OF BLOCK ---
+        
+    source_code = ""
+    cmd_args = []
+    source_name = "script"
+    
+    if not args:
+         print("Error: No source file specified.", file=sys.stderr)
+         return
+
+    if args[0] == '-':
+        source_code = sys.stdin.read()
+        source_name = "stdin"
+        cmd_args = args[1:]
+    else:
+        filepath = args[0]
+        source_name = filepath
+        cmd_args = args[1:]
+        if not os.path.exists(filepath):
+            print(f"Error: File '{filepath}' not found.", file=sys.stderr)
+            return
+        try:
+            with open(filepath, 'r') as f:
+                source_code = f.read()
+        except Exception as e:
+            print(f"An error occurred reading file: {e}", file=sys.stderr)
+            return
+
+    new_source_code = preprocess_continuations(source_code)
+    if source_code.strip():
+        # --- PASS THE NEW FLAG HERE ---
+        run_interpreter(new_source_code, cmd_args, source_name, debug=is_debug, dump_tokens=dump_tokens_flag)
+    else:
+        print("No source code provided.", file=sys.stderr)
+        
+if __name__ == "__main__":
+    main()
