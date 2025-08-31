@@ -163,8 +163,8 @@ class Lexer:
             ('UPDATE', r'\bUPDATE\b(?!\$)'), ('CREATE', r'\bCREATE\b(?!\$)'), ('DROP', r'\bDROP\b(?!\$)'),
             ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
             ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
-            ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'),
-            ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'), ('HASH', r'\bHASH\b(?!\$)'),
+            ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),
+            ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'), ('HASH', r'\bHASH\b(?!\$)'),('SORT', r'\bSORT\b(?!\$)'),
             ('ARRAY', r'\bARRAY\b(?!\$)'), ('GOSUB', r'\bGOSUB\b(?!\$)'), ('RETURN', r'\bRETURN\b(?!\$)'),
             ('SHELL', r'\bSHELL\b(?!\$)'), ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),
             ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('TABLE', r'\bTABLE\b(?!\$)'),
@@ -178,6 +178,7 @@ class Lexer:
             ('WHILE', r'\bWHILE\b(?!\$)'), ('WEND', r'\bWEND\b(?!\$)'), ('NOT', r'\bNOT\b(?!\$)'), ('END', r'\bEND\b(?!\$)'),
             ('EXIT', r'\bEXIT\b(?!\$)'), ('FILES', r'\bFILES\b(?!\$)'), ('CHDIR', r'\bCHDIR\b(?!\$)'),
             ('MKDIR', r'\bMKDIR\b(?!\$)'), ('RMDIR', r'\bRMDIR\b(?!\$)'), ('KILL', r'\bKILL\b(?!\$)'),
+            ('TRON', r'\bTRON\b(?!\$)'), ('TROFF', r'\bTROFF\b(?!\$)'), 
             ('DETAILS', r'\bDETAILS\b(?!\$)'), ('ID', r'(?!INTO\b)[a-zA-Z][a-zA-Z0-9_]*\$?'), ('OP', r"[+\-*/]"),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), ('COMMA', r','),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('COMMENT', r"'[^\n]*"), ('NEWLINE', r'\n'),
@@ -194,7 +195,11 @@ class Lexer:
         i = 0
         while i < len(raw_tokens):
             kind, value, pos = raw_tokens[i]
-            if kind == 'NEWLINE': is_start_of_line = True; tokens.append((kind, value, pos)); i += 1; continue
+            if kind == 'NEWLINE': 
+                is_start_of_line = True 
+                tokens.append((kind, value, pos))
+                i += 1
+                continue
             if is_start_of_line and kind in Interpreter.SQL_KEYWORDS:
                 semicolon_pos = self.modified_source_code.find(';', pos)
                 if semicolon_pos != -1:
@@ -203,6 +208,35 @@ class Lexer:
                     tokens.append(('SQL_STRING', sql_text, pos))
                     while i < len(raw_tokens) and raw_tokens[i][2] < sql_end_pos: i += 1
                     is_start_of_line = False; continue
+            # General rule: If we see `( SELECT ... )`, bundle it as a subquery.
+            if kind == 'LPAREN' and i + 1 < len(raw_tokens) and raw_tokens[i+1][0] in Interpreter.SQL_KEYWORDS:
+                lp_pos = pos
+                nesting, search_pos, end_paren_pos, in_string = 1, lp_pos + 1, -1, False
+                
+                # Scan the raw source code to find the matching closing parenthesis
+                while search_pos < len(self.modified_source_code):
+                    char = self.modified_source_code[search_pos]
+                    if char == "'": in_string = not in_string
+                    elif not in_string and char == '(': nesting += 1
+                    elif not in_string and char == ')':
+                        nesting -= 1
+                        if nesting == 0:
+                            end_paren_pos = search_pos; break
+                    search_pos += 1
+                
+                if nesting != 0: self._error("Unmatched parenthesis in SQL subquery.")
+                
+                # Create the new token sequence: ( SQL_STRING )
+                sql_text = self.modified_source_code[lp_pos + 1 : end_paren_pos]
+                tokens.append(('LPAREN', '(', lp_pos))
+                tokens.append(('SQL_STRING', sql_text.strip(), lp_pos + 1))
+                tokens.append(('RPAREN', ')', end_paren_pos))
+                
+                # Advance the main loop past all the tokens we just consumed.
+                while i < len(raw_tokens) and raw_tokens[i][2] <= end_paren_pos:
+                    i += 1
+                is_start_of_line = False
+                continue
             if (kind in ('IN', 'EXISTS', 'ASSIGN')) and i + 1 < len(raw_tokens) and raw_tokens[i+1][0] == 'LPAREN':
                 if i + 2 < len(raw_tokens) and raw_tokens[i+2][0] in Interpreter.SQL_KEYWORDS:
                     tokens.append((kind, value, pos)); lp_pos = raw_tokens[i+1][2]; nesting, search_pos, end_paren_pos, in_string = 1, lp_pos + 1, -1, False
@@ -329,6 +363,8 @@ class Interpreter:
         self.tokens = self.lexer.tokens
         self.token_index = 0
         self.variables = {}
+        # Pre-define the PROGRAM$ system variable with the raw source code.
+        self.variables['PROGRAM$'] = self.lexer.raw_source_code
         self.file_handles = {}
         self.command_args = cmd_args if cmd_args is not None else []
         self.gosub_stack = []
@@ -336,6 +372,7 @@ class Interpreter:
         self.db_engine = 'sqlite' # Set SQLite as the default engine
         self.db_connection = None
         self.sql_fatal_errors = True
+        self.trace_mode = False   # FOR TRON AND TROFF
         
         self.debug_mode = debug # <-- And add this line
         self.jump_map = {}
@@ -395,7 +432,14 @@ class Interpreter:
             line, _ = self.lexer.get_line_col(self.tokens[start_index][2])
             self._error(f"Mismatched '{start_type}' on line {line} without a corresponding closing statement.")
 
-                   
+    def _parse_tron_statement(self):
+        self._expect('TRON')
+        self.trace_mode = True
+
+    def _parse_troff_statement(self):
+        self._expect('TROFF')
+        self.trace_mode = False
+        
     def _debug_state(self, message):
         """A helper function to print the current parser state."""
         if not self.debug_mode:
@@ -445,7 +489,7 @@ class Interpreter:
     def _init_db(self, filename=":memory:"):
         if self.db_connection: 
             self.db_connection.close()
-        print(f"(Connecting using {self.db_engine} engine...)") # Optional debug message
+        #print(f"(Connecting using {self.db_engine} engine...)") # Optional debug message
         if self.db_engine == 'duckdb':
             self.db_connection = duckdb.connect(database=filename, read_only=False)
         else:
@@ -558,13 +602,9 @@ class Interpreter:
                 column_names = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
                 self._handle_output(results, column_names)
             else:
-                self._execute_sql(sql_text)
-        
-        # --- ADDED THIS BLOCK TO HANDLE THE 'END' STATEMENT ---
+                self._execute_sql(sql_text)  
         elif token[0] == 'END':
             self._parse_end_statement()
-        # --- END OF FIX ---
-
         elif token[0] == 'SET':
             self._parse_set_statement()
         elif token[0] == 'IF':
@@ -572,11 +612,37 @@ class Interpreter:
         elif token[0] == 'FOR EACH': 
             self._parse_for_each_statement()
         elif token[0] == 'FOR':
-            if "IN" in [t[0] for t in self.tokens[self.token_index:self.token_index+5]]:
-                # A bit of a lookahead to distinguish FOR...IN from FOR...TO
-                self._parse_for_in_sql_loop() # Assuming SQL, can be refined
-            else:
+             # Look ahead to see if there's an 'IN' before an '='.
+            is_in_loop = False
+            temp_index = self.token_index + 1
+            while temp_index < len(self.tokens) and self.tokens[temp_index][0] != 'NEWLINE':
+                if self.tokens[temp_index][0] == 'IN':
+                    is_in_loop = True
+                    break
+                if self.tokens[temp_index][0] == 'ASSIGN':
+                    break # This is a FOR i = 1 TO 10 loop
+                temp_index += 1
+            
+            if is_in_loop:
+                # It's a FOR...IN loop. Now, is it SQL or CSV?
+                # We need to find the 'IN' token again to check what follows it.
+                in_index = self.token_index + 1
+                while self.tokens[in_index][0] != 'IN':
+                    in_index += 1
+                
+                # Check the token right after 'IN'
+                if (in_index + 1) < len(self.tokens) and self.tokens[in_index + 1][0] == 'CSV':
+                    self._parse_for_in_csv_loop()
+                elif (in_index + 1) < len(self.tokens) and self.tokens[in_index + 1][0] == 'JSONL':
+                    self._parse_for_in_jsonl_loop()
+                elif (in_index + 1) < len(self.tokens) and self.tokens[in_index + 1][0] == 'JSON':
+                    self._parse_for_in_json_loop()
+                else:  # Otherwise, assume it's a SQL loop that expects parentheses.
+                    self._parse_for_in_sql_loop()
+            else:   # It's a standard FOR i = 1 TO 10 loop.
                 self._parse_for_statement()
+        elif token[0] == 'SORT':
+            self._parse_sort_statement()
         elif token[0] == 'FILES':
             self._parse_files_statement()
         elif token[0] == 'ID' and token[1] == 'NAME':
@@ -635,6 +701,10 @@ class Interpreter:
             self._parse_gosub_statement()
         elif token[0] == 'RETURN':
             self._parse_return_statement()
+        elif token[0] == 'TRON':
+            self._parse_tron_statement()
+        elif token[0] == 'TROFF':
+            self._parse_troff_statement()
         elif token[0] in ['ELSE', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
             self._error(f"Unexpected '{token[0]}'")
         else:
@@ -844,6 +914,10 @@ class Interpreter:
         if isinstance(data, list): return [self._basic_to_json_serializable(item) for item in data]
         if isinstance(data, float) and data.is_integer(): return int(data)
         return data
+    def _to_camel_case(self, s):
+        """Converts an UPPER_SNAKE_CASE string to camelCase."""
+        components = s.lower().split('_')
+        return components[0] + ''.join(x.title() for x in components[1:])
         
     def _execute_function(self, name, args):
         name = name.upper()
@@ -855,24 +929,76 @@ class Interpreter:
             if len(args) != 1 or not isinstance(args[0], list): self._error("UBOUND requires one array argument.")
             return float(len(args[0]) - 1 if args[0] else -1)
         elif name == 'JSON_SERIALIZE$':
-            if len(args) != 1 or not isinstance(args[0], (dict, list)): self._error("JSON_SERIALIZE$ requires one hash/array argument.")
-            return json.dumps(self._basic_to_json_serializable(args[0]))
+            if not (1 <= len(args) <= 5):
+                self._error("JSON_SERIALIZE$ requires 1 to 5 arguments: data, [indent], [sort_option$], [case_option$], ...")
+
+            data = args[0]
+            if not isinstance(data, (dict, list)):
+                self._error("First argument to JSON_SERIALIZE$ must be a HASH or ARRAY.")
+
+            indent_val, sort_keys, lowercase_keys, camelcase_keys = 0, False, False, False
+            
+            # Process optional arguments
+            string_options = [str(arg).upper() for arg in args[1:] if isinstance(arg, str)]
+            if "SORT_KEYS" in string_options: sort_keys = True
+            if "LOWERCASE_KEYS" in string_options: lowercase_keys = True
+            if "CAMELCASE_KEYS" in string_options: camelcase_keys = True
+            
+            numeric_args = [arg for arg in args[1:] if isinstance(arg, (int, float))]
+            if numeric_args: indent_val = numeric_args[0]
+                
+            indent = int(indent_val) if indent_val > 0 else None
+
+            serializable_data = self._basic_to_json_serializable(data)
+            
+            # --- NEW: Automatic filtering logic ---
+            if isinstance(serializable_data, dict):
+                keys = list(serializable_data.keys())
+                has_numeric_keys = any(k.isdigit() for k in keys)
+                has_non_numeric_keys = any(not k.isdigit() for k in keys)
+
+                if has_numeric_keys and has_non_numeric_keys:
+                    serializable_data = {k: v for k, v in serializable_data.items() if not k.isdigit()}
+            # --- End of new logic ---
+
+            if camelcase_keys and isinstance(serializable_data, dict):
+                serializable_data = {self._to_camel_case(k): v for k, v in serializable_data.items()}
+            elif lowercase_keys and isinstance(serializable_data, dict):
+                serializable_data = {k.lower(): v for k, v in serializable_data.items()}
+
+            return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys)
         elif name == 'HASH_EXISTS':
             if len(args) != 2 or not isinstance(args[0], dict): self._error("HASH_EXISTS requires hash_var, key$.")
             return -1.0 if str(args[1]) in args[0] else 0.0
+        elif name == 'HASH_JOIN':
+            if len(args) < 2:
+                self._error("HASH_JOIN requires at least two HASH arguments.")
+            
+            new_hash = {}
+            for h in args:
+                if not isinstance(h, dict):
+                    self._error("All arguments to HASH_JOIN must be HASH variables.")
+                new_hash.update(h)
+            return new_hash
         elif name == 'HASH_DELETE':
             if len(args) != 2 or not isinstance(args[0], dict): self._error("HASH_DELETE requires hash_var, key$.")
             if str(args[1]) in args[0]: del args[0][str(args[1])]; return 0
         elif name == 'HASH_COUNT':
             if len(args) != 1 or not isinstance(args[0], dict): self._error("HASH_COUNT requires a hash argument.")
             return float(len(args[0]))
-        elif name == 'IS_HASH': return -1.0 if isinstance(args[0], dict) else 0.0
-        elif name == 'IS_ARRAY': return -1.0 if isinstance(args[0], list) else 0.0
+        elif name == 'IS_HASH': 
+            return -1.0 if isinstance(args[0], dict) else 0.0
+        elif name == 'IS_ARRAY': 
+            return -1.0 if isinstance(args[0], list) else 0.0
         elif name == 'COMMAND$':
-            if len(args) != 1: self._error("COMMAND$ requires 1 argument.")
-            idx = int(args[0]); return self.command_args[idx-1] if 1 <= idx <= len(self.command_args) else ""
+            if len(args) != 1: 
+                self._error("COMMAND$ requires 1 argument.")
+            idx = int(args[0])
+            return self.command_args[idx-1] if 1 <= idx <= len(self.command_args) else ""
         elif name == 'CURDIR$':
-            if args: self._error("CURDIR$ takes no arguments."); return os.getcwd()
+            if args: 
+                self._error("CURDIR$ takes no arguments."); 
+            return os.getcwd()
         elif name == 'FREEFILE':
             if args:
                 self._error("FREEFILE function takes no arguments.")
@@ -882,9 +1008,14 @@ class Interpreter:
                 file_num += 1
             return float(file_num)
         elif name == 'EOF':
-            file_num = int(args[0]); handle_info = self.file_handles.get(file_num);
-            if not handle_info: self._error(f"File #{file_num} is not open.")
-            pos = handle_info['handle'].tell(); is_eof = handle_info['handle'].read(1) == ''; handle_info['handle'].seek(pos)
+            if len(args) < 1: return 0
+            file_num = int(args[0])
+            handle_info = self.file_handles.get(file_num)
+            if not handle_info: 
+                self._error(f"File #{file_num} is not open.")
+            pos = handle_info['handle'].tell()
+            is_eof = handle_info['handle'].read(1) == ''
+            handle_info['handle'].seek(pos)
             return -1.0 if is_eof else 0.0
         elif name == 'FILE_EXISTS':
             if len(args) != 1: self._error("FILE_EXISTS requires 1 argument."); return -1.0 if os.path.exists(str(args[0])) else 0.0
@@ -944,29 +1075,45 @@ class Interpreter:
     def _parse_factor(self):
         token = self._current_token()
         if token[0] == 'OP' and token[1] in '+-':
-            op = token[1]; self._next_token(); res = self._parse_factor(); return -res if op == '-' else res
-        if token[0] == 'NUMBER': self._next_token(); return float(token[1])
+            op = token[1]
+            self._next_token()
+            res = self._parse_factor() 
+            return -res if op == '-' else res
+        if token[0] == 'NUMBER': 
+            self._next_token(); 
+            return float(token[1])
         elif token[0] in ('STRING', 'BACKTICK_STRING'):
             self._next_token(); raw_value = token[1]
-            if raw_value.startswith('"'): return raw_value[1:-1].replace('""', '"')
+            if raw_value.startswith('"'): 
+                return raw_value[1:-1].replace('""', '"')
             return raw_value[1:-1]
         elif token[0] == 'LPAREN':
             if self._peek_token() and self._peek_token()[0] == 'SQL_STRING':
                 results = self._execute_sql(self._extract_sql_from_parens(), is_query=True)
-                if len(results) != 1 or len(results[0]) != 1: self._error("Scalar subquery must return one row/column.")
+                if len(results) != 1 or len(results[0]) != 1:
+                    self._error("Scalar subquery must return one row/column.")
                 return results[0][0]
-            else: self._next_token(); res = self._parse_condition(); self._expect('RPAREN'); return res
+            else: 
+                self._next_token()
+                res = self._parse_condition()
+                self._expect('RPAREN')
+                return res
         elif token[0] == 'SQL_STRING':
-            self._next_token(); results = self._execute_sql(token[1], is_query=True)
-            if len(results) != 1 or len(results[0]) != 1: self._error("Scalar subquery must return one row/column.")
+            self._next_token()
+            results = self._execute_sql(token[1], is_query=True)
+            if len(results) == 1 and len(results[0]) == 1:
+                return results[0][0]
+            else:
+                self._error("A subquery used as a value must return exactly one row and one column.")
             return results[0][0]
         elif token[0] == 'ID':
             var_name = token[1]
             if var_name not in self.variables:
                 if not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                     self.variables[var_name] = "" if var_name.endswith('$') else 0.0
-            if var_name in ['DATE$', 'TIME$', 'FREEFILE', 'RND'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
-                self._next_token(); return self._execute_function(var_name, [])
+            if var_name in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                self._next_token(); 
+                return self._execute_function(var_name, [])
             self._next_token(); current_value = self.variables.get(var_name)
             while self._current_token():
                 token = self._current_token()
@@ -979,7 +1126,9 @@ class Interpreter:
                                 args.append(self._parse_expression())
                                 if self._current_token()[0] == 'RPAREN': break
                                 self._expect('COMMA')
-                        self._expect('RPAREN'); current_value = self._execute_function(var_name, args); continue
+                        self._expect('RPAREN')
+                        current_value = self._execute_function(var_name, args)
+                        continue
                     if self._current_token()[0] == 'RPAREN': self._expect('RPAREN'); break
                     key_or_index = self._parse_expression(); self._expect('RPAREN')
                     if isinstance(current_value, list):
@@ -987,11 +1136,18 @@ class Interpreter:
                         if not 0 <= index < len(current_value): self._error("Array index out of bounds.")
                         current_value = current_value[index]
                     elif isinstance(current_value, dict):
-                        current_value = current_value.get(str(key_or_index).upper(), "" if var_name.endswith('$') else 0.0)
+                        key = str(key_or_index)
+                        # If the key was a number, ensure it's an integer string (e.g., "1" not "1.0").
+                        if isinstance(key_or_index, float) and key_or_index.is_integer():
+                            key = str(int(key_or_index))
+                        # --- END OF FIX ---
+                        current_value = current_value.get(key.upper(), "" if var_name.endswith('$') else 0.0)
                     continue
                 elif token[0] == 'DOT':
                     if not isinstance(current_value, dict): self._error("Dot notation only for HASH.")
-                    self._next_token(); key_token = self._expect('ID'); key_name = key_token[1].upper()
+                    self._next_token()
+                    key_token = self._expect('ID')
+                    key_name = key_token[1].upper()
                     lookup_key, is_string_access = key_name.rstrip('$'), key_name.endswith('$')
                     current_value = current_value.get(lookup_key, "" if is_string_access else 0.0)
                     continue
@@ -1034,18 +1190,37 @@ class Interpreter:
         self.variables[var_name] = line.rstrip('\n\r')
         
     def _parse_open_statement(self):
-        self._expect('OPEN'); filename = self._parse_expression(); self._expect('FOR')
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('OPEN')
+        filename = self._parse_expression()
+        self._expect('FOR')
         mode_token = self._current_token()
-        if not mode_token or mode_token[0] not in ['OUTPUT', 'INPUT', 'APPEND']: self._error("Expected file mode")
-        self._next_token(); mode_map = {'OUTPUT': 'w', 'INPUT': 'r', 'APPEND': 'a'}; py_mode = mode_map[mode_token[1]]
-        self._expect('AS'); self._expect('HASH_SYM'); file_num = int(self._parse_expression())
-        if file_num in self.file_handles: self._error(f"File #{file_num} is already open.")
+        if not mode_token or mode_token[0] not in ['OUTPUT', 'INPUT', 'APPEND']: 
+            self._error("Expected file mode")
+        self._next_token(); mode_map = {'OUTPUT': 'w', 'INPUT': 'r', 'APPEND': 'a'}
+        py_mode = mode_map[mode_token[1]]
+        self._expect('AS'); self._expect('HASH_SYM')
+        file_num = int(self._parse_expression())
+        if file_num in self.file_handles:
+            self._error(f"File #{file_num} is already open.")
         dialect_params = {}
         if self._current_token() and self._current_token()[0] == 'WITH':
-            self._next_token(); self._expect('OPTIONS'); options_str = self._parse_expression()
-            for part in options_str.split(): key, value = part.split('='); dialect_params[key.strip()] = value.strip()
-        handle = open(filename, py_mode, newline='', encoding="utf-8")
-        self.file_handles[file_num] = {'handle': handle, 'dialect': dialect_params}
+            self._next_token()
+            self._expect('OPTIONS')
+            options_str = self._parse_expression()
+            for part in options_str.split(): 
+                key, value = part.split('=')
+                dialect_params[key.strip()] = value.strip()
+        try:
+            handle = open(filename, py_mode, newline='', encoding="utf-8")
+            self.file_handles[file_num] = {'handle': handle, 'dialect': dialect_params}
+        except FileNotFoundError as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {filename}")
+        except Exception as e: 
+            self.variables['ERR'], 
+            self.variables['ERRMSG$'] = 1.0, str(e); 
+            self._error(f"Error opening file: {e}")
         
     def _parse_close_statement(self):
         self._expect('CLOSE')
@@ -1068,15 +1243,40 @@ class Interpreter:
  
     def _parse_read_file_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('READ FILE'); filename = str(self._parse_expression()); self._expect('INTO'); var_name = self._expect('ID')[1]
-        if not var_name.endswith('$'): self._error("Destination for READ FILE must be a string variable.")
+        self._expect('READ FILE') 
+        filename = str(self._parse_expression()) 
+        self._expect('INTO') 
+        var_name = self._expect('ID')[1]
+        if not var_name.endswith('$'): 
+            self._error("Destination for READ FILE must be a string variable.")
         try:
-            with open(filename, 'r', encoding='utf-8') as f: self.variables[var_name] = f.read()
-        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e); self._error(f"File not found: {filename}")
-        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e); self._error(f"Error reading file: {e}")
+            with open(filename, 'r', encoding='utf-8') as f: 
+                self.variables[var_name] = f.read()
+        except FileNotFoundError as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {filename}")
+        except Exception as e: 
+            self.variables['ERR'], 
+            self.variables['ERRMSG$'] = 1.0, str(e); 
+            self._error(f"Error reading file: {e}")
             
     def _parse_line(self):
-        # The faulty check for 'END' has been removed from here.
+        # --- START OF NEW TRACING LOGIC ---
+        if self.trace_mode:
+            token = self._current_token()
+            if token and token[0] != 'NEWLINE':
+                line_num, _ = self.lexer.get_line_col(token[2])
+                
+                # Look up the actual source line text
+                start_pos = self.lexer.line_starts[line_num - 1]
+                end_pos = self.lexer.line_starts[line_num] if line_num < len(self.lexer.line_starts) else len(self.lexer.raw_source_code)
+                source_line = self.lexer.raw_source_code[start_pos:end_pos].strip()
+                
+                # Don't trace the TROFF command itself
+                if token[0] != 'TROFF':
+                    print(f"[{line_num}]> {source_line}")
+        # --- END OF NEW TRACING LOGIC ---
+        
         if not self._current_token():
             return False
 
@@ -1131,7 +1331,8 @@ class Interpreter:
         else:
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
                 value = self._parse_expression()
-                if isinstance(value, dict): parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2))
+                if isinstance(value, dict): 
+                    parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2))
                 elif isinstance(value, list): 
                     formatted_list_items = []
                     for item in value:
@@ -1213,6 +1414,46 @@ class Interpreter:
                 # Not our EXIT, re-raise for an outer loop to handle
                 raise e
 
+    def _parse_sort_statement(self):
+        self._expect('SORT')
+        array_var_token = self._expect('ID')
+        array_var_name = array_var_token[1]
+
+        if array_var_name not in self.variables or not isinstance(self.variables.get(array_var_name), list):
+            self._error(f"'{array_var_name}' is not a dimensioned array.")
+        
+        the_array = self.variables[array_var_name]
+        if not the_array:
+            return # Array is empty, nothing to do.
+
+        sort_key = None
+        
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1] == 'ON':
+            self._next_token() # Consume ON
+            sort_key_expr = self._parse_expression()
+            if not isinstance(sort_key_expr, str):
+                self._error("Sort key provided with ON must be a string expression.")
+            sort_key = sort_key_expr.upper()
+
+        reverse_order = False
+        if self._current_token() and self._current_token()[0] == 'ID':
+            direction = self._current_token()[1]
+            if direction in ['ASC', 'DESC']:
+                if direction == 'DESC':
+                    reverse_order = True
+                self._next_token()
+
+        try:
+            if sort_key:
+                the_array.sort(key=lambda item: item.get(sort_key, 0) if isinstance(item, dict) else 0, reverse=reverse_order)
+            else:
+                the_array.sort(reverse=reverse_order)
+        except TypeError:
+            if sort_key:
+                the_array.sort(key=lambda item: str(item.get(sort_key, "")) if isinstance(item, dict) else "", reverse=reverse_order)
+            else:
+                the_array.sort(key=lambda item: str(item), reverse=reverse_order)
+                
     def _parse_files_statement(self):
         self.variables['ERR'] = 0.0; self._expect('FILES')
         path_arg, with_details, into_array_name = ".", False, None
@@ -1281,7 +1522,10 @@ class Interpreter:
         except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
  
     def _parse_kill_statement(self):
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('KILL'); filename = self._parse_expression()
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('KILL')
+        if self._current_token() and self._current_token()[0] == 'NEWLINE': self._error("KILL command requires a string argument.")
+        filename = self._parse_expression()
         try: os.remove(os.path.expanduser(str(filename)))
         except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
         except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
@@ -1885,28 +2129,51 @@ class Interpreter:
             self._error(f"An error occurred during JSON load: {e}")
             
     def _parse_for_each_statement(self):
-        start_index = self.token_index
-        self._expect('FOR EACH'); key_var = self._expect('ID')[1]; self._expect('IN'); self._expect('HASH'); hash_var_name = self._expect('ID')[1]
-        if hash_var_name not in self.variables or not isinstance(self.variables[hash_var_name], dict): self._error(f"'{hash_var_name}' is not a hash.")
+        self._expect('FOR EACH')
+        key_var = self._expect('ID')[1]
+        self._expect('IN')
+        self._expect('HASH')
+        hash_var_name = self._expect('ID')[1]
+        if hash_var_name not in self.variables or not isinstance(self.variables[hash_var_name], dict):
+            self._error(f"'{hash_var_name}' is not a hash.")
+
         keys_to_iterate = list(self.variables[hash_var_name].keys())
         body_start_index = self.token_index
+        original_value = self.variables.get(key_var)
+
         try:
+            # If the hash is empty, just skip the whole block.
+            if not keys_to_iterate:
+                self.token_index = body_start_index
+                self._skip_block('FOR EACH', 'NEXT')
+                return
+
             for key in keys_to_iterate:
-                self.variables[key_var] = key; self.token_index = body_start_index
+                self.variables[key_var] = key
+                
+                # Rewind and execute the loop body for this iteration.
+                self.token_index = body_start_index
                 if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
-                self.run_block(end_tokens={'LOOP'}); self._expect('LOOP')
-            self.token_index = body_start_index; self._skip_block('FOR EACH', 'LOOP');
+                
+                self.run_block(end_tokens={'NEXT'})
+                
+                # After each iteration, consume the NEXT token.
+                self._expect('NEXT')
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token() # Consume optional variable
+
         except LoopExit as e:
             if e.args[0] == 'FOR':
-                level = 1
-                while self._current_token() and level > 0:
-                    token = self._current_token()
-                    if token[0] == 'FOR EACH': level += 1
-                    elif token[0] == 'LOOP': level -= 1
-                    if level == 0: self._expect('LOOP'); return
-                    self._next_token()
-                self._error("Mismatched FOR EACH without LOOP")
-            else: raise e
+                # An EXIT FOR was hit. Find the matching NEXT to clean up.
+                self._skip_block('FOR EACH', 'NEXT')
+            else:
+                raise e
+        finally:
+            # Restore the original value of the loop variable.
+            if original_value is not None:
+                self.variables[key_var] = original_value
+            elif key_var in self.variables:
+                del self.variables[key_var]
 
     def _parse_for_in_sql_loop(self):
         start_index = self.token_index
@@ -1915,21 +2182,23 @@ class Interpreter:
         self._expect('IN')
         sql_query = self._extract_sql_from_parens()
         
-        # --- FIX: Allow an optional LOOP keyword for syntax consistency ---
-        if self._current_token() and self._current_token()[0] == 'LOOP':
-            self._next_token()
-        
         results = self._execute_sql(sql_query, is_query=True)
-        if not self.db_cursor.description:
-            self._skip_block('LOOP', 'END LOOP')
-            return
-
-        column_names = [desc[0].upper() for desc in self.db_cursor.description]
         loop_body_start_index = self.token_index
         original_value = self.variables.get(loop_var_name)
         
         try:
+            # If the query returns no rows, just skip the loop body entirely.
+            if not results:
+                self.token_index = loop_body_start_index
+                self._skip_block('FOR', 'NEXT')
+                return
+
+            column_names = [desc[0].upper() for desc in self.db_cursor.description] if self.db_cursor.description else []
+            row_number = 0
             for row in results:
+                row_number += 1
+                self.variables['RECNO'] = float(row_number)
+                # Set up the loop variable for this iteration
                 record_hash = {}
                 for i, cell_value in enumerate(row):
                     final_value = cell_value if cell_value is not None else ""
@@ -1938,34 +2207,181 @@ class Interpreter:
                         record_hash[column_names[i]] = final_value
                 self.variables[loop_var_name] = record_hash
                 
+                # Rewind and execute the loop body for this iteration
                 self.token_index = loop_body_start_index
                 if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
                 
-                self.run_block(end_tokens={'END LOOP'})
-                self._expect('END LOOP')
+                self.run_block(end_tokens={'NEXT'})
+                
+                # After each iteration, we must consume the NEXT token.
+                self._expect('NEXT')
+                # Also consume the optional loop variable (e.g., NEXT rec)
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token()
+
+            # After the last iteration, the parser is already in the correct position.
+
         except LoopExit as e:
             if e.args[0] == 'FOR':
-                self._skip_block('LOOP', 'END LOOP')
+                # An EXIT FOR was hit. Find the matching NEXT to clean up.
+                self._skip_block('FOR', 'NEXT')
             else:
+                # An EXIT for a different loop type (e.g., WHILE) was hit. Re-raise it.
                 raise e
         finally:
+            # Restore the original value of the loop variable.
             if original_value is not None:
                 self.variables[loop_var_name] = original_value
             elif loop_var_name in self.variables:
                 del self.variables[loop_var_name]
+            if 'RECNO' in self.variables:
+                del self.variables['RECNO']
+                
+    def _parse_for_in_json_loop(self):
+        self._expect('FOR')
+        loop_var_name = self._expect('ID')[1]
+        self._expect('IN')
+        self._expect('JSON')
+        
+        # The filename is expected inside parentheses, e.g., JSON("my_data.json")
+        self._expect('LPAREN')
+        filename = self._parse_expression()
+        self._expect('RPAREN')
+        
+        if not isinstance(filename, str):
+            self._error("FOR...IN JSON requires a string filename.")
 
+        loop_body_start_index = self.token_index
+        original_value = self.variables.get(loop_var_name)
+        
+        try:
+            # --- Automatic File Handling ---
+            with open(filename, 'r', encoding='utf-8') as infile:
+                data = json.load(infile)
+
+            # Allow both an array of objects or a single top-level object
+            if isinstance(data, dict):
+                data = [data]
+            
+            if not isinstance(data, list):
+                self._error("JSON file for FOR...IN loop must contain an array of objects.")
+            
+            if not data:
+                self.token_index = loop_body_start_index
+                self._skip_block('FOR', 'NEXT') # JSON array is empty, skip the loop.
+                return
+            row_number = 0
+            # --- Loop Execution ---
+            for record in data:
+                row_number += 1
+                self.variables['RECNO'] = float(row_number)
+                # Convert the Python dict to a DbBasic HASH
+                record_hash = self._python_to_basic_data(record)
+                self.variables[loop_var_name] = record_hash
+                
+                # Rewind and execute the loop body for this iteration
+                self.token_index = loop_body_start_index
+                if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+                
+                self.run_block(end_tokens={'NEXT'})
+                
+                # After each iteration, consume the NEXT token.
+                self._expect('NEXT')
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token()
+
+        except FileNotFoundError:
+            self._error(f"File not found for JSON loop: {filename}")
+        except json.JSONDecodeError as e:
+            self._error(f"Invalid JSON in file '{filename}': {e}")
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                # An EXIT FOR was hit. Find the matching NEXT to clean up.
+                self._skip_block('FOR', 'NEXT')
+            else:
+                raise e
+        finally:
+            # Restore the original value of the loop variable.
+            if original_value is not None:
+                self.variables[loop_var_name] = original_value
+            elif loop_var_name in self.variables:
+                del self.variables[loop_var_name]
+            if 'RECNO' in self.variables:
+                del self.variables['RECNO']            
+
+    def _parse_for_in_jsonl_loop(self):
+        """Parses and executes a FOR...IN JSONL(...) loop."""
+        self._expect('FOR')
+        loop_var_name = self._expect('ID')[1]
+        self._expect('IN')
+        self._expect('JSONL')
+        
+        self._expect('LPAREN')
+        filename = self._parse_expression()
+        self._expect('RPAREN')
+        
+        if not isinstance(filename, str):
+            self._error("FOR...IN JSONL requires a string filename.")
+
+        loop_body_start_index = self.token_index
+        original_value = self.variables.get(loop_var_name)
+        row_number = 0
+        try:
+            with open(filename, 'r', encoding='utf-8') as infile:
+                # Iterate over each line in the JSONL file
+                for line in infile:
+                    row_number += 1
+                    self.variables['RECNO'] = float(row_number)
+                    line = line.strip()
+                    if not line:
+                        continue # Skip empty lines
+
+                    # Parse the single line of JSON
+                    record = json.loads(line)
+                    
+                    # Convert the Python dict to a DbBasic HASH
+                    record_hash = self._python_to_basic_data(record)
+                    self.variables[loop_var_name] = record_hash
+                    
+                    # Rewind and execute the loop body for this iteration
+                    self.token_index = loop_body_start_index
+                    if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+                    
+                    self.run_block(end_tokens={'NEXT'})
+                    
+                    # After each iteration, consume the NEXT token.
+                    self._expect('NEXT')
+                    if self._current_token() and self._current_token()[0] == 'ID':
+                        self._next_token()
+
+        except FileNotFoundError:
+            self._error(f"File not found for JSONL loop: {filename}")
+        except json.JSONDecodeError as e:
+            self._error(f"Invalid JSON in line of file '{filename}': {e}")
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                # An EXIT FOR was hit. Find the matching NEXT to clean up.
+                self._skip_block('FOR', 'NEXT')
+            else:
+                raise e
+        finally:
+            # Restore the original value of the loop variable.
+            if original_value is not None:
+                self.variables[loop_var_name] = original_value
+            elif loop_var_name in self.variables:
+                del self.variables[loop_var_name]
+            if 'RECNO' in self.variables:
+                del self.variables['RECNO']
+                
     def _parse_for_in_csv_loop(self):
         self._expect('FOR')
         loop_var_name = self._expect('ID')[1]
         self._expect('IN')
         self._expect('CSV')
-        self._expect('HASH_SYM')
-        file_num = int(self._parse_expression())
+        filename = self._parse_expression()
+        if not isinstance(filename, str):
+            self._error("FOR...IN CSV requires a string filename.")
         
-        # --- FIX: Allow an optional LOOP keyword for syntax consistency ---
-        if self._current_token() and self._current_token()[0] == 'LOOP':
-            self._next_token()
-
         options = {'header': False}
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
@@ -1973,26 +2389,31 @@ class Interpreter:
             if 'header=true' in options_str.lower():
                 options['header'] = True
         
-        handle_info = self.file_handles.get(file_num)
-        if not handle_info:
-            self._error(f"File #{file_num} not open.")
-        
-        handle_info['handle'].seek(0)
-        csv_reader = csv.reader(handle_info['handle'], **handle_info['dialect'])
-        
-        headers = []
-        if options['header']:
-            try:
-                raw_headers = next(csv_reader)
-                headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip().upper() for h in raw_headers]
-            except StopIteration:
-                return
-
         loop_body_start_index = self.token_index
         original_value = self.variables.get(loop_var_name)
         
         try:
-            for row in csv_reader:
+            with open(filename, 'r', newline='', encoding='utf-8') as infile:
+                csv_reader = csv.reader(infile)
+                
+                headers = []
+                if options['header']:
+                    try:
+                        raw_headers = next(csv_reader)
+                        headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip().upper() for h in raw_headers]
+                    except StopIteration:
+                        self._skip_block('FOR', 'NEXT')
+                        return
+
+                all_rows = list(csv_reader)
+                if not all_rows:
+                    self.token_index = loop_body_start_index
+                    self._skip_block('FOR', 'NEXT')
+                    return
+            row_number = 1
+            for row in all_rows:
+                row_number += 1
+                self.variables['RECNO'] = float(row_number)
                 record_hash = {}
                 for i, cell_value in enumerate(row):
                     record_hash[str(i + 1)] = cell_value
@@ -2000,14 +2421,21 @@ class Interpreter:
                         record_hash[headers[i]] = cell_value
                 self.variables[loop_var_name] = record_hash
                 
+                # Rewind and execute the loop body for this iteration
                 self.token_index = loop_body_start_index
                 if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
                 
-                self.run_block(end_tokens={'END LOOP'})
-                self._expect('END LOOP')
+                self.run_block(end_tokens={'NEXT'})
+                
+                # After each iteration, consume the NEXT token.
+                self._expect('NEXT')
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token()
+
         except LoopExit as e:
             if e.args[0] == 'FOR':
-                self._skip_block('LOOP', 'END LOOP')
+                # An EXIT FOR was hit. Find the matching NEXT to clean up.
+                self._skip_block('FOR', 'NEXT')
             else:
                 raise e
         finally:
@@ -2015,6 +2443,8 @@ class Interpreter:
                 self.variables[loop_var_name] = original_value
             elif loop_var_name in self.variables:
                 del self.variables[loop_var_name]
+            if 'RECNO' in self.variables:
+                del self.variables['RECNO']
         
     def _parse_dim_statement(self):
         self._expect('DIM'); var_name = self._expect('ID')[1]
