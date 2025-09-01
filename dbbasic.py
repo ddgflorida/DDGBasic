@@ -597,7 +597,8 @@ class Interpreter:
             token = self._current_token()
             if not token or token[0] in end_tokens:
                 break
-            self._parse_line()
+            if not self._parse_line():
+                break
 
     def _skip_block(self, start_token, end_token):
         level = 1
@@ -673,8 +674,8 @@ class Interpreter:
         return True
 
     def _parse_end_statement(self):
-        self._expect('END')
-        raise ProgramEnd()
+        #self._expect('END')
+        sys.exit(0)
 
     def _parse_statement(self):
         token = self._current_token()
@@ -817,9 +818,10 @@ class Interpreter:
     def run(self):
         try:
             while self._current_token() and self._current_token()[0] != 'END':
-                self._parse_line()
+                if not self._parse_line():
+                    break
         except ProgramEnd:
-            pass
+            return
         except LoopExit as e:
             self._error(f"'{e.args[0]}' without matching loop structure")
         except Exception as e:
@@ -832,7 +834,8 @@ class Interpreter:
                 # Continue execution from error handler
                 try:
                     while self._current_token() and self._current_token()[0] != 'END':
-                        self._parse_line()
+                        if not self._parse_line():
+                            break
                 except ProgramEnd:
                     pass
             else:
@@ -1045,7 +1048,12 @@ class Interpreter:
                 # Execute the IF block
                 stop_at = elseif_indices[0] if elseif_indices else (else_index if else_index else endif_index)
                 while self.token_index < stop_at:
-                    self._parse_line()
+                    # Add this check to handle END inside the block
+                    if self._current_token() and self._current_token()[0] == 'END':
+                        self._parse_end_statement() # This will raise ProgramEnd
+                        break
+                    if not self._parse_line():
+                        break
             else:
                 # IF was false, check ELSEIF conditions
                 found_true_condition = False
@@ -1066,9 +1074,13 @@ class Interpreter:
                         # Find where this block ends
                         next_stop = elseif_indices[i+1] if (i+1) < len(elseif_indices) else (else_index if else_index else endif_index)
                         
-                        while self.token_index < next_stop:
-                            self._parse_line()
-                        break
+                        while self.token_index < stop_at:
+                            # Add this check to handle END inside the block
+                            if self._current_token() and self._current_token()[0] == 'END':
+                                self._parse_end_statement() # This will raise ProgramEnd
+                                break
+                            if not self._parse_line():
+                                break
                 
                 # If no IF or ELSEIF was true, execute ELSE if it exists
                 if not found_true_condition and else_index is not None:
@@ -1077,12 +1089,19 @@ class Interpreter:
                         self._next_token()
                     
                     while self.token_index < endif_index:
-                        self._parse_line()
+                        if self._current_token() and self._current_token()[0] == 'END':
+                                self._parse_end_statement() # This will raise ProgramEnd
+                                break
+                        if not self._parse_line():
+                            break
             
             # Jump to END IF
             self.token_index = endif_index
             self._expect('END IF')
 
+        except ProgramEnd:
+            # If END is called inside an IF block
+            sys.exit()
         except LoopExit as e:
             # An EXIT happened. Jump to the end of the IF block and re-raise.
             self.token_index = endif_index + 1
@@ -1217,7 +1236,8 @@ class Interpreter:
             handle_info['handle'].seek(pos)
             return -1.0 if is_eof else 0.0
         elif name == 'FILE_EXISTS':
-            if len(args) != 1: self._error("FILE_EXISTS requires 1 argument."); return -1.0 if os.path.exists(str(args[0])) else 0.0
+            if len(args) != 1: self._error("FILE_EXISTS requires 1 argument.")
+            return -1.0 if os.path.exists(str(args[0])) else 0.0
         elif name == 'DATE$': return datetime.now().strftime('%Y-%m-%d')
         elif name == 'TIME$': return datetime.now().strftime('%H:%M:%S')
         elif name == 'DATEADD': return (self._parse_date_string(args[0]) + timedelta(days=int(args[1]))).strftime('%Y-%m-%d')
@@ -1893,7 +1913,7 @@ class Interpreter:
                 os.remove(os.path.expanduser(str(filename)))
             except FileNotFoundError as e:
                 self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-                raise e
+                #raise e
             except Exception as e:
                 self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
                 raise e
@@ -3190,7 +3210,7 @@ END
 """
 
 def run_interpreter(source_code, cmd_args=None, source_name="script", debug=False, dump_tokens=True):
-    print(f"--- Running {source_name} ---")
+    #print(f"--- Running {source_name} ---")
     if cmd_args is None: cmd_args = []
     
     interpreter = None
@@ -3211,7 +3231,7 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
         print(f"Error: {e}", file=sys.stderr)
     finally:
         if interpreter: interpreter.close()
-        print(f"\n--- Finished {source_name} ---", file=sys.stderr)
+        #print(f"\n--- Finished {source_name} ---", file=sys.stderr)
 
 def main():
     if len(sys.argv) < 2:
