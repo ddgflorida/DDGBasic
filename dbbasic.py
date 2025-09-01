@@ -147,7 +147,8 @@ class Lexer:
         replacements = {r'\bEND\s+IF\b': 'ENDIF', r'\bLINE\s+INPUT\b': 'LINEINPUT', r'\bEND\s+LOOP\b': 'ENDLOOP',
                         r'\bFOR\s+EACH\b': 'FOREACH', r'\bEND\s+TRANSACTION\b': 'ENDTRANSACTION', r'\bREAD\s+FILE\b': 'READFILE',
                         r'\bTO\s+FILE\b': 'TOFILE', r'\bINTO\s+FILE\b': 'INTOFILE', r'\bANALYZE\s+CSV\b': 'ANALYZECSV',
-                        r'\bANALYZE\s+JSON\b': 'ANALYZEJSON', r'\bANALYZE\s+FILE\b': 'ANALYZEFILE'}
+                        r'\bANALYZE\s+JSON\b': 'ANALYZEJSON', r'\bANALYZE\s+FILE\b': 'ANALYZEFILE',
+                        r'\bON\s+ERROR\s+GOTO\b': 'ONERRORGOTO'}
         code = self.raw_source_code
         for pattern, repl in replacements.items():
             code = re.sub(pattern, repl, code, flags=re.IGNORECASE)
@@ -173,12 +174,15 @@ class Lexer:
             ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
             ('SET', r'\bSET\b(?!\$)'), ('OUTPUT', r'\bOUTPUT\b(?!\$)'), ('AS', r'\bAS\b(?!\$)'),
             ('PRINT', r'\bPRINT\b(?!\$)'), ('LET', r'\bLET\b(?!\$)'), ('IF', r'\bIF\b(?!\$)'), ('THEN', r'\bTHEN\b(?!\$)'),
-            ('ELSE', r'\bELSE\b(?!\$)'), ('ENDIF', r'\bENDIF\b(?!\$)'), ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),
+            ('ELSEIF', r'\bELSEIF\b(?!\$)'),('ELSE', r'\bELSE\b(?!\$)'), ('ENDIF', r'\bENDIF\b(?!\$)'), 
+            ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),
+            ('DO', r'\bDO\b(?!\$)'),('UNTIL', r'\bUNTIL\b(?!\$)'),
             ('STEP', r'\bSTEP\b(?!\$)'), ('NEXT', r'\bNEXT\b(?!\$)'), ('IN', r'\bIN\b(?!\$)'), ('LOOP', r'\bLOOP\b(?!\$)'),
             ('WHILE', r'\bWHILE\b(?!\$)'), ('WEND', r'\bWEND\b(?!\$)'), ('NOT', r'\bNOT\b(?!\$)'), ('END', r'\bEND\b(?!\$)'),
             ('EXIT', r'\bEXIT\b(?!\$)'), ('FILES', r'\bFILES\b(?!\$)'), ('CHDIR', r'\bCHDIR\b(?!\$)'),
             ('MKDIR', r'\bMKDIR\b(?!\$)'), ('RMDIR', r'\bRMDIR\b(?!\$)'), ('KILL', r'\bKILL\b(?!\$)'),
-            ('TRON', r'\bTRON\b(?!\$)'), ('TROFF', r'\bTROFF\b(?!\$)'), 
+            ('ONERRORGOTO', r'\bONERRORGOTO\b'),('RESUME', r'\bRESUME\b(?!\$)'),
+            ('TRON', r'\bTRON\b(?!\$)'), ('TROFF', r'\bTROFF\b(?!\$)'),('GOTO', r'\bGOTO\b(?!\$)'), 
             ('DETAILS', r'\bDETAILS\b(?!\$)'), ('ID', r'(?!INTO\b)[a-zA-Z][a-zA-Z0-9_]*\$?'), ('OP', r"[+\-*/]"),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), ('COMMA', r','),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('COMMENT', r"'[^\n]*"), ('NEWLINE', r'\n'),
@@ -266,12 +270,13 @@ class Lexer:
             elif u_value == 'READFILE': kind, value = 'READ FILE', 'READ FILE' 
             elif u_value == 'TOFILE': kind, value = 'TO FILE', 'TO FILE'
             elif u_value == 'INTOFILE': kind, value = 'INTO FILE', 'INTO FILE'
-            elif u_value == 'ENDLOOP': kind, value = 'END LOOP', 'END LOOP'
+            #elif u_value == 'ENDLOOP': kind, value = 'END LOOP', 'END LOOP'
             elif u_value == 'FOREACH': kind, value = 'FOR EACH', 'FOR EACH'
             elif u_value == 'ENDTRANSACTION': kind, value = 'END TRANSACTION', 'END TRANSACTION'
             elif u_value == 'ANALYZECSV': kind, value = 'ANALYZE CSV', 'ANALYZE CSV'
             elif u_value == 'ANALYZEJSON': kind, value = 'ANALYZE JSON', 'ANALYZE JSON'
             elif u_value == 'ANALYZEFILE': kind, value = 'ANALYZE FILE', 'ANALYZE FILE'
+            elif u_value == 'ONERRORGOTO': kind, value = 'ON ERROR GOTO', 'ON ERROR GOTO'
             tokens.append((kind, value, pos)); is_start_of_line = False; i += 1
         return tokens
         
@@ -374,6 +379,11 @@ class Interpreter:
         self.sql_fatal_errors = True
         self.trace_mode = False   # FOR TRON AND TROFF
         
+        # --- NEW: Error handling state ---
+        self.error_handler_label = None
+        self.in_error_handler = False
+        self.error_resume_index = None
+        
         self.debug_mode = debug # <-- And add this line
         self.jump_map = {}
         self._pre_scan_for_jumps()
@@ -382,19 +392,15 @@ class Interpreter:
 
     def _pre_scan_for_jumps(self):
         """
-        Scans the token list to map all control structures (IF/ELSE/END IF, etc.)
-        This version correctly handles the distinction between single-line and multi-line IFs.
+        Scans the token list to map all control structures.
         """
         stack = []
-        # We can add 'FOR', 'WHILE' etc. to this list to upgrade them later
-        control_keywords_start = {'IF'}
         
         for index, token in enumerate(self.tokens):
             token_type = token[0]
 
-            if token_type in control_keywords_start:
-                # To determine if an IF is multi-line, find its THEN.
-                # If a NEWLINE comes right after THEN, it's a multi-line block.
+            if token_type == 'IF':
+                # Check if it's a multi-line IF
                 is_multi_line = False
                 temp_index = index + 1
                 while temp_index < len(self.tokens):
@@ -402,36 +408,62 @@ class Interpreter:
                         if (temp_index + 1) < len(self.tokens) and self.tokens[temp_index + 1][0] == 'NEWLINE':
                             is_multi_line = True
                         break
-                    # If we hit a newline before THEN, it's a syntax error the parser will catch.
-                    # For the scanner, it's just a single-line statement.
                     if self.tokens[temp_index][0] == 'NEWLINE':
                         break
                     temp_index += 1
 
                 if is_multi_line:
-                    stack.append((token_type, index))
+                    stack.append(('IF', index))
+                    self.jump_map[index] = {'elseifs': [], 'else': None, 'endif': None}
+
+            elif token_type == 'DO':
+                # Check if the previous token was EXIT. If so, this is not a loop start.
+                if index > 0 and self.tokens[index - 1][0] == 'EXIT':
+                    continue
+                stack.append(('DO', index))
+                self.jump_map[index] = {'loop': None}
+
+            elif token_type == 'LOOP':
+                # LOOP should only match with DO
+                if not stack or stack[-1][0] != 'DO':
+                    # This might be an error in the source, but let the parser handle it
+                    continue
+                do_type, do_index = stack.pop()
+                self.jump_map[do_index]['loop'] = index
+
+            elif token_type == 'ELSEIF':
+                if stack and stack[-1][0] == 'IF':
+                    if_index = stack[-1][1]
+                    self.jump_map[if_index]['elseifs'].append(index)
 
             elif token_type == 'ELSE':
-                if not stack or stack[-1][0] != 'IF':
-                    self._error(f"Mismatched ELSE without IF at index {index}")
-                if_type, if_index = stack[-1]
-                self.jump_map[if_index] = {'else': index}
+                if stack and stack[-1][0] == 'IF':
+                    if_index = stack[-1][1]
+                    self.jump_map[if_index]['else'] = index
 
             elif token_type == 'END IF':
                 if not stack or stack[-1][0] != 'IF':
-                    self._error(f"Mismatched END IF at index {index}")
-                
+                    continue  # Let parser handle the error
                 if_type, if_index = stack.pop()
-                if if_index in self.jump_map:
-                    self.jump_map[if_index]['endif'] = index
-                else: 
-                    self.jump_map[if_index] = {'else': None, 'endif': index}
-        
+                self.jump_map[if_index]['endif'] = index
+            
         if stack:
             start_type, start_index = stack[-1]
             line, _ = self.lexer.get_line_col(self.tokens[start_index][2])
             self._error(f"Mismatched '{start_type}' on line {line} without a corresponding closing statement.")
 
+
+    def _find_next_statement_index(self, start_index):
+        """Find the index of the next statement (after a COLON or NEWLINE token)"""
+        index = start_index
+        # Skip to the end of the current statement
+        while index < len(self.tokens):
+            if self.tokens[index][0] in ['COLON', 'NEWLINE']:
+                index += 1  # Skip the separator itself
+                break
+            index += 1
+        return index
+    
     def _parse_tron_statement(self):
         self._expect('TRON')
         self.trace_mode = True
@@ -439,7 +471,15 @@ class Interpreter:
     def _parse_troff_statement(self):
         self._expect('TROFF')
         self.trace_mode = False
-        
+    
+    def _parse_goto_statement(self):
+        """Parse and execute a GOTO statement."""
+        self._expect('GOTO')
+        label_name = self._expect('ID')[1]
+        if label_name not in self.labels:
+            self._error(f"Label '{label_name}' not found for GOTO.")
+        self.token_index = self.labels[label_name]
+    
     def _debug_state(self, message):
         """A helper function to print the current parser state."""
         if not self.debug_mode:
@@ -568,11 +608,68 @@ class Interpreter:
             if current_token[0] == start_token: level += 1
             elif current_token[0] == end_token: level -= 1
 
+    def _find_next_line_index(self, start_index):
+        """Finds the index of the token that starts the next line."""
+        idx = start_index
+        # First, advance past the current line's tokens
+        while idx < len(self.tokens) and self.tokens[idx][0] != 'NEWLINE':
+            idx += 1
+        # Then, advance past the NEWLINE token itself to the start of the next line
+        if idx < len(self.tokens) and self.tokens[idx][0] == 'NEWLINE':
+            idx += 1
+        return idx
+        
     def _parse_line(self):
-        if not self._current_token() or self._current_token()[0] == 'END': return False
-        if self._current_token()[0] == 'NEWLINE': self._next_token(); return True
-        self._parse_statement()
-        if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+        """Parse a line which may contain multiple colon-separated statements."""
+        # --- START OF TRACING LOGIC ---
+        if self.trace_mode:
+            token = self._current_token()
+            if token and token[0] != 'NEWLINE':
+                line_num, _ = self.lexer.get_line_col(token[2])
+                
+                # Look up the actual source line text
+                start_pos = self.lexer.line_starts[line_num - 1]
+                end_pos = self.lexer.line_starts[line_num] if line_num < len(self.lexer.line_starts) else len(self.lexer.raw_source_code)
+                source_line = self.lexer.raw_source_code[start_pos:end_pos].strip()
+                
+                # Don't trace the TROFF command itself
+                if token[0] != 'TROFF':
+                    print(f"[{line_num}]> {source_line}")
+        # --- END OF TRACING LOGIC ---
+        
+        if not self._current_token() or self._current_token()[0] == 'END':
+            return False
+            
+        if self._current_token()[0] == 'NEWLINE':
+            self._next_token()
+            return True
+        
+        # Parse statements until we hit a NEWLINE or END
+        while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
+            # Store the resume point BEFORE parsing the statement
+            resume_point = self._find_next_statement_index(self.token_index)
+            
+            try:
+                self._parse_statement()
+            except (LoopExit, ProgramEnd):
+                raise # Re-raise control-flow exceptions so loop parsers can catch them
+            except Exception as e:
+                if not self.error_handler_label or self.in_error_handler:
+                    raise e
+                    
+                # Set error state with the saved resume point
+                self.in_error_handler = True
+                self.error_resume_index = resume_point
+                self.variables['ERR'] = 1.0
+                self.variables['ERRMSG$'] = str(e)
+                self.token_index = self.labels[self.error_handler_label]
+            
+            # After parsing a statement, check for colon separator
+            if self._current_token() and self._current_token()[0] == 'COLON':
+                self._next_token()  # Skip the colon and continue to next statement
+        
+        if self._current_token() and self._current_token()[0] == 'NEWLINE':
+            self._next_token()
         return True
 
     def _parse_end_statement(self):
@@ -581,7 +678,6 @@ class Interpreter:
 
     def _parse_statement(self):
         token = self._current_token()
-        
         # Skip label
         if token and token[0] == 'ID' and self._peek_token() and self._peek_token()[0] == 'COLON':
             self._next_token()
@@ -605,10 +701,18 @@ class Interpreter:
                 self._execute_sql(sql_text)  
         elif token[0] == 'END':
             self._parse_end_statement()
+        elif token[0] == 'ON ERROR GOTO':
+            self._parse_on_error_statement()
+        elif token[0] == 'GOTO':
+            self._parse_goto_statement()
+        elif token[0] == 'RESUME':
+            self._parse_resume_statement()
         elif token[0] == 'SET':
             self._parse_set_statement()
         elif token[0] == 'IF':
             self._parse_if_statement()
+        elif token[0] == 'DO':
+            self._parse_do_loop_statement()
         elif token[0] == 'FOR EACH': 
             self._parse_for_each_statement()
         elif token[0] == 'FOR':
@@ -715,21 +819,61 @@ class Interpreter:
             while self._current_token() and self._current_token()[0] != 'END':
                 self._parse_line()
         except ProgramEnd:
-            # The END statement was executed. Terminate gracefully.
             pass
         except LoopExit as e:
             self._error(f"'{e.args[0]}' without matching loop structure")
+        except Exception as e:
+            # If we get here and there's an error handler but we're not in it, jump to it
+            if self.error_handler_label and not self.in_error_handler:
+                self.in_error_handler = True
+                self.variables['ERR'] = 1.0
+                self.variables['ERRMSG$'] = str(e)
+                self.token_index = self.labels[self.error_handler_label]
+                # Continue execution from error handler
+                try:
+                    while self._current_token() and self._current_token()[0] != 'END':
+                        self._parse_line()
+                except ProgramEnd:
+                    pass
+            else:
+                print(f"Runtime Error: {e}", file=sys.stderr)
 
-    def run(self):
-        try:
-            while self._current_token() and self._current_token()[0] != 'END':
-                self._parse_line()
-        except ProgramEnd:
-            # The END statement was executed. Terminate gracefully.
-            pass
-        except LoopExit as e:
-            self._error(f"'{e.args[0]}' without matching loop structure")
-
+    def _parse_on_error_statement(self):
+        self._expect('ON ERROR GOTO')
+        target = self._current_token()
+        if target[0] == 'NUMBER' and target[1] == '0':
+            self._next_token()
+            self.error_handler_label = None
+        elif target[0] == 'ID':
+            label_name = target[1]
+            self._next_token()
+            if label_name not in self.labels:
+                self._error(f"Label '{label_name}' not found for ON ERROR GOTO.")
+            self.error_handler_label = label_name
+        else:
+            self._error("Expected label name or 0 after ON ERROR GOTO.")
+    
+    def _parse_resume_statement(self):
+        self._expect('RESUME')
+        #print(f"DEBUG: In _parse_resume_statement")
+        #print(f"DEBUG: error_resume_index = {self.error_resume_index}")
+        #print(f"DEBUG: in_error_handler = {self.in_error_handler}")
+        
+        if self._current_token() and self._current_token()[0] == 'NEXT':
+            self._next_token()
+            if not self.in_error_handler:
+                self._error("RESUME NEXT without an active error.")
+            if self.error_resume_index is None:
+                self._error("Cannot RESUME; program location lost.")
+            
+            #print(f"DEBUG: Resuming at token index {self.error_resume_index}")
+            #print(f"DEBUG: Token at resume index: {self.tokens[self.error_resume_index] if self.error_resume_index < len(self.tokens) else 'END'}")
+            
+            self.token_index = self.error_resume_index
+            self.in_error_handler = False
+        else:
+            self._error("Expected NEXT after RESUME.")
+            
     def _parse_condition(self): return self._parse_or_condition()
     def _parse_or_condition(self):
         left = self._parse_and_condition()
@@ -837,55 +981,110 @@ class Interpreter:
         start_if_index = self.token_index
         self._expect('IF')
         
-        # 1. Look up the pre-calculated locations from the jump_map.
+        # Look up the pre-calculated locations from the jump_map.
         jump_locations = self.jump_map.get(start_if_index)
         
-        condition_true = self._parse_condition() != 0
+        condition_result = self._parse_condition() != 0
         self._expect('THEN')
 
         is_single_line = self._current_token() and self._current_token()[0] != 'NEWLINE'
         if is_single_line:
-            # Single-line IFs don't use the jump map.
-            if not condition_true:
+            # For single-line IF, we need to handle multiple statements separated by colons
+            if condition_result:
+                # Execute statements until ELSE, COLON (ending the IF), or NEWLINE
+                while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ELSE']:
+                    self._parse_statement()
+                    # Check if there's a colon for another statement in the THEN clause
+                    if self._current_token() and self._current_token()[0] == 'COLON':
+                        # Peek ahead to see if next is ELSE
+                        next_tok = self._peek_token()
+                        if next_tok and next_tok[0] == 'ELSE':
+                            break  # End of THEN clause
+                        self._next_token()  # Skip colon and continue
+                    else:
+                        break
+            else:
+                # Condition is false, skip THEN clause
                 while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ELSE']:
                     self._next_token()
+            
+            # Handle ELSE clause if present
             if self._current_token() and self._current_token()[0] == 'ELSE':
                 self._next_token()
-                if not condition_true: self._parse_statement()
-            elif condition_true:
-                self._parse_statement()
-            while self._current_token() and self._current_token()[0] != 'NEWLINE': self._next_token()
+                if not condition_result:
+                    # Execute ELSE clause statements
+                    while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'COLON']:
+                        self._parse_statement()
+                        # Check for colon within ELSE clause
+                        if self._current_token() and self._current_token()[0] == 'COLON':
+                            peek = self._peek_token()
+                            # If the next statement could end the IF, stop
+                            if not peek or peek[0] in ['NEWLINE', 'IF', 'FOR', 'WHILE', 'END']:
+                                break
+                            self._next_token()  # Skip colon and continue in ELSE
+                else:
+                    # Skip ELSE clause
+                    while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'COLON']:
+                        self._next_token()
+            
+            # Don't consume trailing COLON - let _parse_line handle it
             return
         
-        # --- Multi-line IF logic using the jump_map ---
+        # Multi-line IF handling remains the same...
         self._expect('NEWLINE')
         if not jump_locations:
             self._error("Mismatched multi-line IF statement; no corresponding END IF found during pre-scan.")
 
-        else_index = jump_locations['else']
+        elseif_indices = jump_locations.get('elseifs', [])
+        else_index = jump_locations.get('else')
         endif_index = jump_locations['endif']
 
         try:
-            if condition_true:
-                # Execute the THEN block. run_block will stop at the ELSE or END IF.
-                stop_at = else_index if else_index is not None else endif_index
+            # Check the initial IF condition
+            if condition_result:
+                # Execute the IF block
+                stop_at = elseif_indices[0] if elseif_indices else (else_index if else_index else endif_index)
                 while self.token_index < stop_at:
                     self._parse_line()
-            else: # Condition is false
-                if else_index is not None:
-                    # Jump the pointer straight to the ELSE block to execute it.
+            else:
+                # IF was false, check ELSEIF conditions
+                found_true_condition = False
+                
+                for i, elseif_index in enumerate(elseif_indices):
+                    # Jump to this ELSEIF
+                    self.token_index = elseif_index
+                    self._expect('ELSEIF')
+                    
+                    # Evaluate the ELSEIF condition
+                    elseif_condition = self._parse_condition() != 0
+                    self._expect('THEN')
+                    self._expect('NEWLINE')
+                    
+                    if elseif_condition and not found_true_condition:
+                        # Execute this ELSEIF block
+                        found_true_condition = True
+                        # Find where this block ends
+                        next_stop = elseif_indices[i+1] if (i+1) < len(elseif_indices) else (else_index if else_index else endif_index)
+                        
+                        while self.token_index < next_stop:
+                            self._parse_line()
+                        break
+                
+                # If no IF or ELSEIF was true, execute ELSE if it exists
+                if not found_true_condition and else_index is not None:
                     self.token_index = else_index + 1
-                    if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+                    if self._current_token() and self._current_token()[0] == 'NEWLINE': 
+                        self._next_token()
                     
                     while self.token_index < endif_index:
                         self._parse_line()
             
-            # After running the correct block, jump the pointer to the END IF.
+            # Jump to END IF
             self.token_index = endif_index
             self._expect('END IF')
 
         except LoopExit as e:
-            # An EXIT happened. Instantly jump to the end of the IF block and re-raise.
+            # An EXIT happened. Jump to the end of the IF block and re-raise.
             self.token_index = endif_index + 1
             raise e
 
@@ -1163,18 +1362,31 @@ class Interpreter:
     def _parse_term(self):
         res = self._parse_factor()
         while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '*/':
-            op = self._current_token()[1]; self._next_token(); right = self._parse_factor()
-            if op == '*': res *= right
-            elif op == '/': res /= right
+            op = self._current_token()[1]
+            self._next_token()
+            right = self._parse_factor()
+            try:
+                if op == '*':
+                    res *= right
+                elif op == '/':
+                    res /= right
+            except ZeroDivisionError:
+                raise RuntimeError("Division by zero")
+            except Exception as e:
+                raise RuntimeError(f"Arithmetic error: {e}")
         return res
         
     def _parse_expression(self):
         res = self._parse_term()
         while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '+-':
-            op = self._current_token()[1]; self._next_token(); right = self._parse_term()
-            if op == '+': res = str(res) + str(right) if isinstance(res, str) or isinstance(right, str) else res + right
+            op = self._current_token()[1]
+            self._next_token()
+            right = self._parse_term()
+            if op == '+':
+                res = str(res) + str(right) if isinstance(res, str) or isinstance(right, str) else res + right
             elif op == '-':
-                if isinstance(res, str) or isinstance(right, str): self._error("Type mismatch: Cannot subtract strings.")
+                if isinstance(res, str) or isinstance(right, str):
+                    raise RuntimeError("Type mismatch: Cannot subtract strings")
                 res -= right
         return res
 
@@ -1259,36 +1471,6 @@ class Interpreter:
             self.variables['ERR'], 
             self.variables['ERRMSG$'] = 1.0, str(e); 
             self._error(f"Error reading file: {e}")
-            
-    def _parse_line(self):
-        # --- START OF NEW TRACING LOGIC ---
-        if self.trace_mode:
-            token = self._current_token()
-            if token and token[0] != 'NEWLINE':
-                line_num, _ = self.lexer.get_line_col(token[2])
-                
-                # Look up the actual source line text
-                start_pos = self.lexer.line_starts[line_num - 1]
-                end_pos = self.lexer.line_starts[line_num] if line_num < len(self.lexer.line_starts) else len(self.lexer.raw_source_code)
-                source_line = self.lexer.raw_source_code[start_pos:end_pos].strip()
-                
-                # Don't trace the TROFF command itself
-                if token[0] != 'TROFF':
-                    print(f"[{line_num}]> {source_line}")
-        # --- END OF NEW TRACING LOGIC ---
-        
-        if not self._current_token():
-            return False
-
-        if self._current_token()[0] == 'NEWLINE':
-            self._next_token()
-            return True
-
-        self._parse_statement()
-
-        if self._current_token() and self._current_token()[0] == 'NEWLINE':
-            self._next_token()
-        return True
         
     def _parse_input_statement(self):
         self._expect('INPUT'); prompt = ""
@@ -1380,9 +1562,170 @@ class Interpreter:
         else: csv.writer(target_handle, **dialect_params).writerow(values)
             
     def _parse_exit_statement(self):
-        self._expect('EXIT'); token = self._current_token()
-        if not token or token[0] not in ['FOR', 'WHILE']: self._error("EXIT must be followed by FOR or WHILE")
-        exit_type = token[0]; self._next_token(); raise LoopExit(exit_type)
+        self._expect('EXIT')
+        token = self._current_token()
+        
+        # EXIT LOOP is valid for DO...LOOP structures
+        if not token or token[0] not in ['FOR', 'WHILE', 'LOOP', 'DO']:
+            self._error("EXIT must be followed by FOR, WHILE, LOOP, or DO")
+        
+        exit_type = token[0]
+        self._next_token()
+        
+        # Map EXIT LOOP and EXIT DO to the same internal type
+        if exit_type == 'LOOP' or exit_type == 'DO':
+            raise LoopExit('DO')  # Use 'DO' as the internal identifier
+        else:
+            raise LoopExit(exit_type)
+
+    # 4. Implement the DO...LOOP parser:
+    def _parse_do_loop_statement(self):
+        """
+        Parse DO...LOOP with optional WHILE/UNTIL conditions.
+        Supports:
+        - DO WHILE condition ... LOOP
+        - DO UNTIL condition ... LOOP
+        - DO ... LOOP WHILE condition   
+        - DO ... LOOP UNTIL condition
+        - DO ... LOOP (infinite loop)
+        """
+        start_index = self.token_index
+        self._expect('DO')
+        
+        pre_test_type = None
+        pre_test_condition_index = None
+        
+        if self._current_token() and self._current_token()[0] == 'WHILE':
+            pre_test_type = 'WHILE'
+            self._next_token()
+            pre_test_condition_index = self.token_index
+            self._skip_condition()
+        elif self._current_token() and self._current_token()[0] == 'UNTIL':
+            pre_test_type = 'UNTIL'
+            self._next_token()
+            pre_test_condition_index = self.token_index
+            self._skip_condition()
+        
+        if self._current_token() and self._current_token()[0] == 'NEWLINE':
+            self._next_token()
+        
+        body_start_index = self.token_index
+        
+        while True:
+            # For pre-test loops, check condition before each iteration
+            if pre_test_type:
+                saved_index = self.token_index
+                self.token_index = pre_test_condition_index
+                condition_result = self._parse_condition() != 0
+                self.token_index = saved_index
+                
+                if (pre_test_type == 'WHILE' and not condition_result) or \
+                   (pre_test_type == 'UNTIL' and condition_result):
+                    self._skip_to_loop_end(start_index)
+                    return
+            
+            # Execute the loop body, catching any EXIT LOOP calls
+            try:
+                self.token_index = body_start_index
+                self.run_block(end_tokens={'LOOP'})
+            except LoopExit as e:
+                if e.args[0] in ['DO', 'LOOP']:
+                    # EXIT LOOP was called. Scan forward to find the matching LOOP token.
+                    self._skip_block('DO', 'LOOP')
+                    
+                    # We are now positioned *after* the LOOP token. We still need
+                    # to skip any post-loop condition (e.g., UNTIL x > 5).
+                    if self._current_token() and self._current_token()[0] in ['WHILE', 'UNTIL']:
+                        self._next_token() # Consume WHILE or UNTIL
+                        # Scan forward past the condition until the end of the line.
+                        while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
+                            self._next_token()
+                    return
+                else:
+                    # This was an EXIT for a different loop (e.g. EXIT FOR), so re-raise it.
+                    raise e
+            
+            # We should now be at the LOOP token
+            self._expect('LOOP')
+            
+            # Check for a post-test condition (LOOP WHILE/UNTIL)
+            if self._current_token() and self._current_token()[0] == 'WHILE':
+                self._next_token()
+                if not (self._parse_condition() != 0):
+                    break # Condition is false, exit the loop
+            elif self._current_token() and self._current_token()[0] == 'UNTIL':
+                self._next_token()
+                if self._parse_condition() != 0:
+                    break # Condition is true, exit the loop
+            
+            # No post-test condition, or condition allows continuation.
+            # The loop will restart and rewind the token_index.
+
+
+    def _skip_condition(self):
+        """Skip past a condition expression to the next statement."""
+        # This is a simple version - enhance if needed for complex conditions
+        depth = 0
+        while self._current_token():
+            token = self._current_token()
+            if token[0] == 'LPAREN':
+                depth += 1
+            elif token[0] == 'RPAREN':
+                depth -= 1
+            elif depth == 0 and token[0] in ['NEWLINE', 'COLON']:
+                break
+            self._next_token()
+
+    def _skip_to_loop_end(self, do_index):
+        """Skip past the entire LOOP statement including any conditions."""
+        # Try using the jump map first
+        if do_index in self.jump_map:
+            loop_index = self.jump_map[do_index].get('loop')
+            if loop_index:
+                # Position at the LOOP token
+                self.token_index = loop_index + 1  # Move PAST the LOOP token
+                
+                # Now check if there's a WHILE/UNTIL condition to skip
+                if self._current_token() and self._current_token()[0] in ['WHILE', 'UNTIL']:
+                    self._next_token()
+                    # Skip the condition - keep going until we hit a statement terminator
+                    depth = 0
+                    while self._current_token():
+                        tok = self._current_token()
+                        if tok[0] == 'LPAREN':
+                            depth += 1
+                        elif tok[0] == 'RPAREN':
+                            depth -= 1
+                        elif depth == 0 and tok[0] in ['NEWLINE', 'COLON', 'END']:
+                            break
+                        self._next_token()
+                return
+        
+        # Fallback without jump map
+        level = 1
+        while self._current_token() and level > 0:
+            token = self._current_token()
+            self._next_token()
+            if token[0] == 'DO':
+                level += 1
+            elif token[0] == 'LOOP':
+                level -= 1
+                if level == 0:
+                    # We're now positioned after LOOP, check for conditions
+                    if self._current_token() and self._current_token()[0] in ['WHILE', 'UNTIL']:
+                        self._next_token()
+                        # Skip condition expression
+                        depth = 0
+                        while self._current_token():
+                            tok = self._current_token()
+                            if tok[0] == 'LPAREN':
+                                depth += 1
+                            elif tok[0] == 'RPAREN':
+                                depth -= 1
+                            elif depth == 0 and tok[0] in ['NEWLINE', 'COLON', 'END']:
+                                break
+                            self._next_token()
+                    return
         
     def _parse_while_statement(self):
         start_index = self.token_index
@@ -1498,37 +1841,62 @@ class Interpreter:
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ID'); old_filename = self._parse_expression(); self._expect('AS'); new_filename = self._parse_expression()
         try: os.rename(str(old_filename), str(new_filename))
-        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-        except FileExistsError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 17.0, str(e)
-        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+        except FileNotFoundError as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            raise e
+        except FileExistsError as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 17.0, str(e)
+            raise e
+        except Exception as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            raise e
 
     def _parse_chdir_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('CHDIR'); path = self._parse_expression()
         try: os.chdir(os.path.expanduser(str(path)))
-        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-        except NotADirectoryError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 20.0, str(e)
-        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+        except FileNotFoundError as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            raise e
+        except NotADirectoryError as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 20.0, str(e)
+            raise e
+        except Exception as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            raise e
 
     def _parse_mkdir_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('MKDIR'); path = self._parse_expression()
         try: os.makedirs(os.path.expanduser(str(path)), exist_ok=True)
-        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+        except Exception as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            raise e
 
     def _parse_rmdir_statement(self):
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('RMDIR'); path = self._parse_expression()
-        try: os.rmdir(os.path.expanduser(str(path)))
-        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-        except OSError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 39.0, str(e)
-        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('RMDIR'); path = self._parse_expression()
+            try: os.rmdir(os.path.expanduser(str(path)))
+            except FileNotFoundError as e:
+                self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+                raise e
+            except OSError as e:
+                self.variables['ERR'], self.variables['ERRMSG$'] = 39.0, str(e)
+                raise e
+            except Exception as e:
+                self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+                raise e
  
     def _parse_kill_statement(self):
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('KILL')
-        if self._current_token() and self._current_token()[0] == 'NEWLINE': self._error("KILL command requires a string argument.")
-        filename = self._parse_expression()
-        try: os.remove(os.path.expanduser(str(filename)))
-        except FileNotFoundError as e: self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+            self._expect('KILL')
+            if self._current_token() and self._current_token()[0] == 'NEWLINE': self._error("KILL command requires a string argument.")
+            filename = self._parse_expression()
+            try:
+                os.remove(os.path.expanduser(str(filename)))
+            except FileNotFoundError as e:
+                self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+                raise e
+            except Exception as e:
+                self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+                raise e
 
     def _parse_shell_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('SHELL')
@@ -1544,7 +1912,9 @@ class Interpreter:
                 if result.stderr: self.variables['ERRMSG$'] = result.stderr
             else: result = subprocess.run(str(command_string), shell=True, check=False)
             self.variables['ERR'] = float(result.returncode)
-        except Exception as e: self.variables['ERR'], self.variables['ERRMSG$'] = -1.0, str(e)
+        except Exception as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = -1.0, str(e)
+            raise e
             
     def _parse_fetch_statement(self):
         self.variables['ERR'] = 0.0; self._expect('FETCH'); url = self._parse_expression()
@@ -2856,12 +3226,10 @@ def main():
         is_debug = True
         args.remove("--debug")
 
-    # --- ADD THIS BLOCK ---
     dump_tokens_flag = False
     if "--dump-tokens" in args:
         dump_tokens_flag = True
         args.remove("--dump-tokens")
-    # --- END OF BLOCK ---
         
     source_code = ""
     cmd_args = []
