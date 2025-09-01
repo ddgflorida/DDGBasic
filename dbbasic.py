@@ -129,7 +129,9 @@ def preprocess_continuations(source_code):
 
 class Lexer:
     def __init__(self, source_code):
-        self.raw_source_code = source_code
+        lines = source_code.splitlines()
+        numbered = [f"{i+1}: {line}" for i, line in enumerate(lines)]
+        self.raw_source_code = source_code # "\n".join(numbered)
         self.line_starts = [0]
         for match in re.finditer(r"\n", source_code):
             self.line_starts.append(match.end())
@@ -263,7 +265,7 @@ class Lexer:
                             tokens.append(('THEN', 'THEN', end_paren_pos + 1))
                     continue
             u_value = value.upper()
-            if kind != 'STRING': value = u_value
+            #if kind != 'STRING': value = u_value
             if kind == 'BACKTICK_STRING': kind = 'STRING'
             if u_value == 'ENDIF': kind, value = 'END IF', 'END IF'
             elif u_value == 'LINEINPUT': kind, value = 'LINE INPUT', 'LINE INPUT'
@@ -378,7 +380,9 @@ class Interpreter:
         self.db_connection = None
         self.sql_fatal_errors = True
         self.trace_mode = False   # FOR TRON AND TROFF
-        
+        self.program_terminated = False # Termination flag
+        self.hash_keys_mode = 'PRESERVE_CASE'  # Default to preserve case
+                
         # --- NEW: Error handling state ---
         self.error_handler_label = None
         self.in_error_handler = False
@@ -599,6 +603,7 @@ class Interpreter:
                 break
             if not self._parse_line():
                 break
+            if self.program_terminated: break
 
     def _skip_block(self, start_token, end_token):
         level = 1
@@ -638,7 +643,7 @@ class Interpreter:
                     print(f"[{line_num}]> {source_line}")
         # --- END OF TRACING LOGIC ---
         
-        if not self._current_token() or self._current_token()[0] == 'END':
+        if not self._current_token():
             return False
             
         if self._current_token()[0] == 'NEWLINE':
@@ -646,13 +651,13 @@ class Interpreter:
             return True
         
         # Parse statements until we hit a NEWLINE or END
-        while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
+        while self._current_token() and self._current_token()[0] not in ['NEWLINE']:
             # Store the resume point BEFORE parsing the statement
             resume_point = self._find_next_statement_index(self.token_index)
             
             try:
                 self._parse_statement()
-            except (LoopExit, ProgramEnd):
+            except (LoopExit):
                 raise # Re-raise control-flow exceptions so loop parsers can catch them
             except Exception as e:
                 if not self.error_handler_label or self.in_error_handler:
@@ -665,16 +670,18 @@ class Interpreter:
                 self.variables['ERRMSG$'] = str(e)
                 self.token_index = self.labels[self.error_handler_label]
             
-            # After parsing a statement, check for colon separator
             if self._current_token() and self._current_token()[0] == 'COLON':
-                self._next_token()  # Skip the colon and continue to next statement
+                self._next_token()
+            elif self._current_token() and self._current_token()[0] not in ['NEWLINE']:
+                break
         
         if self._current_token() and self._current_token()[0] == 'NEWLINE':
             self._next_token()
         return True
 
     def _parse_end_statement(self):
-        #self._expect('END')
+        self._expect('END')
+        self.program_terminated = True
         sys.exit(0)
 
     def _parse_statement(self):
@@ -810,7 +817,7 @@ class Interpreter:
             self._parse_tron_statement()
         elif token[0] == 'TROFF':
             self._parse_troff_statement()
-        elif token[0] in ['ELSE', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
+        elif token[0] in ['ELSE', 'ELSEIF', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
             self._error(f"Unexpected '{token[0]}'")
         else:
             self._error(f"Unknown statement: {token[0]}")
@@ -819,6 +826,8 @@ class Interpreter:
         try:
             while self._current_token() and self._current_token()[0] != 'END':
                 if not self._parse_line():
+                    break
+                if self.program_terminated:
                     break
         except ProgramEnd:
             return
@@ -835,6 +844,8 @@ class Interpreter:
                 try:
                     while self._current_token() and self._current_token()[0] != 'END':
                         if not self._parse_line():
+                            break
+                        if self.program_terminated:
                             break
                 except ProgramEnd:
                     pass
@@ -921,6 +932,14 @@ class Interpreter:
             if not setting_token or setting_token[0] != 'ID' or setting_token[1] not in ['ON', 'OFF']:
                 self._error("Expected ON or OFF after SET SQL_FATAL_ERRORS")
             self.sql_fatal_errors = (setting_token[1] == 'ON'); self._next_token()
+        elif token[0] == 'ID' and token[1] == 'HASH_KEYS':
+            self._next_token()
+            mode_token = self._current_token()
+            if not mode_token or mode_token[0] != 'ID' or mode_token[1] not in ['PRESERVE_CASE', 'IGNORE_CASE']:
+                self._error("Expected PRESERVE_CASE or IGNORE_CASE after SET HASH_KEYS")
+            self.hash_keys_mode = mode_token[1]
+            self._next_token()
+            #print(f"DEBUG: Hash key mode set to {self.hash_keys_mode}", file=sys.stderr)
         elif token[0] == 'OUTPUT':
             self._next_token(); g_output_config.mode = "CONSOLE"; token = self._current_token()
             if token and token[0] == 'ID':
@@ -984,129 +1003,98 @@ class Interpreter:
         start_if_index = self.token_index
         self._expect('IF')
         
-        # Look up the pre-calculated locations from the jump_map.
-        jump_locations = self.jump_map.get(start_if_index)
-        
         condition_result = self._parse_condition() != 0
         self._expect('THEN')
 
+        # --- Handle single-line IF THEN... ELSE ... ---
         is_single_line = self._current_token() and self._current_token()[0] != 'NEWLINE'
         if is_single_line:
-            # For single-line IF, we need to handle multiple statements separated by colons
             if condition_result:
-                # Execute statements until ELSE, COLON (ending the IF), or NEWLINE
-                while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ELSE']:
-                    self._parse_statement()
-                    # Check if there's a colon for another statement in the THEN clause
-                    if self._current_token() and self._current_token()[0] == 'COLON':
-                        # Peek ahead to see if next is ELSE
-                        next_tok = self._peek_token()
-                        if next_tok and next_tok[0] == 'ELSE':
-                            break  # End of THEN clause
-                        self._next_token()  # Skip colon and continue
-                    else:
-                        break
-            else:
-                # Condition is false, skip THEN clause
-                while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ELSE']:
-                    self._next_token()
-            
-            # Handle ELSE clause if present
-            if self._current_token() and self._current_token()[0] == 'ELSE':
-                self._next_token()
-                if not condition_result:
-                    # Execute ELSE clause statements
-                    while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'COLON']:
-                        self._parse_statement()
-                        # Check for colon within ELSE clause
-                        if self._current_token() and self._current_token()[0] == 'COLON':
-                            peek = self._peek_token()
-                            # If the next statement could end the IF, stop
-                            if not peek or peek[0] in ['NEWLINE', 'IF', 'FOR', 'WHILE', 'END']:
-                                break
-                            self._next_token()  # Skip colon and continue in ELSE
-                else:
-                    # Skip ELSE clause
+                # Condition is true, so parse the THEN part
+                self._parse_statement()
+                # After parsing, skip the ELSE part if it exists
+                if self._current_token() and self._current_token()[0] == 'ELSE':
                     while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'COLON']:
                         self._next_token()
-            
-            # Don't consume trailing COLON - let _parse_line handle it
-            return
-        
-        # Multi-line IF handling remains the same...
-        self._expect('NEWLINE')
-        if not jump_locations:
-            self._error("Mismatched multi-line IF statement; no corresponding END IF found during pre-scan.")
-
-        elseif_indices = jump_locations.get('elseifs', [])
-        else_index = jump_locations.get('else')
-        endif_index = jump_locations['endif']
-
-        try:
-            # Check the initial IF condition
-            if condition_result:
-                # Execute the IF block
-                stop_at = elseif_indices[0] if elseif_indices else (else_index if else_index else endif_index)
-                while self.token_index < stop_at:
-                    # Add this check to handle END inside the block
-                    if self._current_token() and self._current_token()[0] == 'END':
-                        self._parse_end_statement() # This will raise ProgramEnd
-                        break
-                    if not self._parse_line():
-                        break
             else:
-                # IF was false, check ELSEIF conditions
-                found_true_condition = False
+                # Condition is false, so skip the THEN part
+                while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ELSE']:
+                    self._next_token()
+                # If there's an ELSE part, parse it
+                if self._current_token() and self._current_token()[0] == 'ELSE':
+                    self._next_token()
+                    self._parse_statement()
+            return
+
+        # --- Handle multi-line IF...END IF block ---
+        self._expect('NEWLINE')
+        
+        jump_locations = self.jump_map.get(start_if_index)
+        if not jump_locations or jump_locations['endif'] is None:
+            self._error("Mismatched multi-line IF statement; no corresponding END IF found.")
+
+        endif_index = jump_locations['endif']
+        
+        try:
+            if condition_result:
+                # IF condition is true, execute its block and then jump to END IF
+                stop_at = jump_locations['elseifs'][0] if jump_locations['elseifs'] else \
+                          (jump_locations['else'] if jump_locations['else'] is not None else endif_index)
                 
-                for i, elseif_index in enumerate(elseif_indices):
-                    # Jump to this ELSEIF
+                while self.token_index < stop_at:
+                    if self.program_terminated: return
+                    self._parse_line()
+                
+                self.token_index = endif_index
+
+            else:
+                # IF condition is false, find the first true ELSEIF or the ELSE block
+                found_true_block = False
+
+                # Check ELSEIF blocks
+                for i, elseif_index in enumerate(jump_locations['elseifs']):
                     self.token_index = elseif_index
                     self._expect('ELSEIF')
-                    
-                    # Evaluate the ELSEIF condition
                     elseif_condition = self._parse_condition() != 0
                     self._expect('THEN')
                     self._expect('NEWLINE')
                     
-                    if elseif_condition and not found_true_condition:
-                        # Execute this ELSEIF block
-                        found_true_condition = True
-                        # Find where this block ends
-                        next_stop = elseif_indices[i+1] if (i+1) < len(elseif_indices) else (else_index if else_index else endif_index)
+                    if elseif_condition:
+                        found_true_block = True
+                        # This ELSEIF is true, execute its block
+                        next_stop_at = jump_locations['elseifs'][i+1] if i + 1 < len(jump_locations['elseifs']) else \
+                                       (jump_locations['else'] if jump_locations['else'] is not None else endif_index)
+
+                        while self.token_index < next_stop_at:
+                            if self.program_terminated: return
+                            self._parse_line()
                         
-                        while self.token_index < stop_at:
-                            # Add this check to handle END inside the block
-                            if self._current_token() and self._current_token()[0] == 'END':
-                                self._parse_end_statement() # This will raise ProgramEnd
-                                break
-                            if not self._parse_line():
-                                break
+                        # After executing, jump to the end
+                        self.token_index = endif_index
+                        break # Exit the loop over ELSEIFs
                 
-                # If no IF or ELSEIF was true, execute ELSE if it exists
-                if not found_true_condition and else_index is not None:
-                    self.token_index = else_index + 1
-                    if self._current_token() and self._current_token()[0] == 'NEWLINE': 
-                        self._next_token()
-                    
-                    while self.token_index < endif_index:
-                        if self._current_token() and self._current_token()[0] == 'END':
-                                self._parse_end_statement() # This will raise ProgramEnd
-                                break
-                        if not self._parse_line():
-                            break
-            
-            # Jump to END IF
-            self.token_index = endif_index
-            self._expect('END IF')
+                # If no ELSEIF was true, check for an ELSE block
+                if not found_true_block:
+                    if jump_locations['else'] is not None:
+                        self.token_index = jump_locations['else']
+                        self._expect('ELSE')
+                        if self._current_token()[0] == 'NEWLINE': self._next_token()
+                        
+                        while self.token_index < endif_index:
+                             if self.program_terminated: return
+                             self._parse_line()
+                    else:
+                        # No true conditions and no ELSE block, so just jump to END IF
+                        self.token_index = endif_index
 
-        except ProgramEnd:
-            # If END is called inside an IF block
-            sys.exit()
+            # Move past the END IF token
+            if self.token_index < len(self.tokens) and self.tokens[self.token_index][0] == 'END IF':
+                 self._expect('END IF')
+
         except LoopExit as e:
-            # An EXIT happened. Jump to the end of the IF block and re-raise.
-            self.token_index = endif_index + 1
+            # If an EXIT FOR/DO is hit, jump past the whole IF structure
+            self.token_index = endif_index + 1 if endif_index is not None else len(self.tokens)
             raise e
-
 
 
     def _format_output_value(self, value):
@@ -1121,8 +1109,13 @@ class Interpreter:
         raise ValueError(f"Invalid date format: {date_str}")
         
     def _python_to_basic_data(self, data):
-        if isinstance(data, dict): return {str(k).upper(): self._python_to_basic_data(v) for k, v in data.items()}
-        if isinstance(data, list): return [self._python_to_basic_data(item) for item in data]
+        if isinstance(data, dict): 
+            if self.hash_keys_mode == 'IGNORE_CASE':
+                return {str(k).upper(): self._python_to_basic_data(v) for k, v in data.items()}
+            else:  # PRESERVE_CASE
+                 return {str(k): self._python_to_basic_data(v) for k, v in data.items()}
+        if isinstance(data, list): 
+            return [self._python_to_basic_data(item) for item in data]
         if data is None: return ""
         if isinstance(data, bool): return -1.0 if data else 0.0
         return data
@@ -1132,6 +1125,18 @@ class Interpreter:
         if isinstance(data, list): return [self._basic_to_json_serializable(item) for item in data]
         if isinstance(data, float) and data.is_integer(): return int(data)
         return data
+        
+    def _normalize_hash_key(self, key):
+        """Normalize hash key based on current hash_keys_mode setting."""
+        key_str = str(key)
+        if isinstance(key, float) and key.is_integer():
+            key_str = str(int(key))  # "1" not "1.0"
+        
+        if self.hash_keys_mode == 'IGNORE_CASE':
+            return key_str.upper()
+        else:  # PRESERVE_CASE
+            return key_str
+        
     def _to_camel_case(self, s):
         """Converts an UPPER_SNAKE_CASE string to camelCase."""
         components = s.lower().split('_')
@@ -1186,8 +1191,10 @@ class Interpreter:
 
             return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys)
         elif name == 'HASH_EXISTS':
-            if len(args) != 2 or not isinstance(args[0], dict): self._error("HASH_EXISTS requires hash_var, key$.")
-            return -1.0 if str(args[1]) in args[0] else 0.0
+            if len(args) != 2 or not isinstance(args[0], dict): 
+                self._error("HASH_EXISTS requires hash_var, key$.")
+            lookup_key = self._normalize_hash_key(args[1])
+            return -1.0 if lookup_key in args[0] else 0.0
         elif name == 'HASH_JOIN':
             if len(args) < 2:
                 self._error("HASH_JOIN requires at least two HASH arguments.")
@@ -1200,7 +1207,10 @@ class Interpreter:
             return new_hash
         elif name == 'HASH_DELETE':
             if len(args) != 2 or not isinstance(args[0], dict): self._error("HASH_DELETE requires hash_var, key$.")
-            if str(args[1]) in args[0]: del args[0][str(args[1])]; return 0
+            lookup_key = self._normalize_hash_key(args[1])
+            if lookup_key in args[0]: 
+                del args[0][lookup_key]
+                return 0
         elif name == 'HASH_COUNT':
             if len(args) != 1 or not isinstance(args[0], dict): self._error("HASH_COUNT requires a hash argument.")
             return float(len(args[0]))
@@ -1237,7 +1247,7 @@ class Interpreter:
             return -1.0 if is_eof else 0.0
         elif name == 'FILE_EXISTS':
             if len(args) != 1: self._error("FILE_EXISTS requires 1 argument.")
-            return -1.0 if os.path.exists(str(args[0])) else 0.0
+            return -1.0 if os.path.exists(os.path.expanduser(str(args[0]))) else 0.0
         elif name == 'DATE$': return datetime.now().strftime('%Y-%m-%d')
         elif name == 'TIME$': return datetime.now().strftime('%H:%M:%S')
         elif name == 'DATEADD': return (self._parse_date_string(args[0]) + timedelta(days=int(args[1]))).strftime('%Y-%m-%d')
@@ -1264,6 +1274,13 @@ class Interpreter:
         elif name == 'MID$': s, st = str(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
         elif name == 'UCASE$': return str(args[0]).upper()
         elif name == 'LCASE$': return str(args[0]).lower()
+        elif name == 'CHR$':
+            if len(args) != 1: self._error("CHR$ requires one numeric argument.")
+            return chr(int(args[0]))
+        elif name == 'ASC':
+            if len(args) != 1 or not isinstance(args[0], str) or len(args[0]) == 0:
+                self._error("ASC requires one non-empty string argument.")
+            return float(ord(args[0][0]))
         elif name == 'REPLACE$':
             if not (3 <= len(args) <= 5): self._error("REPLACE$ requires 3 to 5 arguments.")
             source_str, old_str, new_str = str(args[0]), str(args[1]), str(args[2])
@@ -1327,13 +1344,37 @@ class Interpreter:
             return results[0][0]
         elif token[0] == 'ID':
             var_name = token[1]
+            
+            # Handle case-insensitive BASIC variable lookup
+            actual_var_name = var_name
             if var_name not in self.variables:
-                if not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
-                    self.variables[var_name] = "" if var_name.endswith('$') else 0.0
-            if var_name in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                # Try to find existing variable with different case
+                for existing_var in self.variables:
+                    if existing_var.upper() == var_name.upper():
+                        actual_var_name = existing_var
+                        break
+                else:
+                    # Variable doesn't exist, create with uppercase name
+                    actual_var_name = var_name.upper()
+                    if not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                        self.variables[actual_var_name] = "" if var_name.endswith('$') else 0.0
+            
+            var_name = actual_var_name
+            
+            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                 self._next_token(); 
                 return self._execute_function(var_name, [])
-            self._next_token(); current_value = self.variables.get(var_name)
+            
+            self._next_token()
+            
+            # Additional case-insensitive lookup for variables that might exist with different case
+            if var_name not in self.variables:
+                upper_var_name = var_name.upper()
+                if upper_var_name in self.variables:
+                    var_name = upper_var_name
+            
+            current_value = self.variables.get(var_name)
+            
             while self._current_token():
                 token = self._current_token()
                 if token[0] == 'LPAREN':
@@ -1355,29 +1396,50 @@ class Interpreter:
                         if not 0 <= index < len(current_value): self._error("Array index out of bounds.")
                         current_value = current_value[index]
                     elif isinstance(current_value, dict):
-                        key = str(key_or_index)
-                        # If the key was a number, ensure it's an integer string (e.g., "1" not "1.0").
-                        if isinstance(key_or_index, float) and key_or_index.is_integer():
-                            key = str(int(key_or_index))
-                        # --- END OF FIX ---
-                        current_value = current_value.get(key.upper(), "" if var_name.endswith('$') else 0.0)
+                        original_key = str(key_or_index)
+                        normalized_key = self._normalize_hash_key(key_or_index)
+                        # Use the original key expression to determine type, not the variable name
+                        default_val = "" if original_key.endswith('$') else 0.0
+                        current_value = current_value.get(normalized_key, default_val)
                     continue
                 elif token[0] == 'DOT':
                     if not isinstance(current_value, dict): self._error("Dot notation only for HASH.")
                     self._next_token()
                     key_token = self._expect('ID')
-                    key_name = key_token[1].upper()
-                    lookup_key, is_string_access = key_name.rstrip('$'), key_name.endswith('$')
-                    current_value = current_value.get(lookup_key, "" if is_string_access else 0.0)
+                    key_name = key_token[1]
+                    is_string_access = key_name.endswith('$')
+                    base_key = key_name.rstrip('$')
+                    
+                    #print(f"DEBUG: Looking for key '{base_key}' in hash with keys: {list(current_value.keys())}", file=sys.stderr)
+                    
+                    # 1. Try exact match first (fastest)
+                    if base_key in current_value:
+                        current_value = current_value[base_key]
+                        #print(f"DEBUG: Found exact match", file=sys.stderr)
+                    else:
+                        # 2. Fall back to case-insensitive search for dot notation forgiveness
+                        found = False
+                        for candidate_key in current_value.keys():
+                            if candidate_key.lower() == base_key.lower():
+                                current_value = current_value[candidate_key]
+                                #print(f"DEBUG: Found case-insensitive match: '{candidate_key}'", file=sys.stderr)
+                                found = True
+                                break
+                        
+                        if not found:
+                            current_value = "" if is_string_access else 0.0
+                            #print(f"DEBUG: No match found, using default", file=sys.stderr)
                     continue
-                else: break
+                else: 
+                    break
             return current_value
         else:
+            self._error(f"Unexpected token in factor: {token}")
             print("\n--- TOKEN DUMP IN LEXER ---")
             for token in self.tokens:
                 print(token)
             print("--------------------\n")            
-            self._error(f"Unexpected token in factor: {token}")
+
         
     def _parse_term(self):
         res = self._parse_factor()
@@ -1796,7 +1858,7 @@ class Interpreter:
             sort_key_expr = self._parse_expression()
             if not isinstance(sort_key_expr, str):
                 self._error("Sort key provided with ON must be a string expression.")
-            sort_key = sort_key_expr.upper()
+            sort_key = self._normalize_hash_key(sort_key_expr) if self.hash_keys_mode == 'IGNORE_CASE' else sort_key_expr
 
         reverse_order = False
         if self._current_token() and self._current_token()[0] == 'ID':
@@ -2176,7 +2238,10 @@ class Interpreter:
                             if original_name.lower() not in header_lookup:
                                 self._error(f"Field '{original_name}' not found in CSV header.")
                             new_map.append(header_lookup[original_name.lower()])
-                            final_field_name = new_name.upper() if new_name else original_name.upper()
+                            if self.hash_keys_mode == 'IGNORE_CASE':
+                                final_field_name = new_name.upper() if new_name else original_name.upper()
+                            else:
+                                final_field_name = new_name if new_name else original_name
                             new_headers.append(final_field_name)
                         final_headers, column_map = new_headers, new_map
 
@@ -2584,6 +2649,7 @@ class Interpreter:
                 return
 
             column_names = [desc[0].upper() for desc in self.db_cursor.description] if self.db_cursor.description else []
+            
             row_number = 0
             for row in results:
                 row_number += 1
@@ -2790,7 +2856,10 @@ class Interpreter:
                 if options['header']:
                     try:
                         raw_headers = next(csv_reader)
-                        headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip().upper() for h in raw_headers]
+                        if self.hash_keys_mode == 'IGNORE_CASE':
+                            headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip().upper() for h in raw_headers]
+                        else:
+                            headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip() for h in raw_headers]
                     except StopIteration:
                         self._skip_block('FOR', 'NEXT')
                         return
@@ -2881,10 +2950,20 @@ class Interpreter:
                     default_value = "" if var_name.endswith('$') else 0.0
                     collection.extend([default_value] * (index - len(collection) + 1))
                 collection[index] = value
-            elif isinstance(collection, dict): collection[str(key_or_index_expr).upper()] = value
+            elif isinstance(collection, dict): 
+                normalized_key = self._normalize_hash_key(key_or_index_expr)
+                collection[normalized_key] = value
         elif self._current_token() and self._current_token()[0] == 'DOT':
-            self._next_token(); key_token = self._expect('ID'); key_name = key_token[1].upper(); self._expect('ASSIGN'); value = self._parse_expression()
-            if var_name not in self.variables or not isinstance(self.variables.get(var_name), dict): self._error(f"'{var_name}' is not a HASH for dot notation.")
+            self._next_token(); 
+            key_token = self._expect('ID'); 
+            base_key = key_token[1].rstrip('$')  # Strip $ before normalizing
+            #print("DEBUG1",base_key)
+            key_name = self._normalize_hash_key(base_key) if self.hash_keys_mode == 'IGNORE_CASE' else base_key 
+            #print("DEBUG2",key_name)
+            self._expect('ASSIGN'); 
+            value = self._parse_expression()
+            if var_name not in self.variables or not isinstance(self.variables.get(var_name), dict): 
+                self._error(f"'{var_name}' is not a HASH for dot notation.")
             self.variables[var_name][key_name] = value
         elif self._current_token() and self._current_token()[0] == 'ASSIGN':
             self._expect('ASSIGN'); value = self._parse_expression()
@@ -2925,12 +3004,15 @@ class Interpreter:
 
         report = {}
         try:
-            # Stage 1: File-level analysis
+            # --- Start of new analysis logic ---
+            date_formats_to_try = ["%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y%m%d", "%Y-%m-%dT%H:%M:%S"]
+            logical_trues = {'true', 't', 'y', 'yes', '1'}
+            logical_falses = {'false', 'f', 'n', 'no', '0'}
+
             with open(filename, 'r', newline='', encoding='utf-8', errors='replace') as infile:
-                sample = infile.read(4096)
+                sample = infile.read(8192)
                 infile.seek(0)
                 
-                # Auto-detect delimiter
                 sniffer = csv.Sniffer()
                 if options['delimiter'] == 'auto':
                     try: report['DELIMITER'] = sniffer.sniff(sample).delimiter
@@ -2938,7 +3020,6 @@ class Interpreter:
                 else:
                     report['DELIMITER'] = options['delimiter']
 
-                # Auto-detect header
                 has_header = options['header']
                 if has_header == 'auto':
                     try: has_header = sniffer.has_header(sample)
@@ -2952,13 +3033,9 @@ class Interpreter:
                     try: headers = next(reader) 
                     except StopIteration: pass
                 
-                # Stage 2: Structural and Columnar Analysis
                 record_count = 0
                 field_counts = {}
                 col_stats = {}
-
-                if headers:
-                    col_stats = {h: {'min_len': None, 'max_len': 0, 'empty_count': 0, 'numeric_count': 0} for h in headers}
 
                 limit = options.get('limit')
                 for i, row in enumerate(reader):
@@ -2967,26 +3044,106 @@ class Interpreter:
                     num_fields = len(row)
                     field_counts[num_fields] = field_counts.get(num_fields, 0) + 1
 
-                    if not headers and not col_stats and row: # Create headers for headerless file
+                    if not headers and row:
                         headers = [f"Field_{j+1}" for j in range(num_fields)]
-                        col_stats = {h: {'min_len': None, 'max_len': 0, 'empty_count': 0, 'numeric_count': 0} for h in headers}
                     
                     for j, field in enumerate(row):
                         if j >= len(headers): continue
                         h = headers[j]
+                        if h not in col_stats:
+                            col_stats[h] = {
+                                'MIN_LEN': None, 'MAX_LEN': 0, 'EMPTY_COUNT': 0,  # Changed to uppercase
+                                'INTEGER_COUNT': 0, 'FLOAT_COUNT': 0, 'DATE_COUNT': 0,  # Changed to uppercase
+                                'LOGICAL_COUNT': 0, 'STRING_COUNT': 0, 'MAX_DECIMALS': 0,  # Changed to uppercase
+                                'MIN_VALUE': None, 'MAX_VALUE': None 
+                            }
+
                         field_len = len(field)
-                        if col_stats[h]['min_len'] is None or field_len < col_stats[h]['min_len']: col_stats[h]['min_len'] = field_len
-                        if field_len > col_stats[h]['max_len']: col_stats[h]['max_len'] = field_len
-                        if not field: col_stats[h]['empty_count'] += 1
+                        if col_stats[h]['MIN_LEN'] is None or field_len < col_stats[h]['MIN_LEN']: col_stats[h]['MIN_LEN'] = field_len
+                        if field_len > col_stats[h]['MAX_LEN']: col_stats[h]['MAX_LEN'] = field_len
+
+                        # Trim whitespace first
+                        field = field.strip()
+
+                        if not field:
+                            col_stats[h]['EMPTY_COUNT'] += 1
+                            continue
+
+                        # --- NEW: Data Cleaning for Type Analysis ---
+                        cleaned_field = field.replace('$', '').replace(',', '')
+                        
+                        # If cleaning results in an empty string (e.g., field was just "$"), count as empty
+                        if not cleaned_field:
+                            col_stats[h]['EMPTY_COUNT'] += 1
+                            continue
+                        
+                        # --- End of New Logic ---
+
+
+                        # Type checking logic (now uses cleaned_field)
                         try:
-                            float(field); col_stats[h]['numeric_count'] += 1
+                            int_val = int(cleaned_field)
+                            col_stats[h]['INTEGER_COUNT'] += 1
+                            if col_stats[h]['MIN_VALUE'] is None or int_val < col_stats[h]['MIN_VALUE']: col_stats[h]['MIN_VALUE'] = int_val
+                            if col_stats[h]['MAX_VALUE'] is None or int_val > col_stats[h]['MAX_VALUE']: col_stats[h]['MAX_VALUE'] = int_val
+                            continue
                         except (ValueError, TypeError): pass
-                
+
+                        try:
+                            float_val = float(cleaned_field)
+                            col_stats[h]['FLOAT_COUNT'] += 1
+                            if '.' in cleaned_field:
+                                decimals = len(cleaned_field.split('.')[1])
+                                if decimals > col_stats[h]['MAX_DECIMALS']: col_stats[h]['MAX_DECIMALS'] = decimals
+                            if col_stats[h]['MIN_VALUE'] is None or float_val < col_stats[h]['MIN_VALUE']: col_stats[h]['MIN_VALUE'] = float_val
+                            if col_stats[h]['MAX_VALUE'] is None or float_val > col_stats[h]['MAX_VALUE']: col_stats[h]['MAX_VALUE'] = float_val
+                            continue
+                        except (ValueError, TypeError): pass
+
+                        lower_field = field.lower()
+                        if lower_field in logical_trues or lower_field in logical_falses:
+                            col_stats[h]['LOGICAL_COUNT'] += 1
+                            continue
+                        
+                        is_a_date = False
+                        for fmt in date_formats_to_try:
+                            try:
+                                date_val = datetime.strptime(field, fmt)
+                                col_stats[h]['DATE_COUNT'] += 1
+                                if col_stats[h]['MIN_VALUE'] is None or date_val < col_stats[h]['MIN_VALUE']: col_stats[h]['MIN_VALUE'] = date_val
+                                if col_stats[h]['MAX_VALUE'] is None or date_val > col_stats[h]['MAX_VALUE']: col_stats[h]['MAX_VALUE'] = date_val
+                                is_a_date = True
+                                break
+                            except (ValueError, TypeError): pass
+                        if is_a_date: continue
+
+                        col_stats[h]['STRING_COUNT'] += 1
+
+                # Post-processing to suggest SQL types
+                for h, stats in col_stats.items():
+                    total_data_points = record_count - stats['EMPTY_COUNT']
+                    if total_data_points == 0:
+                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                    elif stats['STRING_COUNT'] > 0:
+                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                    elif stats['DATE_COUNT'] > 0 and stats['INTEGER_COUNT'] == 0 and stats['FLOAT_COUNT'] == 0:
+                        stats['SUGGESTED_DATA_TYPE'] = 'DATE' # Or TEXT for safety
+                    elif stats['FLOAT_COUNT'] > 0:
+                        stats['SUGGESTED_DATA_TYPE'] = 'REAL'
+                    elif stats['INTEGER_COUNT'] > 0 or stats['LOGICAL_COUNT'] > 0:
+                        stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
+                    else:
+                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                    # Convert datetimes to strings for the report
+                    if isinstance(stats['MIN_VALUE'], datetime): stats['MIN_VALUE'] = stats['MIN_VALUE'].isoformat()
+                    if isinstance(stats['MAX_VALUE'], datetime): stats['MAX_VALUE'] = stats['MAX_VALUE'].isoformat()
+
+
+                report['HEADERS'] = headers 
                 report['DATA_RECORDS'] = record_count
                 report['FIELD_COUNT_DISTRIBUTION'] = self._python_to_basic_data(field_counts)
                 report['COLUMN_STATISTICS'] = self._python_to_basic_data(col_stats)
 
-            # Output the report
             if into_hash_name:
                 self.variables[into_hash_name] = self._python_to_basic_data(report)
             else:
@@ -2994,17 +3151,33 @@ class Interpreter:
                 print(f"  Delimiter Detected : '{report.get('DELIMITER', 'N/A')}'")
                 print(f"  Header Row Detected: {'Yes' if report.get('HEADER_ROW') else 'No'}")
                 print(f"  Total Data Records : {report.get('DATA_RECORDS', 0)}")
+                print(f"  Headers (in order) : {', '.join(report.get('HEADERS', []))}")
+                
                 if 'FIELD_COUNT_DISTRIBUTION' in report and report['FIELD_COUNT_DISTRIBUTION']:
                     print("  Field Count Distribution:")
                     for count, num_rows in report['FIELD_COUNT_DISTRIBUTION'].items():
                         print(f"    - {int(num_rows)} record(s) with {count} field(s)")
+
                 if 'COLUMN_STATISTICS' in report and report['COLUMN_STATISTICS']:
-                    print("  Column Statistics:")
-                    for col_name, stats in report['COLUMN_STATISTICS'].items():
-                        print(f"    - [{col_name}]")
-                        print(f"      Min/Max Length: {stats.get('MIN_LEN', 0)} / {stats.get('MAX_LEN', 0)}")
-                        print(f"      Empty Fields  : {stats.get('EMPTY_COUNT', 0)} ({stats.get('EMPTY_COUNT', 0) / record_count:.1%})")
-                        print(f"      Numeric Fields: {stats.get('NUMERIC_COUNT', 0)} ({stats.get('NUMERIC_COUNT', 0) / record_count:.1%})")
+                    print("\n  Column Statistics:")
+                    for col_name in headers:
+                        stats = report['COLUMN_STATISTICS'].get(col_name, {})
+                        print(f"    - [{col_name}] -> Suggested Type: {stats.get('SUGGESTED_DATA_TYPE', 'N/A')}")
+                        print(f"      Counts (Total: {record_count}):")
+                        type_counts = []
+                        if stats.get('INTEGER_COUNT', 0) > 0: type_counts.append(f"Int: {int(stats['INTEGER_COUNT'])}")
+                        if stats.get('FLOAT_COUNT', 0) > 0: type_counts.append(f"Float: {int(stats['FLOAT_COUNT'])}")
+                        if stats.get('DATE_COUNT', 0) > 0: type_counts.append(f"Date: {int(stats['DATE_COUNT'])}")
+                        if stats.get('LOGICAL_COUNT', 0) > 0: type_counts.append(f"Logical: {int(stats['LOGICAL_COUNT'])}")
+                        if stats.get('STRING_COUNT', 0) > 0: type_counts.append(f"String: {int(stats['STRING_COUNT'])}")
+                        if stats.get('EMPTY_COUNT', 0) > 0: type_counts.append(f"Empty: {int(stats['EMPTY_COUNT'])}")
+                        print(f"        {', '.join(type_counts)}")
+                        print(f"      Length (Min/Max) : {stats.get('MIN_LEN', 0)} / {stats.get('MAX_LEN', 0)}")
+                        if stats.get('FLOAT_COUNT', 0) > 0:
+                            print(f"      Max Decimals     : {int(stats.get('MAX_DECIMALS', 0))}")
+                        if stats.get('MIN_VALUE') is not None:
+                             print(f"      Value Range      : {stats.get('MIN_VALUE')} to {stats.get('MAX_VALUE')}")
+
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -3012,6 +3185,11 @@ class Interpreter:
         except Exception as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during CSV analysis: {e}")
+
+
+
+
+
 
     def _format_bytes(self, size):
         """Helper function to format bytes into KB, MB, etc."""
