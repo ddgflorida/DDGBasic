@@ -13,6 +13,7 @@ import subprocess
 import requests
 from datetime import datetime, timedelta
 import xlrd3
+from tui_runner import FormRunner
 
 csv.field_size_limit(1024 * 1024)
 
@@ -150,14 +151,44 @@ class Lexer:
                         r'\bFOR\s+EACH\b': 'FOREACH', r'\bEND\s+TRANSACTION\b': 'ENDTRANSACTION', r'\bREAD\s+FILE\b': 'READFILE',
                         r'\bTO\s+FILE\b': 'TOFILE', r'\bINTO\s+FILE\b': 'INTOFILE', r'\bANALYZE\s+CSV\b': 'ANALYZECSV',
                         r'\bANALYZE\s+JSON\b': 'ANALYZEJSON', r'\bANALYZE\s+FILE\b': 'ANALYZEFILE',
-                        r'\bON\s+ERROR\s+GOTO\b': 'ONERRORGOTO'}
+                        r'\bON\s+ERROR\s+GOTO\b': 'ONERRORGOTO',
+                        r'\bEND\s+FORM\b': 'ENDFORM',r'\bOPEN\s+FORM\b': 'OPENFORM',
+                        r'\bLIST\s+FIELDS\b': 'LISTFIELDS'}
         code = self.raw_source_code
         for pattern, repl in replacements.items():
             code = re.sub(pattern, repl, code, flags=re.IGNORECASE)
         self.modified_source_code = code
-        
+
         token_specification = [
-            ('STRING', r'"([^"]|"")*"'), ('BACKTICK_STRING', r'`[^`]*`'), ('NUMBER', r'\d+(\.\d*)?'), ('ASSIGN', r'='),
+            # For giggles
+            ('FORM', r'\bFORM\b(?!\$)'),  
+            ('ENDFORM', r'\bENDFORM\b(?!\$)'),
+            ('FIELD', r'\bFIELD\b(?!\$)'),
+            ('BUTTON', r'\bBUTTON\b(?!\$)'),
+            ('TITLE', r'\bTITLE\b(?!\$)'),
+            ('TYPE', r'\bTYPE\b(?!\$)'),
+            ('SIZE', r'\bSIZE\b(?!\$)'),
+            ('CHOICE', r'\bCHOICE\b(?!\$)'),
+            ('ACTION', r'\bACTION\b(?!\$)'),
+            ('SOURCE', r'\bSOURCE\b(?!\$)'),
+            ('LISTFIELDS', r'\bLISTFIELDS\b(?!\$)'),
+            ('OPENFORM', r'\bOPENFORM\b(?!\$)'),
+            ('HEADING', r'\bHEADING\b(?!\$)'),
+            ('TEXTBLOCK', r'\bTEXTBLOCK\b(?!\$)'),
+            ('LABEL', r'\bLABEL\b(?!\$)'),
+            ('REQUIRED', r'\bREQUIRED\b(?!\$)'),
+            ('READONLY', r'\bREADONLY\b(?!\$)'),
+            ('MESSAGE', r'\bMESSAGE\b(?!\$)'),
+            ('MINLENGTH', r'\bMINLENGTH\b(?!\$)'),
+            ('MAXLENGTH', r'\bMAXLENGTH\b(?!\$)'),
+            ('MINVALUE', r'\bMINVALUE\b(?!\$)'),
+            ('PATTERN', r'\bPATTERN\b(?!\$)'),
+            ('SEPARATOR', r'\bSEPARATOR\b(?!\$)'),
+            ('PLACEHOLDER', r'\bPLACEHOLDER\b(?!\$)'),
+            ('MATCHES', r'\bMATCHES\b(?!\$)'),
+            ('DISPLAY', r'\bDISPLAY\b(?!\$)'),
+            # ---------------------------
+            ('STRING', r'"([^"]|"")*"'), ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?'),
             ('REM', r'REM[^\n]*'), ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
             ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZEFILE', r'\bANALYZEFILE\b'),
             ('LINEINPUT', r'\bLINEINPUT\b(?!\$)'), ('TOFILE', r'\bTOFILE\b(?!\$)'), ('READFILE', r'\bREADFILE\b(?!\$)'),
@@ -272,6 +303,7 @@ class Lexer:
             elif u_value == 'READFILE': kind, value = 'READ FILE', 'READ FILE' 
             elif u_value == 'TOFILE': kind, value = 'TO FILE', 'TO FILE'
             elif u_value == 'INTOFILE': kind, value = 'INTO FILE', 'INTO FILE'
+            elif u_value == 'ENDFORM': kind, value = 'ENDFORM', 'END FORM'
             #elif u_value == 'ENDLOOP': kind, value = 'END LOOP', 'END LOOP'
             elif u_value == 'FOREACH': kind, value = 'FOR EACH', 'FOR EACH'
             elif u_value == 'ENDTRANSACTION': kind, value = 'END TRANSACTION', 'END TRANSACTION'
@@ -370,12 +402,15 @@ class Interpreter:
         self.tokens = self.lexer.tokens
         self.token_index = 0
         self.variables = {}
+        lines = self.lexer.raw_source_code.splitlines()
+        numbered = [f"{i+1}: {line}" for i, line in enumerate(lines)]
         # Pre-define the PROGRAM$ system variable with the raw source code.
-        self.variables['PROGRAM$'] = self.lexer.raw_source_code
+        #self.variables['PROGRAM$'] = "\n".join(numbered)
         self.file_handles = {}
         self.command_args = cmd_args if cmd_args is not None else []
         self.gosub_stack = []
         self.labels = {}
+        self.form_definitions = {}
         self.db_engine = 'sqlite' # Set SQLite as the default engine
         self.db_connection = None
         self.sql_fatal_errors = True
@@ -819,6 +854,10 @@ class Interpreter:
             self._parse_troff_statement()
         elif token[0] in ['ELSE', 'ELSEIF', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
             self._error(f"Unexpected '{token[0]}'")
+        elif token[0] == 'FORM':
+            self._parse_form_statement()
+        elif token[0] == 'OPENFORM':
+            self._parse_open_form_statement()
         else:
             self._error(f"Unknown statement: {token[0]}")
 
@@ -1190,6 +1229,7 @@ class Interpreter:
                 serializable_data = {k.lower(): v for k, v in serializable_data.items()}
 
             return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys)
+        # --- HASH FUNCTIONS ---
         elif name == 'HASH_EXISTS':
             if len(args) != 2 or not isinstance(args[0], dict): 
                 self._error("HASH_EXISTS requires hash_var, key$.")
@@ -1205,14 +1245,56 @@ class Interpreter:
                     self._error("All arguments to HASH_JOIN must be HASH variables.")
                 new_hash.update(h)
             return new_hash
+            if len(args) < 2:
+                self._error("HASH_JOIN requires at least two HASH arguments.")
+            
+            new_hash = {}
+            for h in args:
+                if not isinstance(h, dict):
+                    self._error("All arguments to HASH_JOIN must be HASH variables.")
+                new_hash.update(h)
+            return new_hash       
+        elif name == 'HASH_KEYS':
+            if len(args) != 1 or not isinstance(args[0], dict):
+                self._error("HASH_KEYS requires one HASH argument.")
+            return list(args[0].keys())
+
+        elif name == 'HASH_VALUES':
+            if len(args) != 1 or not isinstance(args[0], dict):
+                self._error("HASH_VALUES requires one HASH argument.")
+            return list(args[0].values())
+        
+        elif name == 'HASH_RENAME':
+            if len(args) != 3 or not isinstance(args[0], dict):
+                self._error("HASH_RENAME requires hash_var, old_key$, new_key$.")
+            
+            the_hash, old_key, new_key = args[0], args[1], args[2]
+            
+            # Normalize keys according to the current mode (IGNORE_CASE/PRESERVE_CASE)
+            normalized_old = self._normalize_hash_key(old_key)
+            normalized_new = self._normalize_hash_key(new_key)
+
+            if normalized_old in the_hash:
+                # Prevent overwriting an existing key with the new name
+                if normalized_new in the_hash and normalized_old != normalized_new:
+                    self._error(f"Cannot rename key: new key '{new_key}' already exists.")
+                
+                the_hash[normalized_new] = the_hash.pop(normalized_old)
+                return -1.0 # BASIC true for success
+            
+            return 0.0 # BASIC false if old key was not found
         elif name == 'HASH_DELETE':
-            if len(args) != 2 or not isinstance(args[0], dict): self._error("HASH_DELETE requires hash_var, key$.")
+            # Note that this a a FUNCTION, i.e. n = hash_delete(h,"city")
+            if len(args) != 2 or not isinstance(args[0], dict): 
+                self._error("HASH_DELETE requires hash_var, key$.")
             lookup_key = self._normalize_hash_key(args[1])
             if lookup_key in args[0]: 
                 del args[0][lookup_key]
                 return 0
+            return 0
         elif name == 'HASH_COUNT':
-            if len(args) != 1 or not isinstance(args[0], dict): self._error("HASH_COUNT requires a hash argument.")
+            if len(args) != 1 or not isinstance(args[0], dict): 
+                self._error("HASH_COUNT requires a hash argument.")
             return float(len(args[0]))
         elif name == 'IS_HASH': 
             return -1.0 if isinstance(args[0], dict) else 0.0
@@ -3084,8 +3166,10 @@ class Interpreter:
                         try:
                             int_val = int(cleaned_field)
                             col_stats[h]['INTEGER_COUNT'] += 1
-                            if col_stats[h]['MIN_VALUE'] is None or int_val < col_stats[h]['MIN_VALUE']: col_stats[h]['MIN_VALUE'] = int_val
-                            if col_stats[h]['MAX_VALUE'] is None or int_val > col_stats[h]['MAX_VALUE']: col_stats[h]['MAX_VALUE'] = int_val
+                            if col_stats[h]['MIN_VALUE'] is None or int_val < col_stats[h]['MIN_VALUE']: 
+                                col_stats[h]['MIN_VALUE'] = int_val
+                            if col_stats[h]['MAX_VALUE'] is None or int_val > col_stats[h]['MAX_VALUE']: 
+                                col_stats[h]['MAX_VALUE'] = int_val
                             continue
                         except (ValueError, TypeError): pass
 
@@ -3095,8 +3179,10 @@ class Interpreter:
                             if '.' in cleaned_field:
                                 decimals = len(cleaned_field.split('.')[1])
                                 if decimals > col_stats[h]['MAX_DECIMALS']: col_stats[h]['MAX_DECIMALS'] = decimals
-                            if col_stats[h]['MIN_VALUE'] is None or float_val < col_stats[h]['MIN_VALUE']: col_stats[h]['MIN_VALUE'] = float_val
-                            if col_stats[h]['MAX_VALUE'] is None or float_val > col_stats[h]['MAX_VALUE']: col_stats[h]['MAX_VALUE'] = float_val
+                            if col_stats[h]['MIN_VALUE'] is None or float_val < col_stats[h]['MIN_VALUE']: 
+                                col_stats[h]['MIN_VALUE'] = float_val
+                            if col_stats[h]['MAX_VALUE'] is None or float_val > col_stats[h]['MAX_VALUE']: 
+                                col_stats[h]['MAX_VALUE'] = float_val
                             continue
                         except (ValueError, TypeError): pass
 
@@ -3116,8 +3202,14 @@ class Interpreter:
                                 break
                             except (ValueError, TypeError): pass
                         if is_a_date: continue
-
+                        
                         col_stats[h]['STRING_COUNT'] += 1
+                        # Add min/max tracking for strings (alphabetical ordering)
+                        if col_stats[h]['MIN_VALUE'] is None or field < col_stats[h]['MIN_VALUE']: 
+                            col_stats[h]['MIN_VALUE'] = field
+                        if col_stats[h]['MAX_VALUE'] is None or field > col_stats[h]['MAX_VALUE']: 
+                            col_stats[h]['MAX_VALUE'] = field
+                        
 
                 # Post-processing to suggest SQL types
                 for h, stats in col_stats.items():
@@ -3177,7 +3269,7 @@ class Interpreter:
                             print(f"      Max Decimals     : {int(stats.get('MAX_DECIMALS', 0))}")
                         if stats.get('MIN_VALUE') is not None:
                              print(f"      Value Range      : {stats.get('MIN_VALUE')} to {stats.get('MAX_VALUE')}")
-
+                        #print("DEBUG:",stats)
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -3186,11 +3278,268 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during CSV analysis: {e}")
 
+    def _parse_form_statement(self):
+        self._expect('FORM')
+        form_name = self._expect('ID')[1]
+
+        form_def = {
+            "name": form_name,
+            "source": None,
+            "display_rows": 1, # Default to a single-record form
+            "elements": [],
+            "buttons": []
+        }
+
+        # --- Parse form-level attributes like DISPLAY and SOURCE ---
+        parsing_attributes = True
+        while parsing_attributes:
+            tok = self._current_token()
+            if tok and tok[0] == 'DISPLAY':
+                self._next_token()
+                form_def["display_rows"] = int(self._expect('NUMBER')[1])
+            elif tok and tok[0] == 'SOURCE':
+                self._next_token()
+                form_def["source"] = {"type": "SQL", "query": self._extract_sql_from_parens()}
+            elif tok and tok[0] == 'NEWLINE':
+                # This is the key fix: simply consume newlines and continue the loop.
+                self._next_token()
+                continue
+            else:
+                parsing_attributes = False # No more top-level attributes found
+
+        # Loop through the rest of the form elements (FIELD, HEADING, etc.)
+        while self._current_token() and self._current_token()[0] != 'ENDFORM':
+            tok = self._current_token()
+
+            if tok[0] == 'HEADING':
+                self._next_token()
+                text = self._expect('STRING')[1].strip('"')
+                form_def["elements"].append({"type": "HEADING", "text": text})
+            
+            elif tok[0] == 'TEXTBLOCK':
+                self._next_token()
+                text = self._expect('STRING')[1].strip('"')
+                form_def["elements"].append({"type": "TEXTBLOCK", "text": text})
+
+            elif tok[0] == 'SEPARATOR':
+                self._next_token()
+                form_def["elements"].append({"type": "SEPARATOR"})
+            
+            elif tok[0] == 'FIELD':
+                self._next_token()
+                field_name = self._expect('ID')[1]
+                self._expect('TYPE')
+                field_type = self._expect('ID')[1].upper()
+
+                field_def = {
+                    "type": "FIELD", "name": field_name, "field_type": field_type,
+                    "label": field_name, "placeholder": "", "readonly": False,
+                    "validations": {}
+                }
+                
+                # --- FULL attribute parsing loop for a FIELD ---
+                while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ENDFORM', 'FIELD', 'BUTTON', 'HEADING', 'SEPARATOR']:
+                    attr_tok = self._current_token()
+                    
+                    if attr_tok[0] == 'READONLY':
+                        self._next_token()
+                        field_def["readonly"] = True
+                    
+                    elif attr_tok[0] == 'LABEL':
+                        self._next_token()
+                        field_def["label"] = self._expect('STRING')[1].strip('"')
+                    
+                    elif attr_tok[0] == 'PLACEHOLDER':
+                        self._next_token()
+                        field_def["placeholder"] = self._expect('STRING')[1].strip('"')
+
+                    elif attr_tok[0] == 'REQUIRED':
+                        self._next_token()
+                        self._expect('MESSAGE')
+                        msg = self._expect('STRING')[1].strip('"')
+                        field_def["validations"]["required"] = {"message": msg}
+
+                    elif attr_tok[0] == 'MINLENGTH':
+                        self._next_token()
+                        val = int(self._expect('NUMBER')[1])
+                        self._expect('MESSAGE')
+                        msg = self._expect('STRING')[1].strip('"')
+                        field_def["validations"]["minlength"] = {"value": val, "message": msg}
+                    
+                    elif attr_tok[0] == 'MAXLENGTH':
+                        self._next_token()
+                        val = int(self._expect('NUMBER')[1])
+                        self._expect('MESSAGE')
+                        msg = self._expect('STRING')[1].strip('"')
+                        field_def["validations"]["maxlength"] = {"value": val, "message": msg}
+
+                    elif attr_tok[0] == 'MINVALUE':
+                        self._next_token()
+                        val = float(self._expect('NUMBER')[1])
+                        self._expect('MESSAGE')
+                        msg = self._expect('STRING')[1].strip('"')
+                        field_def["validations"]["minvalue"] = {"value": val, "message": msg}
+
+                    elif attr_tok[0] == 'PATTERN':
+                        self._next_token()
+                        val = self._expect('STRING')[1].strip('"')
+                        self._expect('MESSAGE')
+                        msg = self._expect('STRING')[1].strip('"')
+                        field_def["validations"]["pattern"] = {"value": val, "message": msg}
+
+                    elif attr_tok[0] == 'MATCHES':
+                        self._next_token()
+                        val = self._expect('STRING')[1].strip('"')
+                        self._expect('MESSAGE')
+                        msg = self._expect('STRING')[1].strip('"')
+                        field_def["validations"]["matches"] = {"value": val, "message": msg}
+                    
+                    else:
+                        self._error(f"Unexpected attribute '{attr_tok[1]}' for FIELD.")
+                
+                form_def["elements"].append(field_def)
+
+            elif tok[0] == 'BUTTON':
+                self._next_token()
+                button_tok = self._current_token()
+                if button_tok[0] == 'STRING':
+                    button_name = button_tok[1].strip('"')
+                else:
+                    button_name = button_tok[1]
+                self._next_token()
+                self._expect('ACTION')
+                action = self._current_token()[1].upper()
+                self._next_token()
+                form_def["buttons"].append({"name": button_name, "action": action})
+
+            elif tok[0] == 'NEWLINE':
+                self._next_token()
+
+            else:
+                self._error(f"Unexpected token '{tok[1]}' inside FORM definition.")
+
+        self._expect('ENDFORM')
+        
+        if form_name in self.form_definitions:
+            self._error(f"Duplicate FORM definition: '{form_name}'")
+        
+        self.form_definitions[form_name] = form_def
+        print("DEBUG", form_def)
+        
+
+    def _parse_open_form_statement(self):
+        self._expect('OPENFORM')
+        form_name = self._expect('ID')[1]
+
+        # --- 1. Parse optional USING clause to get the starting record ID ---
+        record_id = None
+        if self._current_token() and self._current_token()[0] == 'USING':
+            self._next_token()
+            record_id = self._parse_expression()
+
+        if form_name not in self.form_definitions:
+            self._error(f"FORM '{form_name}' is not defined.")
+        
+        form_def = self.form_definitions[form_name]
+        
+        record_ids = []
+        current_index = -1
+        # The view mode starts based on the form's DISPLAY attribute
+        current_view_mode = 'grid' if form_def.get("display_rows", 1) > 1 else 'single'
+
+        # If the form is data-bound, fetch the list of all IDs for navigation
+        if form_def.get("source"):
+            # FIX #1: Derive navigation IDs from the SOURCE query itself, assuming an 'id' column exists.
+            # This respects any ordering in the user's original query.
+            grid_query = form_def["source"]["query"]
+            nav_query = f"SELECT id FROM ({grid_query}) AS t"
+            all_ids_result = self._execute_sql(nav_query, is_query=True)
+            record_ids = [row[0] for row in all_ids_result]
+            
+            if record_id in record_ids:
+                current_index = record_ids.index(record_id)
+            elif record_ids:
+                current_index = 0 # Default to the first record if no ID is specified
+
+
+        # --- 3. The Main Controller Loop ---
+        # This loop runs the form, waits for an action, and then re-runs or exits.
+        while True:
+            initial_data = {}
+            # Fetch data for the current record if we are in single view mode
+            if current_view_mode == 'single' and current_index != -1:
+                current_id = record_ids[current_index]
+                self.variables['ID'] = current_id # Set bind variable for the query
+                
+                # FIX #2: Wrap the grid query to create a filtered query for the single view.
+                # This robustly filters the full dataset down to the specific record.
+                grid_query = form_def["source"]["query"]
+                single_query = f"SELECT * FROM ({grid_query}) AS t WHERE id = :id"
+                row_data = self._execute_sql(single_query, is_query=True)
+                
+                if row_data and self.db_cursor.description:
+                    headers = [desc[0] for desc in self.db_cursor.description]
+                    initial_data = dict(zip(headers, row_data[0]))
+            # For grid view, fetch all data
+            elif current_view_mode == 'grid' and form_def.get("source"):
+                # This part is correct: it uses the original query for the grid.
+                rows = self._execute_sql(form_def["source"]["query"], is_query=True)
+                headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
+                initial_data = {"headers": headers, "rows": rows}
 
 
 
+            # Pass navigation and view info to the TUI
+            nav_info = {
+                "current_mode": current_view_mode,
+                "has_prev": current_index > 0,
+                "has_next": current_index < len(record_ids) - 1
+            }
 
+            # Run the TUI and wait for the user to perform an action
+            try:
+                # Run the TUI and wait for the user to perform an action
+                runner = FormRunner(form_def, initial_data, nav_info, view_mode=current_view_mode)
+                results = runner.run()
+                action = results.get("action")
+                print(f"DEBUG: Form returned action='{action}', results={results}")
+            except Exception as e:
+                print(f"Form error: {e}")
+                self.variables["FORM_RESULT$"] = "ERROR"
+                break
 
+            # --- 4. Handle the Action Returned from the TUI ---
+            if not action or action in ["CLOSE", "CANCEL", "INSERT", "UPDATE"]:
+                self.variables["FORM_RESULT$"] = action
+                if action == "UPDATE":
+                    print(f"INTERPRETER: Would execute UPDATE for record {results.get('id')}")
+                # Any of these actions will break the loop and exit the form.
+                break 
+            
+            elif action == "VIEW_GRID":
+                current_view_mode = 'grid'
+
+            elif action == "VIEW_SINGLE":
+                current_view_mode = 'single'
+                if "selected_id" in results and results["selected_id"] in record_ids:
+                    current_index = record_ids.index(results["selected_id"])
+            
+            elif action == "NEXT_RECORD":
+                if current_index < len(record_ids) - 1:
+                    current_index += 1
+            
+            elif action == "PREV_RECORD":
+                if current_index > 0:
+                    current_index -= 1
+            
+            elif action == "FIRST_RECORD":
+                if record_ids:
+                    current_index = 0
+
+            elif action == "LAST_RECORD":
+                if record_ids:
+                    current_index = len(record_ids) - 1
+            
     def _format_bytes(self, size):
         """Helper function to format bytes into KB, MB, etc."""
         if size < 1024:
