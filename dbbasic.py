@@ -12,6 +12,7 @@ import glob
 import subprocess
 import requests
 from datetime import datetime, timedelta
+import webbrowser
 import xlrd3
 from tui_runner import FormRunner
 
@@ -197,11 +198,13 @@ class Lexer:
             ('UPDATE', r'\bUPDATE\b(?!\$)'), ('CREATE', r'\bCREATE\b(?!\$)'), ('DROP', r'\bDROP\b(?!\$)'),
             ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
             ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
-            ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),
+            ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), 
+            ('XML', r'\bXML\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),
             ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'), ('HASH', r'\bHASH\b(?!\$)'),('SORT', r'\bSORT\b(?!\$)'),
             ('ARRAY', r'\bARRAY\b(?!\$)'), ('GOSUB', r'\bGOSUB\b(?!\$)'), ('RETURN', r'\bRETURN\b(?!\$)'),
-            ('SHELL', r'\bSHELL\b(?!\$)'), ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),
-            ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('TABLE', r'\bTABLE\b(?!\$)'),
+            ('SHELL', r'\bSHELL\b(?!\$)'), ('BROWSER', r'\bBROWSER\b(?!\$)'),
+            ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),
+            ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), ('TABLE', r'\bTABLE\b(?!\$)'),
             ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('REPLACE', r'\bREPLACE\b(?!\$)'),
             ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
             ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
@@ -216,7 +219,15 @@ class Lexer:
             ('MKDIR', r'\bMKDIR\b(?!\$)'), ('RMDIR', r'\bRMDIR\b(?!\$)'), ('KILL', r'\bKILL\b(?!\$)'),
             ('ONERRORGOTO', r'\bONERRORGOTO\b'),('RESUME', r'\bRESUME\b(?!\$)'),
             ('TRON', r'\bTRON\b(?!\$)'), ('TROFF', r'\bTROFF\b(?!\$)'),('GOTO', r'\bGOTO\b(?!\$)'), 
-            ('DETAILS', r'\bDETAILS\b(?!\$)'), ('ID', r'(?!INTO\b)[a-zA-Z][a-zA-Z0-9_]*\$?'), ('OP', r"[+\-*/]"),
+            ('DETAILS', r'\bDETAILS\b(?!\$)'), 
+            ('PUSH', r'\bPUSH\b(?!\$)'),
+            ('POP', r'\bPOP\b(?!\$)'),
+            ('SHIFT', r'\bSHIFT\b(?!\$)'),
+            ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
+            ('SPLICE', r'\bSPLICE\b(?!\$)'),
+            ('REVERSE', r'\bREVERSE\b(?!\$)'),
+            ('FIND', r'\bFIND\b(?!\$)'),
+            ('ID', r'(?!INTO\b)[a-zA-Z][a-zA-Z0-9_]*\$?'), ('OP', r"[+\-*/]"),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), ('COMMA', r','),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('COMMENT', r"'[^\n]*"), ('NEWLINE', r'\n'),
             ('SKIP', r'[ \t\u00A0]+'), ('MISMATCH', r'.'),
@@ -397,7 +408,7 @@ class Formatter:
 class Interpreter:
     SQL_KEYWORDS = {'SELECT', 'INSERT', 'DELETE', 'UPDATE', 'CREATE', 'DROP', 'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'END TRANSACTION'}
 
-    def __init__(self, lexer, cmd_args=None, debug=False): # <-- Add debug=False here
+    def __init__(self, lexer, cmd_args=None, debug=False):
         self.lexer = lexer
         self.tokens = self.lexer.tokens
         self.token_index = 0
@@ -532,10 +543,31 @@ class Interpreter:
             print(f"DEBUG | {message:<40} | Token: None")
 
     def _error(self, message):
-        tok = self._current_token()
-        if tok:
-            line, col = self.lexer.get_line_col(tok[2]); raise RuntimeError(f"{message} at line {line}, col {col}: token {tok}")
-        else: raise RuntimeError(message)
+        """Raises a RuntimeError with enhanced token context."""
+        idx = self.token_index
+        
+        # Get previous token, handling the start of the file
+        prev_tok = self.tokens[idx - 1] if idx > 0 else None
+        prev_tok_str = f"'{prev_tok[1]}'" if prev_tok else "(start)"
+        
+        # Get current token
+        current_tok = self._current_token()
+        
+        # Get next token, handling the end of the file
+        next_tok = self.tokens[idx + 1] if idx + 1 < len(self.tokens) else None
+        next_tok_str = f"'{next_tok[1]}'" if next_tok else "(end)"
+
+        if current_tok:
+            line, col = self.lexer.get_line_col(current_tok[2])
+            current_tok_str = f"'{current_tok[1]}' ({current_tok[0]})"
+            
+            # Construct the detailed error message
+            error_context = f"\n  Context: {prev_tok_str} -> [{current_tok_str}] <- {next_tok_str}"
+            raise RuntimeError(f"{message} at line {line}, col {col}.{error_context}")
+        else:
+            # Error at the very end of the file where there is no current token
+            error_context = f"\n  Context: Reached unexpected end of file after {prev_tok_str}."
+            raise RuntimeError(f"{message}.{error_context}")
 
     def _parse_database_statement(self):
         self._expect('DATABASE')
@@ -548,7 +580,7 @@ class Interpreter:
         elif token and token[0] == 'CLOSE':
             self._next_token()
             self._init_db() # Re-initializes a new in-memory database
-        elif token and token[0] == 'ID' and token[1] == 'ENGINE':
+        elif token and token[0] == 'ID' and token[1].upper() == 'ENGINE':
             # --- ADD THIS LOGIC ---
             self._next_token() # Consume ENGINE
             engine_token = self._expect('ID')
@@ -792,7 +824,7 @@ class Interpreter:
             self._parse_sort_statement()
         elif token[0] == 'FILES':
             self._parse_files_statement()
-        elif token[0] == 'ID' and token[1] == 'NAME':
+        elif token[0] == 'ID' and token[1].upper() == 'NAME':
             self._parse_name_statement()
         elif token[0] == 'CHDIR':           
             self._parse_chdir_statement()
@@ -804,6 +836,8 @@ class Interpreter:
             self._parse_kill_statement()
         elif token[0] == 'SHELL':
             self._parse_shell_statement()
+        elif token[0] == 'BROWSER':
+            self._parse_browser_statement()
         elif token[0] == 'EXIT':
             self._parse_exit_statement()
         elif token[0] == 'FETCH':
@@ -848,12 +882,27 @@ class Interpreter:
             self._parse_gosub_statement()
         elif token[0] == 'RETURN':
             self._parse_return_statement()
+        elif token[0] == 'PUSH':
+            self._parse_push_statement()
+        elif token[0] == 'POP':
+            self._parse_pop_statement()
+        elif token[0] == 'UNSHIFT':
+            self._parse_unshift_statement()
+        elif token[0] == 'SHIFT':
+            self._parse_shift_statement()
+        elif token[0] == 'SPLICE':
+            self._parse_splice_statement()
+        elif token[0] == 'REVERSE':
+            self._parse_reverse_statement()
         elif token[0] == 'TRON':
             self._parse_tron_statement()
         elif token[0] == 'TROFF':
             self._parse_troff_statement()
         elif token[0] in ['ELSE', 'ELSEIF', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
             self._error(f"Unexpected '{token[0]}'")
+        elif token[0] == 'ID' and token[1].upper() == 'COPY':
+            self._parse_copy_statement()
+        
         elif token[0] == 'FORM':
             self._parse_form_statement()
         elif token[0] == 'OPENFORM':
@@ -965,13 +1014,14 @@ class Interpreter:
             return -1.0 if left != 0 else 0.0
 
     def _parse_set_statement(self):
-        self._expect('SET'); token = self._current_token()
-        if token[0] == 'ID' and token[1] == 'SQL_FATAL_ERRORS':
+        self._expect('SET')
+        token = self._current_token()
+        if token[0] == 'ID' and token[1].upper() == 'SQL_FATAL_ERRORS':
             self._next_token(); setting_token = self._current_token()
             if not setting_token or setting_token[0] != 'ID' or setting_token[1] not in ['ON', 'OFF']:
                 self._error("Expected ON or OFF after SET SQL_FATAL_ERRORS")
             self.sql_fatal_errors = (setting_token[1] == 'ON'); self._next_token()
-        elif token[0] == 'ID' and token[1] == 'HASH_KEYS':
+        elif token[0] == 'ID' and token[1].upper() == 'HASH_KEYS':
             self._next_token()
             mode_token = self._current_token()
             if not mode_token or mode_token[0] != 'ID' or mode_token[1] not in ['PRESERVE_CASE', 'IGNORE_CASE']:
@@ -980,22 +1030,45 @@ class Interpreter:
             self._next_token()
             #print(f"DEBUG: Hash key mode set to {self.hash_keys_mode}", file=sys.stderr)
         elif token[0] == 'OUTPUT':
-            self._next_token(); g_output_config.mode = "CONSOLE"; token = self._current_token()
-            if token and token[0] == 'ID':
-                if token[1] == 'CONSOLE': self._next_token()
-                elif token[1] == 'FILE':
-                    self._next_token(); filename = self._parse_expression()
-                    g_output_config.mode, g_output_config.file_path = "FILE", str(filename)
-                elif token[1] == 'OFF': self._next_token(); g_output_config.mode = "OFF"
+            self._next_token()
             token = self._current_token()
-            if token and token[0] == 'ID' and token[1] == 'FORMAT':
-                self._next_token(); format_token = self._current_token()
-                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL']:
+            
+            # Check if the next token is FORMAT (shorthand syntax)
+            if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
+                # Default to CONSOLE when FORMAT is specified without destination
+                g_output_config.mode = "CONSOLE"
+                # Don't consume the FORMAT token yet - let it fall through to FORMAT handling below
+            elif not token or token[0] not in ['ID']:
+                g_output_config.mode = "CONSOLE"
+            elif token[0] == 'ID':
+                mode_value = token[1].upper()
+                if mode_value == 'CONSOLE': 
+                    self._next_token()
+                    g_output_config.mode = "CONSOLE"
+                elif mode_value == 'FILE':
+                    self._next_token()
+                    filename = self._parse_expression()
+                    g_output_config.mode, g_output_config.file_path = "FILE", str(filename)
+                elif mode_value == 'OFF': 
+                    self._next_token()
+                    g_output_config.mode = "OFF"
+                else:
+                    self._error(f"Unknown output mode: {token[1]}")
+            
+            # Handle FORMAT clause (works for both explicit and shorthand syntax)
+            token = self._current_token()
+            if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
+                self._next_token()
+                format_token = self._current_token()
+                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML']:
                     output_format = format_token[1].upper()
-                    if output_format in ["TEXT", "CSV", "JSON", "JSONL"]: g_output_config.format = output_format; self._next_token()
-                    else: self._error(f"Unknown format type '{output_format}'")
-                else: self._error("Missing or invalid format type after FORMAT")
-        else: self._error(f"Unknown option for SET command: {token[1]}")
+                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML"]: 
+                        g_output_config.format = output_format
+                        self._next_token()
+                    else: 
+                        self._error(f"Unknown format type '{output_format}'")
+                else: 
+                    self._error("Missing or invalid format type after FORMAT")
 
     def _handle_output(self, results, column_names):
         if g_output_config.mode == "CONSOLE":
@@ -1032,12 +1105,65 @@ class Interpreter:
 
     def _write_as_csv(self, results, headers, stream):
         csv_writer = csv.writer(stream); csv_writer.writerow(headers); csv_writer.writerows(results)
+    
     def _write_as_json(self, results, headers, stream):
         json.dump([dict(zip(headers, row)) for row in results], stream, indent=2)
     
     def _write_as_jsonl(self, results, headers, stream):
         for row in results: stream.write(json.dumps(dict(zip(headers, row))) + "\n")
+    
+    def _write_as_xml(self, results, headers, stream):
+        """Writes query results as XML."""
+        stream.write('<?xml version="1.0" encoding="UTF-8"?>\n')
+        stream.write('<resultset>\n')
+        
+        for row in results:
+            stream.write('  <record>\n')
+            for i, header in enumerate(headers):
+                value = row[i] if i < len(row) else ""
+                safe_value = str(value if value is not None else "").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                safe_header = header.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                stream.write(f'    <{safe_header}>{safe_value}</{safe_header}>\n')
+            stream.write('  </record>\n')
+        
+        stream.write('</resultset>\n')   
+    
+    def _write_as_html(self, results, headers, stream):
+        """Writes query results as a basic HTML table."""
+        stream.write("<!DOCTYPE html>\n")
+        stream.write("<html>\n<head>\n<title>Query Result</title>\n")
+        stream.write("<style>\n")
+        stream.write("  body { font-family: sans-serif; }\n")
+        stream.write("  table { border-collapse: collapse; width: 80%; margin: 20px auto; }\n")
+        stream.write("  th, td { border: 1px solid #cccccc; padding: 8px; text-align: left; }\n")
+        stream.write("  thead { background-color: #f2f2f2; font-weight: bold; }\n")
+        stream.write("  tr:nth-child(even) { background-color: #f9f9f9; }\n")
+        stream.write("</style>\n</head>\n<body>\n")
+        stream.write("<h1>Query Result</h1>\n")
+        
+        if not results:
+            stream.write("<p>(0 rows returned)</p>\n")
+        else:
+            stream.write("<table>\n")
+            stream.write("  <thead>\n    <tr>\n")
+            for h in headers:
+                safe_h = h.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                stream.write(f"      <th>{safe_h}</th>\n")
+            stream.write("    </tr>\n  </thead>\n")
             
+            stream.write("  <tbody>\n")
+            for row in results:
+                stream.write("    <tr>\n")
+                for cell in row:
+                    safe_cell = str(cell if cell is not None else "").replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+                    stream.write(f"      <td>{safe_cell}</td>\n")
+                stream.write("    </tr>\n")
+            stream.write("  </tbody>\n")
+            stream.write("</table>\n")
+            stream.write(f"<p style='text-align: center; font-style: italic;'>({len(results)} rows returned)</p>\n")
+
+        stream.write("</body>\n</html>\n")
+        
     def _parse_if_statement(self):
         start_if_index = self.token_index
         self._expect('IF')
@@ -1190,6 +1316,24 @@ class Interpreter:
         elif name == 'UBOUND':
             if len(args) != 1 or not isinstance(args[0], list): self._error("UBOUND requires one array argument.")
             return float(len(args[0]) - 1 if args[0] else -1)
+        elif name == 'FIND':
+            if len(args) != 2: self._error("FIND requires 2 arguments.")
+            if not isinstance(args[0], list): self._error("First argument to FIND must be an array.")
+            try:
+                return float(args[0].index(args[1]))
+            except ValueError:
+                return -1.0  # Not found
+
+        elif name == 'ARRAY_SIZE':
+            if len(args) != 1: self._error("ARRAY_SIZE requires 1 argument.")
+            if not isinstance(args[0], list): self._error("ARRAY_SIZE requires an array argument.")
+            return float(len(args[0]))
+
+        elif name == 'ARRAY_JOIN':
+            if not (2 <= len(args) <= 3): self._error("ARRAY_JOIN requires 2 or 3 arguments.")
+            if not isinstance(args[0], list): self._error("First argument to ARRAY_JOIN must be an array.")
+            delimiter = str(args[1]) if len(args) >= 2 else ","
+            return delimiter.join(str(item) for item in args[0])
         elif name == 'JSON_SERIALIZE$':
             if not (1 <= len(args) <= 5):
                 self._error("JSON_SERIALIZE$ requires 1 to 5 arguments: data, [indent], [sort_option$], [case_option$], ...")
@@ -1330,6 +1474,53 @@ class Interpreter:
         elif name == 'FILE_EXISTS':
             if len(args) != 1: self._error("FILE_EXISTS requires 1 argument.")
             return -1.0 if os.path.exists(os.path.expanduser(str(args[0]))) else 0.0
+        elif name == 'FILESIZE':
+            if len(args) != 1: self._error("FILESIZE requires 1 argument.")
+            filename = str(args[0])
+            try:
+                return float(os.path.getsize(os.path.expanduser(filename)))
+            except (FileNotFoundError, OSError):
+                return -1.0  # Return -1 if file doesn't exist or can't be accessed
+
+        elif name == 'FILETIME':
+            if len(args) != 1: self._error("FILETIME requires 1 argument.")
+            filename = str(args[0])
+            try:
+                mtime = os.path.getmtime(os.path.expanduser(filename))
+                return datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            except (FileNotFoundError, OSError):
+                return ""  # Return empty string if file doesn't exist
+
+        elif name == 'FILEATTR':
+            if len(args) != 1: self._error("FILEATTR requires 1 argument.")
+            filename = str(args[0])
+            try:
+                filepath = os.path.expanduser(filename)
+                stat_info = os.stat(filepath)
+                attr_bits = 0
+                if stat_info.st_mode & 0o200 == 0: attr_bits |= 1  # Read-only
+                if os.name == 'nt':  # Windows
+                    import stat
+                    if stat_info.st_file_attributes & 2: attr_bits |= 2  # Hidden
+                    if stat_info.st_file_attributes & 4: attr_bits |= 4  # System
+                if os.path.isdir(filepath): attr_bits |= 16  # Directory
+                return float(attr_bits)
+            except (FileNotFoundError, OSError, AttributeError):
+                return 0.0
+
+        elif name == 'DISKSPACE':
+            if len(args) != 1: self._error("DISKSPACE requires 1 argument.")
+            path = str(args[0])
+            try:
+                if os.name == 'nt':  # Windows
+                    import shutil
+                    total, used, free = shutil.disk_usage(path)
+                    return float(free)
+                else:  # Unix-like
+                    statvfs = os.statvfs(path)
+                    return float(statvfs.f_frsize * statvfs.f_bavail)
+            except (FileNotFoundError, OSError):
+                return -1.0
         elif name == 'DATE$': return datetime.now().strftime('%Y-%m-%d')
         elif name == 'TIME$': return datetime.now().strftime('%H:%M:%S')
         elif name == 'DATEADD': return (self._parse_date_string(args[0]) + timedelta(days=int(args[1]))).strftime('%Y-%m-%d')
@@ -1356,6 +1547,65 @@ class Interpreter:
         elif name == 'MID$': s, st = str(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
         elif name == 'UCASE$': return str(args[0]).upper()
         elif name == 'LCASE$': return str(args[0]).lower()
+        elif name == 'INSTR':
+            if not (2 <= len(args) <= 3): self._error("INSTR requires 2 or 3 arguments.")
+            if len(args) == 2:
+                haystack, needle = str(args[0]), str(args[1])
+                pos = haystack.find(needle)
+                return float(pos + 1) if pos != -1 else 0.0
+            else:  # 3 arguments: INSTR(start, haystack, needle)
+                start, haystack, needle = int(args[0]) - 1, str(args[1]), str(args[2])
+                pos = haystack.find(needle, max(0, start))
+                return float(pos + 1) if pos != -1 else 0.0
+        elif name == 'REVERSE$': 
+            return str(args[0])[::-1]
+
+        elif name == 'REPEAT$': 
+            if len(args) != 2: self._error("REPEAT$ requires 2 arguments.")
+            return str(args[0]) * int(args[1])
+
+        elif name == 'PADLEFT$':
+            if len(args) != 3: self._error("PADLEFT$ requires 3 arguments.")
+            text, length, pad_char = str(args[0]), int(args[1]), str(args[2])
+            if len(pad_char) == 0: pad_char = ' '
+            return text.rjust(length, pad_char[0])
+
+        elif name == 'PADRIGHT$':
+            if len(args) != 3: self._error("PADRIGHT$ requires 3 arguments.")
+            text, length, pad_char = str(args[0]), int(args[1]), str(args[2])
+            if len(pad_char) == 0: pad_char = ' '
+            return text.ljust(length, pad_char[0])
+
+        elif name == 'STARTSWITH':
+            if len(args) != 2: self._error("STARTSWITH requires 2 arguments.")
+            text, prefix = str(args[0]), str(args[1])
+            return -1.0 if text.startswith(prefix) else 0.0
+
+        elif name == 'ENDSWITH':
+            if len(args) != 2: self._error("ENDSWITH requires 2 arguments.")
+            text, suffix = str(args[0]), str(args[1])
+            return -1.0 if text.endswith(suffix) else 0.0
+
+        elif name == 'CONTAINS':
+            if len(args) != 2: self._error("CONTAINS requires 2 arguments.")
+            text, substring = str(args[0]), str(args[1])
+            return -1.0 if substring in text else 0.0
+
+        elif name == 'PROPER$':
+            if len(args) != 1: self._error("PROPER$ requires 1 argument.")
+            return str(args[0]).title()
+
+        elif name == 'ISALPHA':
+            if len(args) != 1: self._error("ISALPHA requires 1 argument.")
+            return -1.0 if str(args[0]).isalpha() else 0.0
+
+        elif name == 'ISDIGIT':
+            if len(args) != 1: self._error("ISDIGIT requires 1 argument.")
+            return -1.0 if str(args[0]).isdigit() else 0.0
+
+        elif name == 'ISALNUM':
+            if len(args) != 1: self._error("ISALNUM requires 1 argument.")
+            return -1.0 if str(args[0]).isalnum() else 0.0
         elif name == 'CHR$':
             if len(args) != 1: self._error("CHR$ requires one numeric argument.")
             return chr(int(args[0]))
@@ -1388,6 +1638,50 @@ class Interpreter:
         elif name == 'LOG': return math.log(args[0])
         elif name == 'SGN': n = args[0]; return 1.0 if n > 0 else -1.0 if n < 0 else 0.0
         elif name == 'SQR': return math.sqrt(args[0])
+        elif name == 'MOD':
+            if len(args) != 2: self._error("MOD requires 2 arguments.")
+            return float(args[0] % args[1])
+
+        elif name == 'ROUND':
+            if not (1 <= len(args) <= 2): self._error("ROUND requires 1 or 2 arguments.")
+            if len(args) == 1: return float(round(args[0]))
+            return float(round(args[0], int(args[1])))
+
+        elif name == 'CEIL':
+            if len(args) != 1: self._error("CEIL requires 1 argument.")
+            return float(math.ceil(args[0]))
+
+        elif name == 'FLOOR':
+            if len(args) != 1: self._error("FLOOR requires 1 argument.")
+            return float(math.floor(args[0]))
+
+        elif name == 'ABS':
+            if len(args) != 1: self._error("ABS requires 1 argument.")
+            return float(abs(args[0]))
+
+        elif name == 'MIN':
+            if len(args) < 2: self._error("MIN requires at least 2 arguments.")
+            return float(min(args))
+
+        elif name == 'MAX':
+            if len(args) < 2: self._error("MAX requires at least 2 arguments.")
+            return float(max(args))
+
+        elif name == 'POWER':
+            if len(args) != 2: self._error("POWER requires 2 arguments.")
+            return float(pow(args[0], args[1]))
+
+        elif name == 'DEGREES':
+            if len(args) != 1: self._error("DEGREES requires 1 argument.")
+            return float(math.degrees(args[0]))
+
+        elif name == 'RADIANS':
+            if len(args) != 1: self._error("RADIANS requires 1 argument.")
+            return float(math.radians(args[0]))
+
+        elif name == 'ATAN2':
+            if len(args) != 2: self._error("ATAN2 requires 2 arguments.")
+            return float(math.atan2(args[0], args[1]))
         else: self._error(f"Unknown function: {name}")
         
     def _parse_factor(self):
@@ -1487,8 +1781,32 @@ class Interpreter:
                 elif token[0] == 'DOT':
                     if not isinstance(current_value, dict): self._error("Dot notation only for HASH.")
                     self._next_token()
-                    key_token = self._expect('ID')
-                    key_name = key_token[1]
+                    key_token = self._current_token()
+                    if not key_token:
+                        self._error("Expected a key name after '.'")
+
+                    # This set defines keywords that can be treated as keys.
+                    PERMISSIBLE_KEYWORDS_AS_KEYS = {
+                        'ACTION', 'BUTTON', 'DISPLAY', 'FIELD', 'HEADING', 'LABEL', 'MATCHES', 
+                        'MAXLENGTH', 'MESSAGE', 'MINLENGTH', 'MINVALUE', 'PATTERN', 'PLACEHOLDER', 
+                        'READONLY', 'REQUIRED', 'SEPARATOR', 'SIZE', 'SOURCE', 'TEXTBLOCK', 
+                        'TITLE', 'TYPE', 'HTML', 'XML', 'JSON', 'JSONL'
+                    }
+
+                    key_name = ""
+                    # It first checks for a generic ID as before.
+                    if key_token[0] == 'ID':
+                        self._next_token() 
+                        key_name = key_token[1]
+                    # If not an ID, it checks if it's an acceptable keyword.
+                    elif key_token[0] in PERMISSIBLE_KEYWORDS_AS_KEYS:
+                        # Not sure why we cannot accept anything here that looks like a ID
+                        self._next_token() 
+                        key_name = key_token[1] 
+                    # If neither, it's an error.
+                    else:
+                        self._error(f"Invalid key name '{key_token[1]}' after '.'")
+                    
                     is_string_access = key_name.endswith('$')
                     base_key = key_name.rstrip('$')
                     
@@ -1617,6 +1935,24 @@ class Interpreter:
             # If no file number is given, it's a bare CLOSE. Close all files.
             self._close_all_files()
  
+    def _parse_copy_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ID')  # COPY
+        source_filename = self._parse_expression()
+        self._expect('AS')
+        dest_filename = self._parse_expression()
+        
+        try:
+            import shutil
+            shutil.copy2(os.path.expanduser(str(source_filename)), 
+                         os.path.expanduser(str(dest_filename)))
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {source_filename}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"Error copying file: {e}")
+        
     def _parse_read_file_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('READ FILE') 
@@ -2079,6 +2415,134 @@ class Interpreter:
         except Exception as e: 
             self.variables['ERR'], self.variables['ERRMSG$'] = -1.0, str(e)
             raise e
+            
+    def _parse_push_statement(self):
+        self._expect('PUSH')
+        array_name = self._expect('ID')[1]
+        self._expect('COMMA')
+        value = self._parse_expression()
+        
+        if array_name not in self.variables or not isinstance(self.variables[array_name], list):
+            self._error(f"'{array_name}' is not an array.")
+        
+        self.variables[array_name].append(value)
+
+    def _parse_pop_statement(self):
+        self._expect('POP')
+        array_name = self._expect('ID')[1]
+        
+        if array_name not in self.variables or not isinstance(self.variables[array_name], list):
+            self._error(f"'{array_name}' is not an array.")
+        
+        if not self.variables[array_name]:
+            self._error(f"Cannot POP from empty array '{array_name}'.")
+        
+        # Store result in a variable if INTO clause is present
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            var_name = self._expect('ID')[1]
+            self.variables[var_name] = self.variables[array_name].pop()
+        else:
+            self.variables[array_name].pop()
+
+    def _parse_unshift_statement(self):
+        self._expect('UNSHIFT')
+        array_name = self._expect('ID')[1]
+        self._expect('COMMA')
+        value = self._parse_expression()
+        
+        if array_name not in self.variables or not isinstance(self.variables[array_name], list):
+            self._error(f"'{array_name}' is not an array.")
+        
+        self.variables[array_name].insert(0, value)
+
+    def _parse_shift_statement(self):
+        self._expect('SHIFT')
+        array_name = self._expect('ID')[1]
+        
+        if array_name not in self.variables or not isinstance(self.variables[array_name], list):
+            self._error(f"'{array_name}' is not an array.")
+        
+        if not self.variables[array_name]:
+            self._error(f"Cannot SHIFT from empty array '{array_name}'.")
+        
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            var_name = self._expect('ID')[1]
+            self.variables[var_name] = self.variables[array_name].pop(0)
+        else:
+            self.variables[array_name].pop(0)
+
+    def _parse_splice_statement(self):
+        self._expect('SPLICE')
+        array_name = self._expect('ID')[1]
+        self._expect('COMMA')
+        start_index = int(self._parse_expression())
+        self._expect('COMMA')
+        delete_count = int(self._parse_expression())
+        
+        if array_name not in self.variables or not isinstance(self.variables[array_name], list):
+            self._error(f"'{array_name}' is not an array.")
+        
+        arr = self.variables[array_name]
+        if start_index < 0 or start_index >= len(arr):
+            self._error(f"SPLICE start index {start_index} out of bounds.")
+        
+        # Remove elements
+        for _ in range(min(delete_count, len(arr) - start_index)):
+            arr.pop(start_index)
+        
+        # Insert new elements if provided
+        while self._current_token() and self._current_token()[0] == 'COMMA':
+            self._next_token()
+            value = self._parse_expression()
+            arr.insert(start_index, value)
+            start_index += 1
+
+    def _parse_reverse_statement(self):
+        self._expect('REVERSE')
+        array_name = self._expect('ID')[1]
+        
+        if array_name not in self.variables or not isinstance(self.variables[array_name], list):
+            self._error(f"'{array_name}' is not an array.")
+        
+        self.variables[array_name].reverse()
+    
+    def _parse_browser_statement(self):
+        """Parses and executes the BROWSER command to open a URL."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('BROWSER')
+        
+        # The next part must be an expression that resolves to the URL string
+        url = self._parse_expression()
+        if not isinstance(url, str):
+            self._error("BROWSER command requires a string argument for the URL.")
+
+        # Default options for webbrowser.open()
+        new_tab = 0  # 0: same window, 1: new window, 2: new tab
+
+        # Parse an optional OPTIONS clause, e.g., OPTIONS "new=2"
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
+            if isinstance(options_str, str):
+                # Simple parsing for the 'new' option
+                opt_str_lower = options_str.lower()
+                if "new=1" in opt_str_lower:
+                    new_tab = 1
+                elif "new=2" in opt_str_lower:
+                    new_tab = 2
+        
+        try:
+            # Open the URL in the default web browser
+            success = webbrowser.open(url, new=new_tab)
+            if not success:
+                # This can happen on systems without a GUI or configured browser
+                self.variables['ERR'] = 52.0 # Bad file name or number
+                self.variables['ERRMSG$'] = "Could not open a web browser. Check system configuration."
+        except Exception as e:
+            self.variables['ERR'] = 1.0 # General error
+            self.variables['ERRMSG$'] = f"An error occurred while trying to open the browser: {e}"
             
     def _parse_fetch_statement(self):
         self.variables['ERR'] = 0.0; self._expect('FETCH'); url = self._parse_expression()
