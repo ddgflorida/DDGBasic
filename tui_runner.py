@@ -33,48 +33,312 @@ class FormRunner:
 # This is the original _FormScreen, renamed and updated for initial data
 class _EntryScreen(App):
     """A TUI screen for single-record entry forms with validation and navigation."""
-
     CSS = """
+    Screen {
+        background: $surface;
+    }
+
     #form-container {
         padding: 1 2;
         height: auto;
     }
+
     #error-message {
         height: auto;
-        padding: 0 1;
+        padding: 1 2;
         background: $error;
         color: $text;
+        text-style: bold;
         display: none;
     }
+
     .form-field {
         margin-bottom: 1;
-        height: 4;
+        height: auto;
     }
+
     .field-label {
         text-style: bold;
+        color: $accent;
         margin-bottom: 0;
+        height: 1;
     }
+
     .heading {
-        padding: 1 0;
+        padding: 0;
         text-style: bold;
         text-align: center;
+        color: $primary;
+        margin-bottom: 1;
+        height: auto;
     }
+
     .textblock {
         margin-bottom: 1;
+        padding: 1;
         color: $text-muted;
+        background: $surface-lighten-1;
+        border: solid $surface-lighten-2;
+        text-style: italic;
     }
+
     #nav-container {
         align: center middle;
-        padding: 1 0;
+        padding: 1;
+        margin: 1 0;
+        background: $surface-lighten-1;
+        border: solid $accent;
     }
+
     #button-container {
         align: center middle;
-        padding: 1 0;
+        padding: 1;
+        margin: 1 0;
+        background: $warning;
+        border: solid $accent;
+        height: auto;
+        min-height: 5;
     }
+
+    Input {
+        height: 3;
+        border: solid $surface-lighten-2;
+        background: $surface;
+        padding: 0 1;
+        margin-top: 0;
+    }
+
+    Input:focus {
+        border: solid $primary;
+        background: $surface-lighten-1;
+    }
+
     Input.-invalid {
         border: thick $error;
+        background: $error 10%;
+    }
+
+    Input:disabled {
+        background: $surface-darken-1;
+        color: $text-muted;
+    }
+
+    TextArea {
+        height: 6;
+        border: solid $surface-lighten-2;
+        background: $surface;
+        padding: 1;
+        margin-top: 0;
+    }
+
+    TextArea:focus {
+        border: solid $primary;
+        background: $surface-lighten-1;
+    }
+
+    TextArea:disabled {
+        background: $surface-darken-1;
+        color: $text-muted;
+    }
+
+    Button {
+        margin: 0 1;
+        height: 3;
+        min-width: 10;
+        border: solid $accent;
+        background: $primary;
+        color: $surface;
+        text-style: bold;
+        content-align: center middle;
+    }
+
+    Button:hover {
+        background: $accent;
+        border: solid $primary;
+    }
+
+    Button:disabled {
+        background: $surface-darken-1;
+        color: $text-muted;
+        border: solid $surface-lighten-1;
+    }
+
+    Rule {
+        margin: 1 0;
+        color: $accent;
     }
     """
+    CSS_OLD = """
+    Screen {
+        background: $surface;
+    }
+
+    #form-container {
+        padding: 2 3;
+        height: auto;
+        max-width: 120;
+    }
+
+    #error-message {
+        height: auto;
+        padding: 1 2;
+        margin-bottom: 1;
+        background: $error;
+        color: $text;
+        border: solid $error;
+        text-style: bold;
+        display: none;
+    }
+
+    .form-field {
+        margin-bottom: 2;
+        height: auto;
+        min-height: 4;
+    }
+
+    .field-label {
+        text-style: bold;
+        color: $accent;
+        margin-bottom: 0;
+        padding-left: 0;
+    }
+
+    .heading {
+        padding: 2 0;
+        text-style: bold;
+        text-align: center;
+        color: $primary;
+        background: $surface-lighten-1;
+        border: solid $accent;
+        margin-bottom: 2;
+    }
+
+    .textblock {
+        margin-bottom: 2;
+        padding: 1;
+        color: $text-muted;
+        background: $surface-lighten-1;
+        border: solid $surface-lighten-2;
+        text-style: italic;
+    }
+
+    #nav-container {
+        align: center middle;
+        padding: 2 0;
+        margin: 2 0;
+        background: $surface-lighten-1;
+        border: solid $accent;
+    }
+
+    #button-container {
+        align: center middle;
+        padding: 2 0;
+        margin: 2 0;
+        background: $surface-lighten-1;
+        border: solid $accent;
+    }
+
+    Input {
+        height: 3;
+        width: 100%;
+        border: solid $surface-lighten-2;
+        background: $surface;
+        padding: 0 1;
+        margin-top: 0;
+    }
+
+    Input:focus {
+        border: solid $primary;
+        background: $surface-lighten-1;
+        text-style: bold;
+    }
+
+    Input.-invalid {
+        border: thick $error;
+        background: $error 10%;
+        text-style: bold;
+    }
+
+    Input:disabled {
+        background: $surface-darken-1;
+        color: $text-muted;
+        border: solid $surface-lighten-1;
+    }
+
+    TextArea {
+        height: 6;
+        width: 100%;
+        border: solid $surface-lighten-2;
+        background: $surface;
+        padding: 1;
+        margin-top: 1;
+    }
+
+    TextArea:focus {
+        border: solid $primary;
+        background: $surface-lighten-1;
+    }
+
+    TextArea:disabled {
+        background: $surface-darken-1;
+        color: $text-muted;
+        border: solid $surface-lighten-1;
+    }
+
+    Button {
+        margin: 0 1;
+        height: 3;
+        min-width: 12;
+        border: solid $accent;
+        background: $surface-lighten-1;
+        color: $text;
+        text-style: bold;
+    }
+
+    Button:hover {
+        background: $primary;
+        color: $surface;
+        text-style: bold reverse;
+        border: solid $primary;
+    }
+
+    Button:disabled {
+        background: $surface-darken-1;
+        color: $text-muted;
+        border: solid $surface-lighten-1;
+        text-style: none;
+    }
+
+    Button.-primary {
+        background: $primary;
+        color: $surface;
+        border: solid $primary;
+    }
+
+    Button.-success {
+        background: $success;
+        color: $surface;
+        border: solid $success;
+    }
+
+    Button.-warning {
+        background: $warning;
+        color: $surface;
+        border: solid $warning;
+    }
+
+    Button.-danger {
+        background: $error;
+        color: $surface;
+        border: solid $error;
+    }
+
+    Rule {
+        margin: 2 0;
+        color: $accent;
+    }
+    """
+
 
     def __init__(self, form_def, initial_data, result_dict, nav_info):
         super().__init__()
@@ -242,6 +506,92 @@ class _EntryScreen(App):
 
 class _ListScreen(App):
     """A TUI screen for displaying data grids."""
+    
+    CSS = """
+        Screen {
+            background: $surface;
+        }
+        
+        .header-info {
+            height: 1;
+            margin: 0;
+            padding: 0 1;
+            background: $primary;
+            color: $text;
+            border: solid $accent;
+        }
+        
+        .controls {
+            height: 6;
+            margin: 0;
+            padding: 1;
+            background: $surface-lighten-1;
+            border: solid $accent;
+            align: center middle;
+        }
+        
+        .prompt-text {
+            text-style: bold;
+            color: $accent;
+            margin: 0 1 0 0;
+            width: auto;
+        }
+        
+        .help-text {
+            color: $text-muted;
+            text-style: italic;
+            margin-bottom: 0;
+        }
+        
+        #file-input {
+            width: 50;
+            height: 4;
+            border: solid $accent;
+        }
+        
+        DataTable {
+            margin: 0;
+            border: solid $accent;
+            height: 1fr;
+        }
+        
+        Input {
+            margin: 0 1;
+            height: 4;
+            border: solid $accent;
+            background: $surface;
+        }
+        
+        Input:focus {
+            border: solid $primary;
+            background: $surface-lighten-1;
+        }
+        
+        Button {
+            margin: 0 1;
+            height: 3;
+            min-width: 10;
+            color: auto !important;
+            text-style: bold;
+        }
+        
+        Button.-primary {
+            background: $primary;
+        }
+        
+        Button.-success {
+            background: $success;
+        }
+        
+        Button.-warning {
+            background: $warning;
+        }
+        
+        Button:hover {
+            text-style: bold reverse;
+        }
+        """
+    
 
     def __init__(self, form_def, initial_data, result_dict):
         super().__init__()
