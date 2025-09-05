@@ -14,7 +14,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
 
 * ### Dual Database Engines
     * **SQLite & DuckDB Support:** Seamlessly switch between the world's most deployed database engine (**SQLite**) for general-purpose tasks and a high-performance analytical engine (**DuckDB**) for complex queries.
-    * **SQL:" Directly embed SQL statements, iterate over resultsets.
+    * **SQL:"** Directly embed SQL statements, iterate over resultsets.
     * **Engine Switching:** Use the `DATABASE ENGINE [SQLITE|DUCKDB]` command to change the backend at any time within a script.
 
 * ### Powerful Data Ingestion & Transformation
@@ -59,4 +59,5 @@ LIMIT 5;
 
 DATABASE CLOSE
 END
+
 
