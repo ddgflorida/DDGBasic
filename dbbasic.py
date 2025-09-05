@@ -226,7 +226,6 @@ class Lexer:
             ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
             ('SPLICE', r'\bSPLICE\b(?!\$)'),
             ('REVERSE', r'\bREVERSE\b(?!\$)'),
-            ('FIND', r'\bFIND\b(?!\$)'),
             ('ID', r'(?!INTO\b)[a-zA-Z][a-zA-Z0-9_]*\$?'), ('OP', r"[+\-*/]"),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), ('COMMA', r','),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('COMMENT', r"'[^\n]*"), ('NEWLINE', r'\n'),
@@ -2485,12 +2484,13 @@ class Interpreter:
             self._error(f"'{array_name}' is not an array.")
         
         arr = self.variables[array_name]
-        if start_index < 0 or start_index >= len(arr):
+        if start_index < 0 or start_index > len(arr):  # Changed >= to >
             self._error(f"SPLICE start index {start_index} out of bounds.")
         
-        # Remove elements
-        for _ in range(min(delete_count, len(arr) - start_index)):
-            arr.pop(start_index)
+        # Remove elements (only if start_index is within current bounds)
+        if start_index < len(arr):
+            for _ in range(min(delete_count, len(arr) - start_index)):
+                arr.pop(start_index)
         
         # Insert new elements if provided
         while self._current_token() and self._current_token()[0] == 'COMMA':
