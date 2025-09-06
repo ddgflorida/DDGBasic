@@ -1,5 +1,5 @@
-import re
 import sys
+import re
 import math
 import random
 import os
@@ -13,6 +13,7 @@ import subprocess
 import requests
 from datetime import datetime, timedelta
 import webbrowser
+import zipfile
 import xlrd3
 from tui_runner import FormRunner
 
@@ -150,7 +151,8 @@ class Lexer:
     def _tokenize(self):
         replacements = {r'\bEND\s+IF\b': 'ENDIF', r'\bLINE\s+INPUT\b': 'LINEINPUT', r'\bEND\s+LOOP\b': 'ENDLOOP',
                         r'\bFOR\s+EACH\b': 'FOREACH', r'\bEND\s+TRANSACTION\b': 'ENDTRANSACTION', r'\bREAD\s+FILE\b': 'READFILE',
-                        r'\bTO\s+FILE\b': 'TOFILE', r'\bINTO\s+FILE\b': 'INTOFILE', r'\bANALYZE\s+CSV\b': 'ANALYZECSV',
+                        r'\bTO\s+FILE\b': 'TOFILE', r'\bINTO\s+FILE\b': 'INTOFILE', 
+                        r'\bANALYZE\s+CSV\b': 'ANALYZECSV',r'\bANALYZE\s+FIXED\b': 'ANALYZEFIXED',
                         r'\bANALYZE\s+JSON\b': 'ANALYZEJSON', r'\bANALYZE\s+FILE\b': 'ANALYZEFILE',
                         r'\bON\s+ERROR\s+GOTO\b': 'ONERRORGOTO',
                         r'\bEND\s+FORM\b': 'ENDFORM',r'\bOPEN\s+FORM\b': 'OPENFORM',
@@ -198,12 +200,13 @@ class Lexer:
             ('UPDATE', r'\bUPDATE\b(?!\$)'), ('CREATE', r'\bCREATE\b(?!\$)'), ('DROP', r'\bDROP\b(?!\$)'),
             ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
             ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
-            ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), 
+            ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('ERROR', r'\bERROR\b(?!\$)'),
             ('XML', r'\bXML\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),
-            ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'), ('HASH', r'\bHASH\b(?!\$)'),('SORT', r'\bSORT\b(?!\$)'),
+            ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'),('DUMP', r'\bDUMP\b(?!\$)'), 
+            ('HASH', r'\bHASH\b(?!\$)'),('SORT', r'\bSORT\b(?!\$)'),('FIXED', r'\bFIXED\b(?!\$)'),
             ('ARRAY', r'\bARRAY\b(?!\$)'), ('GOSUB', r'\bGOSUB\b(?!\$)'), ('RETURN', r'\bRETURN\b(?!\$)'),
-            ('SHELL', r'\bSHELL\b(?!\$)'), ('BROWSER', r'\bBROWSER\b(?!\$)'),
-            ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),
+            ('SHELL', r'\bSHELL\b(?!\$)'), ('BROWSER', r'\bBROWSER\b(?!\$)'),('RUN', r'\bRUN\b(?!\$)'),
+            ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),('CHAIN', r'\bCHAIN\b(?!\$)'),
             ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), ('TABLE', r'\bTABLE\b(?!\$)'),
             ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('REPLACE', r'\bREPLACE\b(?!\$)'),
             ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
@@ -212,6 +215,7 @@ class Lexer:
             ('PRINT', r'\bPRINT\b(?!\$)'), ('LET', r'\bLET\b(?!\$)'), ('IF', r'\bIF\b(?!\$)'), ('THEN', r'\bTHEN\b(?!\$)'),
             ('ELSEIF', r'\bELSEIF\b(?!\$)'),('ELSE', r'\bELSE\b(?!\$)'), ('ENDIF', r'\bENDIF\b(?!\$)'), 
             ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),
+            ('ZIP', r'\bZIP\b(?!\$)'),('UNZIP', r'\bUNZIP\b(?!\$)'),
             ('DO', r'\bDO\b(?!\$)'),('UNTIL', r'\bUNTIL\b(?!\$)'),
             ('STEP', r'\bSTEP\b(?!\$)'), ('NEXT', r'\bNEXT\b(?!\$)'), ('IN', r'\bIN\b(?!\$)'), ('LOOP', r'\bLOOP\b(?!\$)'),
             ('WHILE', r'\bWHILE\b(?!\$)'), ('WEND', r'\bWEND\b(?!\$)'), ('NOT', r'\bNOT\b(?!\$)'), ('END', r'\bEND\b(?!\$)'),
@@ -312,7 +316,6 @@ class Lexer:
             elif u_value == 'LINEINPUT': kind, value = 'LINE INPUT', 'LINE INPUT'
             elif u_value == 'READFILE': kind, value = 'READ FILE', 'READ FILE' 
             elif u_value == 'TOFILE': kind, value = 'TO FILE', 'TO FILE'
-            elif u_value == 'INTOFILE': kind, value = 'INTO FILE', 'INTO FILE'
             elif u_value == 'ENDFORM': kind, value = 'ENDFORM', 'END FORM'
             #elif u_value == 'ENDLOOP': kind, value = 'END LOOP', 'END LOOP'
             elif u_value == 'FOREACH': kind, value = 'FOR EACH', 'FOR EACH'
@@ -320,6 +323,7 @@ class Lexer:
             elif u_value == 'ANALYZECSV': kind, value = 'ANALYZE CSV', 'ANALYZE CSV'
             elif u_value == 'ANALYZEJSON': kind, value = 'ANALYZE JSON', 'ANALYZE JSON'
             elif u_value == 'ANALYZEFILE': kind, value = 'ANALYZE FILE', 'ANALYZE FILE'
+            elif u_value == 'ANALYZEFIXED': kind, value = 'ANALYZE FIXED', 'ANALYZE FIXED'
             elif u_value == 'ONERRORGOTO': kind, value = 'ON ERROR GOTO', 'ON ERROR GOTO'
             tokens.append((kind, value, pos)); is_start_of_line = False; i += 1
         return tokens
@@ -427,6 +431,7 @@ class Interpreter:
         self.trace_mode = False   # FOR TRON AND TROFF
         self.program_terminated = False # Termination flag
         self.hash_keys_mode = 'PRESERVE_CASE'  # Default to preserve case
+        self.run_stack = []
                 
         # --- NEW: Error handling state ---
         self.error_handler_label = None
@@ -732,7 +737,8 @@ class Interpreter:
                 # Set error state with the saved resume point
                 self.in_error_handler = True
                 self.error_resume_index = resume_point
-                self.variables['ERR'] = 1.0
+                if self.variables.get('ERR', 0.0) == 0.0:
+                    self.variables['ERR'] = 1.0
                 self.variables['ERRMSG$'] = str(e)
                 self.token_index = self.labels[self.error_handler_label]
             
@@ -825,6 +831,8 @@ class Interpreter:
             self._parse_files_statement()
         elif token[0] == 'ID' and token[1].upper() == 'NAME':
             self._parse_name_statement()
+        elif token[0] == 'DUMP':           
+            self._parse_dump_statement()
         elif token[0] == 'CHDIR':           
             self._parse_chdir_statement()
         elif token[0] == 'MKDIR':           
@@ -834,11 +842,21 @@ class Interpreter:
         elif token[0] == 'KILL':           
             self._parse_kill_statement()
         elif token[0] == 'SHELL':
-            self._parse_shell_statement()
+            self._parse_shell_statement() 
+        elif token[0] == 'CHAIN':   # Replace current script with another DbBASIC script
+            self._parse_chain_statement()
+        elif token[0] == 'RUN':   # Run another script and come back
+            self._parse_run_statement()
+        elif token[0] == 'ZIP':
+            self._parse_zip_statement()
+        elif token[0] == 'UNZIP':
+            self._parse_unzip_statement()
         elif token[0] == 'BROWSER':
             self._parse_browser_statement()
         elif token[0] == 'EXIT':
             self._parse_exit_statement()
+        elif token[0] == 'ERROR':
+            self._parse_error_statement()
         elif token[0] == 'FETCH':
             self._parse_fetch_statement()
         elif token[0] == 'PARSE': 
@@ -849,6 +867,8 @@ class Interpreter:
             self._parse_analyze_file_statement()
         elif token[0] == 'ANALYZE CSV':
             self._parse_analyze_csv_statement()
+        elif token[0] == 'ANALYZE FIXED':
+            self._parse_analyze_fixed_statement()
         elif token[0] == 'ANALYZE JSON':
             self._parse_analyze_json_statement()
         elif token[0] == 'PRINT':
@@ -971,6 +991,18 @@ class Interpreter:
             #print(f"DEBUG: Token at resume index: {self.tokens[self.error_resume_index] if self.error_resume_index < len(self.tokens) else 'END'}")
             
             self.token_index = self.error_resume_index
+            self.in_error_handler = False
+        elif self._current_token() and self._current_token()[0] == 'ID':
+            # Resume at a specific label
+            label_name = self._current_token()[1]
+            self._next_token()
+            
+            if not self.in_error_handler:
+                self._error("RESUME without an active error.")
+            if label_name not in self.labels:
+                self._error(f"Label '{label_name}' not found for RESUME.")
+            
+            self.token_index = self.labels[label_name]
             self.in_error_handler = False
         else:
             self._error("Expected NEXT after RESUME.")
@@ -1448,6 +1480,11 @@ class Interpreter:
                 self._error("COMMAND$ requires 1 argument.")
             idx = int(args[0])
             return self.command_args[idx-1] if 1 <= idx <= len(self.command_args) else ""
+        elif name == 'ENVIRON$':
+            if len(args) != 1:
+                self._error("ENVIRON$ requires 1 argument.")
+            var_name = str(args[0])
+            return os.environ.get(var_name, "")
         elif name == 'CURDIR$':
             if args: 
                 self._error("CURDIR$ takes no arguments."); 
@@ -1839,6 +1876,92 @@ class Interpreter:
                 print(token)
             print("--------------------\n")            
 
+    def _parse_dump_statement(self):
+        """
+        Parse and execute a DUMP statement for debugging.
+        
+        Syntax:
+        DUMP TOKENS
+        DUMP VARIABLES
+        DUMP LABELS
+        DUMP JUMPS
+        """
+        self._expect('DUMP')
+        
+        if not self._current_token() or self._current_token()[0] not in ['ID']:
+            self._error("DUMP requires a target: TOKENS, VARIABLES, LABELS, or JUMPS")
+        
+        target = self._current_token()[1].upper()
+        self._next_token()
+        
+        if target == 'TOKENS':
+            print("=== TOKEN DUMP ===")
+            print(f"Current token index: {self.token_index}")
+            print(f"Total tokens: {len(self.tokens)}")
+            print()
+            
+            # Show tokens around current position
+            start = max(0, self.token_index - 5)
+            end = min(len(self.tokens), self.token_index + 10)
+            
+            for i in range(start, end):
+                marker = " -> " if i == self.token_index else "    "
+                if i < len(self.tokens):
+                    token = self.tokens[i]
+                    line, col = self.lexer.get_line_col(token[2])
+                    print(f"{marker}[{i:3d}] {token[0]:15} '{token[1]}' (Line {line}, Col {col})")
+                
+        elif target == 'VARIABLES':
+            print("=== VARIABLE DUMP ===")
+            if not self.variables:
+                print("No variables defined")
+            else:
+                for name, value in sorted(self.variables.items()):
+                    var_type = type(value).__name__
+                    if isinstance(value, str):
+                        display_value = f'"{value}"'
+                    elif isinstance(value, list):
+                        display_value = f"ARRAY[{len(value)}]"
+                    elif isinstance(value, dict):
+                        display_value = f"HASH[{len(value)}]"
+                    else:
+                        display_value = str(value)
+                    print(f"  {name:20} = {display_value:30} ({var_type})")
+                    
+        elif target == 'LABELS':
+            print("=== LABEL DUMP ===")
+            if not self.labels:
+                print("No labels defined")
+            else:
+                for label, token_index in sorted(self.labels.items()):
+                    if token_index < len(self.tokens):
+                        token = self.tokens[token_index]
+                        line, col = self.lexer.get_line_col(token[2])
+                        print(f"  {label:20} -> Token[{token_index}] (Line {line}, Col {col})")
+                    else:
+                        print(f"  {label:20} -> Token[{token_index}] (INVALID)")
+                        
+        elif target == 'JUMPS':
+            print("=== JUMP MAP DUMP ===")
+            if not self.jump_map:
+                print("No jump mappings defined")
+            else:
+                for start_index, mappings in sorted(self.jump_map.items()):
+                    if start_index < len(self.tokens):
+                        start_token = self.tokens[start_index]
+                        line, col = self.lexer.get_line_col(start_token[2])
+                        print(f"  {start_token[0]} at Token[{start_index}] (Line {line}):")
+                        for key, value in mappings.items():
+                            if value is not None:
+                                if isinstance(value, list):
+                                    print(f"    {key}: {value}")
+                                else:
+                                    print(f"    {key}: Token[{value}]")
+                            else:
+                                print(f"    {key}: None")
+                        print()
+        else:
+            self._error(f"Unknown DUMP target: {target}. Use TOKENS, VARIABLES, LABELS, or JUMPS")
         
     def _parse_term(self):
         res = self._parse_factor()
@@ -1905,14 +2028,18 @@ class Interpreter:
                 key, value = part.split('=')
                 dialect_params[key.strip()] = value.strip()
         try:
+            #print("DEBUG","ABOUT TO OPEN FILE ",filename)
             handle = open(filename, py_mode, newline='', encoding="utf-8")
             self.file_handles[file_num] = {'handle': handle, 'dialect': dialect_params}
         except FileNotFoundError as e: 
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-            self._error(f"File not found: {filename}")
+            #print("DEBUG OPEN FILENOTFOUND", self.variables['ERRMSG$'],e)
+            #self._error(f"File not found: {filename}")
+            raise e
         except Exception as e: 
             self.variables['ERR'], 
             self.variables['ERRMSG$'] = 1.0, str(e); 
+            print("DEBUG OPEN EXCEPTION", e)
             self._error(f"Error opening file: {e}")
         
     def _parse_close_statement(self):
@@ -1972,10 +2099,13 @@ class Interpreter:
             self._error(f"Error reading file: {e}")
         
     def _parse_input_statement(self):
-        self._expect('INPUT'); prompt = ""
+        self._expect('INPUT'); prompt = " "
         if self._current_token()[0] == 'STRING':
-            prompt = self._current_token()[1][1:-1].replace('""', '"'); self._next_token(); self._expect('SEMICOLON')
-        var_name = self._expect('ID')[1]; user_input = input(prompt)
+            prompt = self._current_token()[1][1:-1].replace('""', '"')
+            self._next_token(); 
+            self._expect('SEMICOLON')
+        var_name = self._expect('ID')[1]
+        user_input = input(prompt)
         if var_name.endswith('$'): self.variables[var_name] = user_input
         else: self.variables[var_name] = float(user_input)
         
@@ -2397,6 +2527,402 @@ class Interpreter:
                 self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
                 raise e
 
+    def _parse_error_statement(self):
+        """
+        Parse and execute an ERROR statement to trigger a user-defined error.
+        """
+        self._expect('ERROR')
+        error_code = self._parse_expression()
+        
+        if not isinstance(error_code, (int, float)):
+            self._error("ERROR requires a numeric error code.")
+        
+        error_num = int(error_code)
+        
+        # Check for optional custom message
+        error_message = f"User-defined error {error_num}"
+        if self._current_token() and self._current_token()[0] == 'COMMA':
+            self._next_token()
+            custom_message = self._parse_expression()
+            if isinstance(custom_message, str):
+                error_message = custom_message
+            else:
+                self._error("Error message must be a string.")
+        
+        # Set error variables
+        self.variables['ERR'] = float(error_num)
+        self.variables['ERRMSG$'] = error_message
+        
+        # Only raise if there's no error handler, otherwise let the normal error handling take over
+        if not self.error_handler_label or self.in_error_handler:
+            raise RuntimeError(f"Error {error_num}: {error_message}")
+        else:
+            # Jump to error handler (same logic as other errors)
+            self.in_error_handler = True
+            self.error_resume_index = self._find_next_statement_index(self.token_index)
+            self.token_index = self.labels[self.error_handler_label]
+        
+    def _parse_run_statement(self):
+        """
+        Parse and execute a RUN statement to call another program and return.
+        Uses a proper call stack to handle nested calls and gracefully handles errors.
+        """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('RUN')
+        
+        filename = self._parse_expression()
+        if not isinstance(filename, str):
+            self._error("RUN requires a string filename.")
+        
+        run_args = []
+        while self._current_token() and self._current_token()[0] == 'COMMA':
+            self._next_token()
+            arg = self._parse_expression()
+            run_args.append(str(arg))
+
+        try:
+            expanded_filename = os.path.expanduser(filename)
+            if not os.path.exists(expanded_filename):
+                raise FileNotFoundError(f"RUN: File not found: {filename}")
+
+            with open(expanded_filename, 'r', encoding='utf-8') as f:
+                target_source = f.read()
+
+            # Push current state onto the stack
+            current_state = {
+                'lexer': self.lexer, 'tokens': self.tokens, 'token_index': self.token_index,
+                'labels': self.labels, 'jump_map': self.jump_map,
+                'form_definitions': self.form_definitions, 'command_args': self.command_args,
+                'variables_snapshot': self.variables.copy(), 'gosub_stack': self.gosub_stack[:]
+            }
+            self.run_stack.append(current_state)
+
+            # Setup new interpreter state for the called program
+            self.lexer = Lexer(preprocess_continuations(target_source))
+            self.tokens = self.lexer.tokens
+            self.token_index = 0
+            self.labels = {}
+            self.jump_map = {}
+            self.form_definitions = {} # Forms are not shared between run contexts
+            self.command_args = run_args
+            self.gosub_stack = []
+
+            self._pre_scan_for_jumps()
+            self._scan_for_labels()
+            
+            run_error = None
+            try:
+                # Execute the called program
+                while self._current_token() and self._current_token()[0] != 'END' and not self.program_terminated:
+                    if not self._parse_line():
+                        break
+            except ProgramEnd:
+                pass # Normal program termination is not an error
+            except Exception as e:
+                # Capture the error instead of re-raising it immediately
+                run_error = e
+            finally:
+                # CRITICAL: Always restore the caller's state
+                if self.run_stack:
+                    saved_state = self.run_stack.pop()
+                    self.lexer = saved_state['lexer']
+                    self.tokens = saved_state['tokens']
+                    self.token_index = saved_state['token_index']
+                    self.labels = saved_state['labels']
+                    self.jump_map = saved_state['jump_map']
+                    self.form_definitions = saved_state['form_definitions']
+                    self.command_args = saved_state['command_args']
+                    self.variables = saved_state['variables_snapshot']
+                    self.gosub_stack = saved_state['gosub_stack']
+                    # Reset the termination flag for the caller
+                    self.program_terminated = False
+                else:
+                    # This case should ideally not be reached
+                    print("CRITICAL WARNING: RUN stack underflow during state restoration.", file=sys.stderr)
+
+
+            # Now that the caller's context is restored, set error variables
+            if run_error:
+                self.variables['ERR'] = 1.0
+                self.variables['ERRMSG$'] = str(run_error)
+            else:
+                self.variables['ERR'] = 0.0
+                self.variables['ERRMSG$'] = ""
+
+        except Exception as setup_error:
+            # This block catches errors during setup (e.g., FileNotFoundError)
+            # We must still try to restore state if something was pushed to the stack
+            if self.run_stack:
+                saved_state = self.run_stack.pop()
+                self.lexer = saved_state['lexer']; self.tokens = saved_state['tokens']
+                self.token_index = saved_state['token_index']; self.labels = saved_state['labels']
+                self.jump_map = saved_state['jump_map']; self.form_definitions = saved_state['form_definitions']
+                self.command_args = saved_state['command_args']; self.variables = saved_state['variables_snapshot']
+            
+            # Since setup failed, this IS a fatal error for the caller's logic.
+            # We set the variables and then raise the error to stop the caller.
+            self.variables['ERR'] = 2.0 if isinstance(setup_error, FileNotFoundError) else 1.0
+            self.variables['ERRMSG$'] = str(setup_error)
+            self._error(f"RUN setup error: {setup_error}")
+
+    def _parse_chain_statement(self):
+        """
+        Parse and execute a CHAIN statement to transfer control to another program.
+        
+        Syntax:
+        CHAIN "filename.bas"
+        CHAIN "filename.bas", "arg1", "arg2", ...
+        CHAIN "filename.bas" PRESERVE
+        CHAIN "filename.bas", "arg1" PRESERVE
+        """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('CHAIN')
+        
+        # Parse the filename
+        filename = self._parse_expression()
+        if not isinstance(filename, str):
+            self._error("CHAIN requires a string filename.")
+        
+        # Parse optional arguments
+        chain_args = []
+        while self._current_token() and self._current_token()[0] == 'COMMA':
+            self._next_token()
+            # Check if the next token is PRESERVE (not an argument)
+            if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'PRESERVE':
+                break
+            arg = self._parse_expression()
+            chain_args.append(str(arg))
+        
+        # Check for PRESERVE keyword
+        preserve_variables = False
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'PRESERVE':
+            self._next_token()
+            preserve_variables = True
+        
+        try:
+            # Expand user home directory if needed
+            expanded_filename = os.path.expanduser(filename)
+            
+            # Check if file exists
+            if not os.path.exists(expanded_filename):
+                self.variables['ERR'] = 2.0
+                self.variables['ERRMSG$'] = f"File not found: {filename}"
+                self._error(f"CHAIN: File not found: {filename}")
+            
+            # Read the target program
+            try:
+                with open(expanded_filename, 'r', encoding='utf-8') as f:
+                    target_source = f.read()
+            except Exception as e:
+                self.variables['ERR'] = 1.0
+                self.variables['ERRMSG$'] = str(e)
+                self._error(f"CHAIN: Error reading file: {e}")
+            
+            # Close all open files before chaining
+            self._close_all_files()
+            
+            # Close database connection
+            if self.db_connection:
+                self.db_connection.close()
+                self.db_connection = None
+            
+            # Prepare the new interpreter
+            lexer = Lexer(preprocess_continuations(target_source))
+            new_interpreter = Interpreter(lexer, chain_args, debug=self.debug_mode)
+            
+            # Handle variable preservation
+            if preserve_variables:
+                # Copy all variables except system variables and arrays/hashes that might cause issues
+                system_vars = {'ERR', 'ERRMSG$', 'SQL_ROWCOUNT', 'SQL_FOUND', 'SQL_NOTFOUND', 'RECNO'}
+                for var_name, var_value in self.variables.items():
+                    if var_name not in system_vars:
+                        # Only preserve simple variables (strings and numbers)
+                        if isinstance(var_value, (str, int, float)):
+                            new_interpreter.variables[var_name] = var_value
+                        elif isinstance(var_value, (list, dict)):
+                            # Serialize complex data structures to JSON strings
+                            try:
+                                serialized_name = f"{var_name}_JSON$"
+                                json_data = self._execute_function('JSON_SERIALIZE$', [var_value])
+                                new_interpreter.variables[serialized_name] = json_data
+                                print(f"CHAIN: Serialized {var_name} as {serialized_name}")
+                            except Exception as e:
+                                print(f"CHAIN: Warning - Could not serialize {var_name}: {e}")
+                                
+            # Set up the new interpreter with the same configuration
+            new_interpreter.db_engine = self.db_engine
+            new_interpreter.sql_fatal_errors = self.sql_fatal_errors
+            new_interpreter.hash_keys_mode = self.hash_keys_mode
+            new_interpreter.trace_mode = self.trace_mode
+            
+            # Initialize database with the same engine
+            new_interpreter._init_db()
+            
+            # Replace the current interpreter's state
+            self.lexer = new_interpreter.lexer
+            self.tokens = new_interpreter.tokens
+            self.token_index = 0
+            self.variables = new_interpreter.variables
+            self.file_handles = new_interpreter.file_handles
+            self.command_args = chain_args
+            self.gosub_stack = []
+            self.labels = new_interpreter.labels
+            self.form_definitions = new_interpreter.form_definitions
+            self.db_connection = new_interpreter.db_connection
+            self.db_cursor = new_interpreter.db_cursor
+            self.jump_map = new_interpreter.jump_map
+            
+            # Reset error handling state
+            self.error_handler_label = None
+            self.in_error_handler = False
+            self.error_resume_index = None
+            
+            print(f"CHAIN: Transferred control to {filename}")
+            if chain_args:
+                print(f"CHAIN: Arguments passed: {', '.join(chain_args)}")
+            if preserve_variables:
+                print("CHAIN: Variables preserved")
+            
+        except Exception as e:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = str(e)
+            if 'File not found' in str(e):
+                self.variables['ERR'] = 2.0
+            self._error(f"CHAIN error: {e}")
+
+    def _parse_zip_statement(self):
+        """
+        Parse and execute a ZIP statement to create an archive.
+        
+        Syntax:
+        ZIP "archive.zip" FROM "file1.txt", "*.bas", "data.csv"
+        """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ZIP')
+        
+        archive_name = self._parse_expression()
+        if not isinstance(archive_name, str):
+            self._error("ZIP requires a string archive name.")
+        
+        self._expect('ID')  # Expect FROM keyword
+        if self._current_token()[-2][1].upper() != 'FROM':
+            self._error("Expected FROM after archive name in ZIP statement.")
+        
+        files_to_zip = []
+        
+        # Parse the comma-separated list of files/patterns
+        if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
+            while True:
+                file_pattern = self._parse_expression()
+                if not isinstance(file_pattern, str):
+                    self._error("File patterns must be strings.")
+                
+                # Auto-detect if it's a pattern or literal file
+                if '*' in file_pattern or '?' in file_pattern:
+                    # It's a glob pattern - expand it
+                    expanded_files = glob.glob(file_pattern)
+                    if expanded_files:
+                        files_to_zip.extend(expanded_files)
+                    else:
+                        print(f"Warning: Pattern '{file_pattern}' matched no files")
+                else:
+                    # It's a literal filename
+                    if os.path.exists(file_pattern):
+                        files_to_zip.append(file_pattern)
+                    else:
+                        print(f"Warning: File '{file_pattern}' not found")
+                
+                # Check if there are more files
+                if self._current_token() and self._current_token()[0] == 'COMMA':
+                    self._next_token()
+                else:
+                    break
+        
+        if not files_to_zip:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = "No files found to zip"
+            if self.sql_fatal_errors:
+                self._error("No files found to zip")
+        
+        try:
+            with zipfile.ZipFile(archive_name, 'w', zipfile.ZIP_DEFLATED) as zf:
+                for file_path in files_to_zip:
+                    # Use just the filename in the archive, not the full path
+                    arc_name = os.path.basename(file_path)
+                    zf.write(file_path, arc_name)
+                    print(f"Added: {file_path} -> {arc_name}")
+            
+            print(f"Created {archive_name} with {len(files_to_zip)} files")
+            self.variables['ERR'] = 0.0
+            self.variables['ERRMSG$'] = ""
+            
+        except Exception as e:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = str(e)
+            if self.sql_fatal_errors:
+                self._error(f"ZIP error: {e}")
+
+    def _parse_unzip_statement(self):
+        """
+        Parse and execute an UNZIP statement to extract an archive.
+        
+        Syntax:
+        UNZIP "archive.zip"
+        UNZIP "archive.zip" INTO "target_directory"
+        """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('UNZIP')
+        
+        archive_name = self._parse_expression()
+        if not isinstance(archive_name, str):
+            self._error("UNZIP requires a string archive name.")
+        
+        target_dir = "."  # Default to current directory
+        
+        # Check for optional TO clause
+        if self._current_token() and self._current_token()[0] == 'TO':
+            self._next_token()
+            target_dir = self._parse_expression()
+            if not isinstance(target_dir, str):
+                self._error("Target directory must be a string.")
+        
+        try:
+            # Check if archive exists
+            if not os.path.exists(archive_name):
+                self.variables['ERR'] = 2.0
+                self.variables['ERRMSG$'] = f"Archive not found: {archive_name}"
+                self._error(f"Archive not found: {archive_name}")
+            
+            # Create target directory if it doesn't exist
+            if target_dir != "." and not os.path.exists(target_dir):
+                os.makedirs(target_dir)
+            
+            # Extract the archive
+            with zipfile.ZipFile(archive_name, 'r') as zf:
+                # Get list of files in archive
+                file_list = zf.namelist()
+                
+                # Extract all files
+                zf.extractall(target_dir)
+                
+                print(f"Extracted {len(file_list)} files from {archive_name}")
+                for filename in file_list:
+                    print(f"  -> {os.path.join(target_dir, filename)}")
+            
+            self.variables['ERR'] = 0.0
+            self.variables['ERRMSG$'] = ""
+            
+        except zipfile.BadZipFile as e:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = f"Invalid ZIP file: {e}"
+            if self.sql_fatal_errors:
+                self._error(f"Invalid ZIP file: {e}")
+        except Exception as e:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = str(e)
+            if self.sql_fatal_errors:
+                self._error(f"UNZIP error: {e}")
+        
     def _parse_shell_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""}); self._expect('SHELL')
         if self._current_token() and self._current_token()[0] == 'NEWLINE': self._error("SHELL command requires a string argument.")
@@ -2597,123 +3123,9 @@ class Interpreter:
         if peek and peek[0] == 'CSV': self._parse_load_csv_statement()
         elif peek and peek[0] == 'JSON': self._parse_load_json_statement()
         elif peek and peek[0] == 'EXCEL': self._parse_load_excel_statement()
-        else: self._error("Expected CSV, JSON, or EXCEL after LOAD")
+        elif peek and peek[0] == 'FIXED': self._parse_load_fixed_statement()
+        else: self._error("Expected CSV, JSON, FIXED, or EXCEL after LOAD")
         
-    def _parse_load_csv_statement(self):
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('CSV')
-
-        csv_filename = self._parse_expression()
-        destination_mode = None
-        destination_target = None
-        db_mode = None
-
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_expression()
-        
-        # --- THIS IS THE MISSING LOGIC ---
-        elif self._current_token() and self._current_token()[0] == 'INTO FILE':
-            destination_mode = 'INTO_FILE'
-            self._next_token()
-            destination_target = self._parse_expression()
-        # --- END OF MISSING LOGIC ---
-
-        elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_expression()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
-                db_mode = self._current_token()[1]; self._next_token()
-            else:
-                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else:
-            self._error("Expected CREATE TABLE, INTO TABLE, or INTO FILE clause.")
-
-        options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 
-                   'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 'fields': ''}
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token(); options_str = self._parse_expression(); temp_options = {}
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key, start_pos = match.group(1).lower(), match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip('"')
-                temp_options[key] = value
-            for key, value in temp_options.items():
-                if key == 'header': options['header'] = value.lower() in ['true', 'y', '1']
-                elif key in ['skip', 'limit', 'batchsize']: options[key] = int(value)
-                else: options[key] = value
-        
-        try:
-            with open(csv_filename, 'r', newline='', encoding=options['encoding']) as infile:
-                for _ in range(options['skip']): next(infile)
-                reader = csv.reader(infile, delimiter=options['delimiter'])
-                
-                original_headers = []
-                if options['header']:
-                    try: original_headers = next(reader)
-                    except StopIteration: return
-
-                final_headers, column_map = original_headers, list(range(len(original_headers))) if original_headers else None
-                
-                # --- File-to-File Transformation Logic ---
-                if destination_mode == 'INTO_FILE':
-                    total_rows_processed = 0
-                    with open(destination_target, 'w', newline='', encoding='utf-8') as outfile:
-                        if options['format'] == 'JSON': outfile.write('[\n')
-                        else: # CSV
-                            writer = csv.writer(outfile)
-                            writer.writerow(final_headers)
-
-                        limit = options['limit']
-                        for i, row in enumerate(reader):
-                            if limit is not None and i >= limit: break
-                            if not row: continue
-                            if column_map is None: column_map = list(range(len(row)))
-                            processed_row = [row[i] for i in column_map if i < len(row)]
-                            
-                            # Apply transformations (simplified for brevity, assumes your logic is here)
-
-                            if options['format'] == 'JSON':
-                                if total_rows_processed > 0: outfile.write(',\n')
-                                json.dump(dict(zip(final_headers, processed_row)), outfile, indent=2)
-                            else: # CSV
-                                writer.writerow(processed_row)
-                            total_rows_processed += 1
-
-                        if options['format'] == 'JSON': outfile.write('\n]\n')
-                    print(f"{total_rows_processed} records written to {destination_target}")
-
-                # --- File-to-Database Logic ---
-                elif destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
-                    cursor = self.db_cursor
-                    if destination_mode == 'CREATE_TABLE':
-                        if not final_headers and not options['fields']: self._error("CREATE TABLE requires header=true or a FIELDS option.")
-                        cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
-                        cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];'); cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
-                    if db_mode == 'REPLACE': cursor.execute(f'DELETE FROM [{destination_target}];')
-                    
-                    insert_sql, batch, total_rows_processed = None, [], 0
-                    self.db_connection.execute('BEGIN TRANSACTION;')
-                    try:
-                        for row in reader:
-                            # ... (database loading logic from your file) ...
-                            pass # Placeholder for your existing DB loading code
-                        # ...
-                        # self.db_connection.execute('COMMIT;')
-                        print(f"{total_rows_processed} records loaded into table {destination_target}")
-                    except Exception as e:
-                        self.db_connection.execute('ROLLBACK;'); raise e
-        except FileNotFoundError as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-        except Exception as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"CSV load error: {e}"
-
     def _parse_load_csv_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('LOAD')
@@ -2726,9 +3138,6 @@ class Interpreter:
             destination_mode = 'CREATE_TABLE'; self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_expression()
-        elif self._current_token() and self._current_token()[0] == 'INTO FILE':
-            destination_mode = 'INTO_FILE'; self._next_token()
-            destination_target = self._parse_expression()
         elif self._current_token() and self._current_token()[0] == 'INTO':
             destination_mode = 'INTO_TABLE'; self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
@@ -2736,7 +3145,7 @@ class Interpreter:
             if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
                 db_mode = self._current_token()[1]; self._next_token()
             else: self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else: self._error("Expected CREATE TABLE, INTO TABLE, or INTO FILE clause.")
+        else: self._error("Expected CREATE TABLE, INTO TABLE clause.")
 
         options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 
                    'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 'fields': ''}
@@ -2791,31 +3200,6 @@ class Interpreter:
                             new_headers.append(final_field_name)
                         final_headers, column_map = new_headers, new_map
 
-                if destination_mode == 'INTO_FILE':
-                    total_rows_processed = 0
-                    with open(destination_target, 'w', newline='', encoding='utf-8') as outfile:
-                        if options['format'].upper() == 'JSON': outfile.write('[\n')
-                        else: # CSV
-                            writer = csv.writer(outfile); writer.writerow(final_headers)
-
-                        limit = options['limit']
-                        for i, row in enumerate(reader):
-                            if limit is not None and i >= limit: break
-                            if not row: continue
-                            if column_map is None: column_map = list(range(len(row)))
-                            processed_row = [row[i] for i in column_map if i < len(row)]
-                            
-                            # (Your transformation logic would go here)
-
-                            if options['format'].upper() == 'JSON':
-                                if total_rows_processed > 0: outfile.write(',\n')
-                                json.dump(dict(zip(final_headers, processed_row)), outfile, indent=2)
-                            else: writer.writerow(processed_row)
-                            total_rows_processed += 1
-
-                        if options['format'].upper() == 'JSON': outfile.write('\n]\n')
-                    print(f"{total_rows_processed} records written to {destination_target}")
-
                 elif destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
                     cursor = self.db_cursor
                     if destination_mode == 'CREATE_TABLE':
@@ -2859,7 +3243,117 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"CSV load error: {e}"
             self._error(f"An error occurred during CSV load: {e}")
 
+    def _parse_load_fixed_statement(self):
+        """
+        Parse and execute LOAD FIXED for fixed-width files.
+        
+        Syntax:
+        LOAD FIXED "data.txt" CREATE TABLE mytable FIELDS "name:1-20,age:21-23,city:24-40"
+        LOAD FIXED "data.txt" INTO TABLE mytable APPEND FIELDS "name:1-20,age:21-23,city:24-40"
+        """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('LOAD')
+        self._expect('FIXED')  # FIXED
+        
+        filename = self._parse_expression()
+        
+        # Parse destination (same as CSV)
+        destination_mode, destination_target, db_mode = None, None, None
+        
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': 
+                self._next_token()
+            destination_target = self._parse_expression()
+        elif self._current_token() and self._current_token()[0] == 'INTO':
+            destination_mode = 'INTO_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': 
+                self._next_token()
+            destination_target = self._parse_expression()
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+                db_mode = self._current_token()[1]
+                self._next_token()
+        
+        # Parse FIELDS specification
+        if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'FIELDS'):
+            self._error("LOAD FIXED requires FIELDS specification")
+        
+        self._next_token()
+        fields_spec = self._parse_expression()
+        
+        # Parse field specification: "name:1-20,age:21-23,city:24-40"
+        field_definitions = []
+        for field_def in fields_spec.split(','):
+            field_def = field_def.strip()
+            if ':' not in field_def:
+                self._error(f"Invalid field specification: {field_def}")
             
+            field_name, positions = field_def.split(':', 1)
+            field_name = field_name.strip()
+            
+            if '-' not in positions:
+                self._error(f"Invalid position specification: {positions}")
+            
+            start_pos, end_pos = positions.split('-', 1)
+            try:
+                start_pos = int(start_pos.strip()) - 1  # Convert to 0-based
+                end_pos = int(end_pos.strip())
+            except ValueError:
+                self._error(f"Invalid position numbers: {positions}")
+            
+            field_definitions.append({
+                'name': field_name,
+                'start': start_pos,
+                'end': end_pos
+            })
+        
+        try:
+            with open(filename, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+            
+            # Process each line
+            records = []
+            for line_num, line in enumerate(lines, 1):
+                line = line.rstrip('\n\r')  # Remove line endings but keep spaces
+                record = []
+                
+                for field in field_definitions:
+                    # Extract field value from fixed positions
+                    if field['start'] < len(line):
+                        value = line[field['start']:field['end']].strip()
+                    else:
+                        value = ""  # Line too short for this field
+                    record.append(value)
+                
+                records.append(record)
+            
+            # Create/populate database table (similar to CSV logic)
+            if destination_mode == 'CREATE_TABLE':
+                field_names = [f['name'] for f in field_definitions]
+                cols_def = ', '.join([f'[{name}] TEXT' for name in field_names])
+                self.db_cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}]')
+                self.db_cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def})')
+            
+            if db_mode == 'REPLACE':
+                self.db_cursor.execute(f'DELETE FROM [{destination_target}]')
+            
+            # Insert records
+            field_names = [f['name'] for f in field_definitions]
+            placeholders = ', '.join(['?'] * len(field_names))
+            quoted_fields = ', '.join([f'[{name}]' for name in field_names])
+            insert_sql = f'INSERT INTO [{destination_target}] ({quoted_fields}) VALUES ({placeholders})'
+            
+            self.db_cursor.executemany(insert_sql, records)
+            print(f"Loaded {len(records)} records from fixed-width file")
+            
+        except Exception as e:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = str(e)
+            print(f"LOAD FIXED error: {e}")
+
+        
     def _parse_for_statement(self):
         start_index = self.token_index
         self._expect('FOR')
@@ -2927,9 +3421,6 @@ class Interpreter:
             destination_mode = 'CREATE_TABLE'; self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_expression()
-        elif self._current_token() and self._current_token()[0] == 'INTO FILE':
-            destination_mode = 'INTO_FILE'; self._next_token()
-            destination_target = self._parse_expression()
         elif self._current_token() and self._current_token()[0] == 'INTO':
             destination_mode = 'INTO_TABLE'; self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
@@ -2937,7 +3428,7 @@ class Interpreter:
             if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
                 db_mode = self._current_token()[1]; self._next_token()
             else: self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else: self._error("Expected CREATE TABLE, INTO TABLE, or INTO FILE clause.")
+        else: self._error("Expected CREATE TABLE, INTO TABLE clause.")
 
         options = {'header': True, 'sheetname': None, 'sheetindex': 0, 'batchsize': 10000,
                    'limit': None, 'fields': '', 'transform': '', 'format': 'CSV'}
@@ -2970,26 +3461,8 @@ class Interpreter:
             if options['header']: start_row = 1
             
             final_headers, column_map = original_headers, list(range(len(original_headers)))
-            # (Your advanced FIELDS/TRANSFORM logic would go here)
             
-            if destination_mode == 'INTO_FILE':
-                all_rows = []
-                limit = options.get('limit')
-                for row_idx in range(start_row, sheet.nrows):
-                    if limit is not None and len(all_rows) >= limit: break
-                    raw_row = [sheet.cell_value(row_idx, col_idx) for col_idx in column_map]
-                    all_rows.append(raw_row)
-                
-                with open(destination_target, 'w', newline='', encoding='utf-8') as outfile:
-                    if options['format'].upper() == 'JSON':
-                        json.dump([dict(zip(final_headers, row)) for row in all_rows], outfile, indent=2)
-                    else: # CSV
-                        writer = csv.writer(outfile)
-                        writer.writerow(final_headers)
-                        writer.writerows(all_rows)
-                print(f"{len(all_rows)} records written to {destination_target}")
-
-            elif destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
+            if destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
                 cursor = self.db_cursor
                 if destination_mode == 'CREATE_TABLE':
                     cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
@@ -3469,7 +3942,9 @@ class Interpreter:
         else: self._error(f"Invalid DIM statement for '{var_name}'.")
             
     def _parse_json_statement(self):
-        self._expect('PARSE'); self._expect('JSON'); json_string = self._parse_expression(); self._expect('INTO'); var_name = self._expect('ID')[1]
+        self._expect('PARSE'); self._expect('JSON')
+        json_string = self._parse_expression()
+        self._expect('INTO'); var_name = self._expect('ID')[1]
         if self._current_token() and self._current_token()[0] == 'LPAREN': self._next_token(); self._expect('RPAREN')
         if var_name not in self.variables: self._error(f"Target variable '{var_name}' must be dimensioned.")
         try: parsed_data = json.loads(json_string)
@@ -3742,6 +4217,211 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during CSV analysis: {e}")
 
+    def _guess_fixed_width_columns(self, lines, space_threshold=0.90):
+        """Analyzes lines of text to guess fixed-width column breaks."""
+        if not lines:
+            return []
+        
+        # Pad lines to the same length for consistent column analysis
+        max_len = max(len(line.rstrip('\n\r')) for line in lines) if lines else 0
+        if max_len == 0:
+            return []
+            
+        padded_lines = [line.rstrip('\n\r').ljust(max_len) for line in lines]
+        num_lines = len(padded_lines)
+        
+        # Tally spaces in each column position
+        space_counts = [0] * max_len
+        for line in padded_lines:
+            for i, char in enumerate(line):
+                if char == ' ':
+                    space_counts[i] += 1
+        
+        # A column is a separator if it's mostly spaces
+        is_separator = [(count / num_lines) > space_threshold for count in space_counts]
+        
+        # Find field boundaries based on transitions from data to separators
+        definitions = []
+        in_field = False
+        start_pos = 0
+        field_num = 1
+        
+        for i in range(max_len):
+            is_last_char = (i == max_len - 1)
+            # Start of a new field is a non-separator column when we aren't in a field
+            if not is_separator[i] and not in_field:
+                in_field = True
+                start_pos = i
+            # End of a field is a separator column when we are in a field, or end of line
+            elif in_field and (is_separator[i] or is_last_char):
+                end_pos = i if is_separator[i] else i + 1
+                definitions.append({
+                    'name': f'Field_{field_num}',
+                    'start': start_pos,
+                    'end': end_pos,
+                    'width': end_pos - start_pos
+                })
+                field_num += 1
+                in_field = False
+        
+        return definitions
+        
+    def _parse_analyze_fixed_statement(self):
+        """
+        Parse and execute ANALYZE FIXED. FIELDS is optional.
+        Guesses columns based on a 1000-line sample, then analyzes the full file via streaming.
+        """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ANALYZE FIXED')
+        filename = self._parse_expression()
+        
+        field_definitions = []
+        
+        # --- Step 1: Determine field definitions (manually or by guessing from a sample) ---
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'FIELDS':
+            self._next_token()
+            fields_spec = self._parse_expression()
+            for field_def in fields_spec.split(','):
+                # (Manual parsing logic is the same)
+                parts = field_def.strip().split(':')
+                if len(parts) != 2: self._error(f"Invalid field specification: {field_def}")
+                field_name, positions = parts
+                pos_parts = positions.split('-')
+                if len(pos_parts) != 2: self._error(f"Invalid position specification: {positions}")
+                try:
+                    start_pos = int(pos_parts[0].strip()) - 1
+                    end_pos = int(pos_parts[1].strip())
+                    field_definitions.append({
+                        'name': field_name.strip(), 'start': start_pos, 'end': end_pos, 'width': end_pos - start_pos
+                    })
+                except ValueError:
+                    self._error(f"Invalid position numbers: {positions}")
+        else:
+            # Auto-detect fields from a 1000-line sample
+            sample_lines = []
+            try:
+                with open(filename, 'r', encoding='utf-8', errors='replace') as infile:
+                    for i, line in enumerate(infile):
+                        if i >= 1000:
+                            break
+                        sample_lines.append(line)
+            except FileNotFoundError as e:
+                self._error(f"File not found: {filename}")
+            print(f"Notice: FIELDS clause not provided; guessing column layout for '{filename}'.", file=sys.stderr)
+            field_definitions = self._guess_fixed_width_columns(sample_lines)
+            if not field_definitions:
+                print(f"Warning: Could not auto-detect any field columns in {filename}.")
+
+        into_hash_name = None
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            into_hash_name = self._expect('ID')[1]
+            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
+                self._error(f"'{into_hash_name}' is not a dimensioned hash.")
+
+        # --- Step 2: Perform full analysis by streaming the entire file ---
+        report = {}
+        try:
+            record_count = 0
+            line_length_stats = {}
+            first_two_lines = []
+            field_stats = {field['name']: {
+                'START_POS': field['start'],
+                'END_POS': field['end'],
+                'DEFINED_WIDTH': field['width'], 'MIN_LEN': None, 'MAX_LEN': 0,
+                'EMPTY_COUNT': 0, 'SAMPLE_VALUES': []
+            } for field in field_definitions}
+
+            with open(filename, 'r', encoding='utf-8', errors='replace') as infile:
+                for line in infile:
+                    # Capture first two lines for the report sample
+                    if record_count < 2:
+                        first_two_lines.append(line)
+                    
+                    record_count += 1
+                    line = line.rstrip('\n\r')
+                    line_len = len(line)
+                    line_length_stats[line_len] = line_length_stats.get(line_len, 0) + 1
+                    
+                    for field in field_definitions:
+                        stats = field_stats[field['name']]
+                        value = line[field['start']:field['end']].rstrip() if field['start'] < line_len else ""
+                        
+                        if not value:
+                            stats['EMPTY_COUNT'] += 1
+                        else:
+                            value_len = len(value)
+                            if stats['MIN_LEN'] is None or value_len < stats['MIN_LEN']:
+                                stats['MIN_LEN'] = value_len
+                            if value_len > stats['MAX_LEN']:
+                                stats['MAX_LEN'] = value_len
+                            if len(stats['SAMPLE_VALUES']) < 3 and value not in stats['SAMPLE_VALUES']:
+                                stats['SAMPLE_VALUES'].append(value)
+            
+            # Build the final report
+            report['FILENAME'] = filename
+            report['TOTAL_RECORDS'] = record_count
+            report['LINE_LENGTH_DISTRIBUTION'] = self._python_to_basic_data(line_length_stats)
+            report['FIELD_ANALYSIS'] = self._python_to_basic_data(field_stats)
+            report['FIELD_COUNT'] = len(field_definitions)
+
+            if into_hash_name:
+                self.variables[into_hash_name] = self._python_to_basic_data(report)
+            else:
+                # The printing logic now uses 'first_two_lines'
+                print(f"--- Fixed-Width Analysis Report for: {filename} ---")
+                print(f"  Total Records: {report.get('TOTAL_RECORDS', 0)}")
+                print(f"  Defined Fields: {report.get('FIELD_COUNT', 0)}")
+                
+                line_lengths = report.get('LINE_LENGTH_DISTRIBUTION', {})
+                max_line_length = int(max(line_lengths.keys())) if line_lengths else 0
+                print(f"  Maximum Line Length: {max_line_length}")
+                
+                if max_line_length > 0:
+                    print("\nPosition Reference:")
+                    tens_ruler = "         "
+                    for i in range(1, (max_line_length // 10) + 2):
+                        tens_ruler += f"{i}         "
+                    print(f"{tens_ruler[:max_line_length]}")
+                    
+                    units_ruler = "123456789" * ((max_line_length // 9) + 2)
+                    print(f"{units_ruler[:max_line_length]}")
+
+                    for line in first_two_lines:
+                        print(line.rstrip('\n\r'))
+                
+                if 'FIELD_ANALYSIS' in report:
+                    print("\n  Field Analysis:")
+                    for field_name, stats in report['FIELD_ANALYSIS'].items():
+                        print(f"    [{field_name}]:")
+                        start_display = int(stats.get('START_POS', -1)) + 1
+                        end_display = int(stats.get('END_POS', 0))
+                        print(f"      Position Range:  {start_display}-{end_display}")
+                        print(f"      Defined Width:   {stats.get('DEFINED_WIDTH', 0)}")
+                        print(f"      Actual Length:   {stats.get('MIN_LEN', 'N/A')} - {stats.get('MAX_LEN', 'N/A')}")
+                        print(f"      Empty Fields: {stats.get('EMPTY_COUNT', 0)}")
+                        if stats.get('SAMPLE_VALUES'):
+                            samples = ', '.join([f'"{v}"' for v in stats['SAMPLE_VALUES']])
+                            print(f"      Sample Values: {samples}")
+                if field_definitions:
+                    fields_spec_parts = []
+                    for field in field_definitions:
+                        start_display = field['start'] + 1
+                        end_display = field['end']
+                        name = field['name']
+                        fields_spec_parts.append(f"{name}:{start_display}-{end_display}")
+                    
+                    fields_spec_string = ",".join(fields_spec_parts)
+                    example_command = f'LOAD FIXED "{filename}" CREATE TABLE MyTable FIELDS "{fields_spec_string}"'
+                    
+                    print("\n  Example LOAD Command:")
+                    print(f"    {example_command}")
+                    
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during fixed-width analysis: {e}")
+        
+        
     def _parse_form_statement(self):
         self._expect('FORM')
         form_name = self._expect('ID')[1]
@@ -4262,7 +4942,7 @@ def main():
             print(f"Error: File '{filepath}' not found.", file=sys.stderr)
             return
         try:
-            with open(filepath, 'r') as f:
+            with open(filepath, 'r', encoding='utf-8') as f:
                 source_code = f.read()
         except Exception as e:
             print(f"An error occurred reading file: {e}", file=sys.stderr)
