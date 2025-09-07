@@ -1091,9 +1091,9 @@ class Interpreter:
             if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
                 self._next_token()
                 format_token = self._current_token()
-                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML']:
+                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED']:
                     output_format = format_token[1].upper()
-                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML"]: 
+                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED"]: 
                         g_output_config.format = output_format
                         self._next_token()
                     else: 
@@ -1195,6 +1195,37 @@ class Interpreter:
 
         stream.write("</body>\n</html>\n")
         
+    def _write_as_fixed(self, results, headers, stream):
+        """Writes query results as a fixed-width text file without headers."""
+        if not results:
+            return
+
+        # Step 1: Calculate the maximum width needed for each column
+        widths = [len(h) for h in headers]
+        
+        for row in results:
+            for i, cell in enumerate(row):
+                if i < len(widths):
+                    # Sanitize newlines before calculating width
+                    value = str(cell if cell is not None else "")
+                    sanitized_value = " ".join(value.splitlines())
+                    cell_width = len(sanitized_value)
+                    if cell_width > widths[i]:
+                        widths[i] = cell_width
+        
+        # Step 2: Write the data rows, padded to the calculated widths
+        for row in results:
+            line_parts = []
+            for i, cell in enumerate(row):
+                 if i < len(widths):
+                    value = str(cell if cell is not None else "")
+                    # Replace any newlines with a single space
+                    sanitized_value = " ".join(value.splitlines())
+                    padded_value = sanitized_value.ljust(widths[i])
+                    line_parts.append(padded_value)
+            
+            stream.write("".join(line_parts) + "\n")
+            
     def _parse_if_statement(self):
         start_if_index = self.token_index
         self._expect('IF')
@@ -1901,8 +1932,8 @@ class Interpreter:
             print()
             
             # Show tokens around current position
-            start = max(0, self.token_index - 5)
-            end = min(len(self.tokens), self.token_index + 10)
+            start = 0   #  max(0, self.token_index - 5)
+            end = len(self.tokens) # min(len(self.tokens), self.token_index + 10)
             
             for i in range(start, end):
                 marker = " -> " if i == self.token_index else "    "
@@ -3125,6 +3156,19 @@ class Interpreter:
         elif peek and peek[0] == 'EXCEL': self._parse_load_excel_statement()
         elif peek and peek[0] == 'FIXED': self._parse_load_fixed_statement()
         else: self._error("Expected CSV, JSON, FIXED, or EXCEL after LOAD")
+
+    def _parse_table_name(self):
+        """Parses a table name, accepting either an unquoted ID or a quoted STRING."""
+        token = self._current_token()
+        if not token or token[0] not in ['ID', 'STRING']:
+            self._error("Expected a table name (e.g., MyTable or \"MyTable\")")
+        
+        self._next_token()
+        name = token[1]
+        if token[0] == 'STRING':
+            # Strip the surrounding quotes from the string token
+            return name.strip('"')
+        return name  
         
     def _parse_load_csv_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
@@ -3137,11 +3181,11 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] == 'CREATE':
             destination_mode = 'CREATE_TABLE'; self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_expression()
+            destination_target = self._parse_table_name()
         elif self._current_token() and self._current_token()[0] == 'INTO':
             destination_mode = 'INTO_TABLE'; self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_expression()
+            destination_target = self._parse_table_name()
             if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
                 db_mode = self._current_token()[1]; self._next_token()
             else: self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
@@ -3246,112 +3290,99 @@ class Interpreter:
     def _parse_load_fixed_statement(self):
         """
         Parse and execute LOAD FIXED for fixed-width files.
-        
-        Syntax:
-        LOAD FIXED "data.txt" CREATE TABLE mytable FIELDS "name:1-20,age:21-23,city:24-40"
-        LOAD FIXED "data.txt" INTO TABLE mytable APPEND FIELDS "name:1-20,age:21-23,city:24-40"
+        Refactored to stream the file and use explicit transactions.
         """
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('LOAD')
-        self._expect('FIXED')  # FIXED
+        self._expect('FIXED')
         
         filename = self._parse_expression()
         
-        # Parse destination (same as CSV)
         destination_mode, destination_target, db_mode = None, None, None
         
         if self._current_token() and self._current_token()[0] == 'CREATE':
             destination_mode = 'CREATE_TABLE'
             self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': 
-                self._next_token()
-            destination_target = self._parse_expression()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
         elif self._current_token() and self._current_token()[0] == 'INTO':
             destination_mode = 'INTO_TABLE'
             self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': 
-                self._next_token()
-            destination_target = self._parse_expression()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
             if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
                 db_mode = self._current_token()[1]
                 self._next_token()
+            else:
+                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+        else:
+            self._error("Expected CREATE TABLE or INTO TABLE clause.")
         
-        # Parse FIELDS specification
         if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'FIELDS'):
-            self._error("LOAD FIXED requires FIELDS specification")
+            self._error("LOAD FIXED requires a FIELDS specification.")
         
         self._next_token()
         fields_spec = self._parse_expression()
-        
-        # Parse field specification: "name:1-20,age:21-23,city:24-40"
+        #print("DEBUG-FIXED",destination_target)
         field_definitions = []
         for field_def in fields_spec.split(','):
             field_def = field_def.strip()
-            if ':' not in field_def:
-                self._error(f"Invalid field specification: {field_def}")
-            
+            if ':' not in field_def: self._error(f"Invalid field specification: {field_def}")
             field_name, positions = field_def.split(':', 1)
-            field_name = field_name.strip()
-            
-            if '-' not in positions:
-                self._error(f"Invalid position specification: {positions}")
-            
+            if '-' not in positions: self._error(f"Invalid position specification: {positions}")
             start_pos, end_pos = positions.split('-', 1)
             try:
-                start_pos = int(start_pos.strip()) - 1  # Convert to 0-based
+                start_pos = int(start_pos.strip()) - 1
                 end_pos = int(end_pos.strip())
-            except ValueError:
-                self._error(f"Invalid position numbers: {positions}")
-            
-            field_definitions.append({
-                'name': field_name,
-                'start': start_pos,
-                'end': end_pos
-            })
+                field_definitions.append({'name': field_name.strip(), 'start': start_pos, 'end': end_pos})
+            except ValueError: self._error(f"Invalid position numbers: {positions}")
         
         try:
-            with open(filename, 'r', encoding='utf-8') as f:
-                lines = f.readlines()
-            
-            # Process each line
-            records = []
-            for line_num, line in enumerate(lines, 1):
-                line = line.rstrip('\n\r')  # Remove line endings but keep spaces
-                record = []
-                
-                for field in field_definitions:
-                    # Extract field value from fixed positions
-                    if field['start'] < len(line):
-                        value = line[field['start']:field['end']].strip()
-                    else:
-                        value = ""  # Line too short for this field
-                    record.append(value)
-                
-                records.append(record)
-            
-            # Create/populate database table (similar to CSV logic)
+            cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
                 field_names = [f['name'] for f in field_definitions]
                 cols_def = ', '.join([f'[{name}] TEXT' for name in field_names])
-                self.db_cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}]')
-                self.db_cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def})')
-            
+                cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}]')
+                cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def})')
+
             if db_mode == 'REPLACE':
-                self.db_cursor.execute(f'DELETE FROM [{destination_target}]')
+                cursor.execute(f'DELETE FROM [{destination_target}]')
             
-            # Insert records
             field_names = [f['name'] for f in field_definitions]
             placeholders = ', '.join(['?'] * len(field_names))
             quoted_fields = ', '.join([f'[{name}]' for name in field_names])
             insert_sql = f'INSERT INTO [{destination_target}] ({quoted_fields}) VALUES ({placeholders})'
-            
-            self.db_cursor.executemany(insert_sql, records)
-            print(f"Loaded {len(records)} records from fixed-width file")
-            
+
+            batch, total_rows_processed = [], 0
+            batch_size = 10000
+
+            self.db_connection.execute('BEGIN TRANSACTION;')
+            try:
+                with open(filename, 'r', encoding='utf-8') as infile:
+                    for line in infile:
+                        line = line.rstrip('\n\r')
+                        record = [line[f['start']:f['end']].strip() if f['start'] < len(line) else "" for f in field_definitions]
+                        
+                        if not any(record): continue
+
+                        batch.append(record)
+                        total_rows_processed += 1
+                        if len(batch) >= batch_size:
+                            cursor.executemany(insert_sql, batch); batch = []
+                
+                if batch: cursor.executemany(insert_sql, batch)
+                self.db_connection.execute('COMMIT;')
+                print(f"Loaded {total_rows_processed} records into table {destination_target}")
+
+            except Exception as e:
+                self.db_connection.execute('ROLLBACK;'); raise e
+        
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {filename}")
         except Exception as e:
-            self.variables['ERR'] = 1.0
-            self.variables['ERRMSG$'] = str(e)
-            print(f"LOAD FIXED error: {e}")
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"LOAD FIXED error: {e}")
 
         
     def _parse_for_statement(self):
