@@ -3449,16 +3449,20 @@ class Interpreter:
         destination_mode, destination_target, db_mode = None, None, None
 
         if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'; self._next_token()
+            destination_mode = 'CREATE_TABLE'
+            self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_expression()
+            destination_target = self._parse_table_name()
         elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'; self._next_token()
+            destination_mode = 'INTO_TABLE'
+            self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_expression()
+            destination_target = self._parse_table_name()
             if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
-                db_mode = self._current_token()[1]; self._next_token()
-            else: self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+                db_mode = self._current_token()[1]
+                self._next_token()
+            else:
+                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
         else: self._error("Expected CREATE TABLE, INTO TABLE clause.")
 
         options = {'header': True, 'sheetname': None, 'sheetindex': 0, 'batchsize': 10000,
@@ -3544,12 +3548,12 @@ class Interpreter:
             destination_mode = 'CREATE_TABLE'
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_expression()
+            destination_target = self._parse_table_name()
         elif self._current_token() and self._current_token()[0] == 'INTO':
             destination_mode = 'INTO_TABLE'
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_expression()
+            destination_target = self._parse_table_name()
             if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
                 db_mode = self._current_token()[1]
                 self._next_token()
