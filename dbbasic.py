@@ -12,13 +12,59 @@ import glob
 import subprocess
 import requests
 from datetime import datetime, timedelta
+import xml.etree.ElementTree as ET
 import webbrowser
 import zipfile
 import xlrd3
+import openpyxl
+from openpyxl.styles import Font, PatternFill, Alignment
 from tui_runner import FormRunner
+from typing import Any, Dict, List, Optional, Union
 
 csv.field_size_limit(1024 * 1024)
 
+
+# Add this new function after your imports, before the class definitions.
+
+# This is the correct version of the function.
+
+def preprocess_includes(source_code, base_path='.', included_files=None):
+    """
+    Recursively finds all 'INCLUDE "filename"' statements and replaces them
+    with the content of the specified file.
+    """
+    if included_files is None:
+        included_files = set()
+
+    include_pattern = re.compile(r'^\s*INCLUDE\s+"([^"]+)"', re.IGNORECASE | re.MULTILINE)
+
+    def replacer(match):
+        include_filename = match.group(1)
+        include_path = os.path.join(base_path, include_filename)
+        absolute_path = os.path.abspath(include_path)
+
+        if absolute_path in included_files:
+            return f"' SKIPPING CIRCULAR INCLUDE: \"{include_filename}\""
+
+        included_files.add(absolute_path)
+        try:
+            with open(include_path, 'r', encoding='utf-8') as f:
+                included_code = f.read()
+            new_base_path = os.path.dirname(include_path)
+            processed_included_code = preprocess_includes(included_code, new_base_path, included_files)
+            return (
+                f'\' <<< START INCLUDE: "{include_filename}"\n'
+                f'{processed_included_code}\n'
+                f'\' <<< END INCLUDE: "{include_filename}"'
+            )
+        except FileNotFoundError:
+            return f'ERROR 2, "INCLUDE file not found: {include_filename} in folder {absolute_path}"'
+        except Exception as e:
+            return f'ERROR 1, "Error reading INCLUDE file: {e}"'
+
+    # This line is crucial: it runs the replacement and ALWAYS returns a string.
+    return include_pattern.sub(replacer, source_code)
+    
 class SqliteStringFunctions:
     """
     A class to encapsulate custom string functions for SQLite.
@@ -153,7 +199,8 @@ class Lexer:
                         r'\bFOR\s+EACH\b': 'FOREACH', r'\bEND\s+TRANSACTION\b': 'ENDTRANSACTION', r'\bREAD\s+FILE\b': 'READFILE',
                         r'\bTO\s+FILE\b': 'TOFILE', r'\bINTO\s+FILE\b': 'INTOFILE', 
                         r'\bANALYZE\s+CSV\b': 'ANALYZECSV',r'\bANALYZE\s+FIXED\b': 'ANALYZEFIXED',
-                        r'\bANALYZE\s+JSON\b': 'ANALYZEJSON', r'\bANALYZE\s+FILE\b': 'ANALYZEFILE',
+                        r'\bANALYZE\s+JSONL\b': 'ANALYZEJSONL', r'\bANALYZE\s+JSON\b': 'ANALYZEJSON',
+                        r'\bANALYZE\s+XML\b': 'ANALYZEXML',r'\bANALYZE\s+FILE\b': 'ANALYZEFILE',
                         r'\bON\s+ERROR\s+GOTO\b': 'ONERRORGOTO',
                         r'\bEND\s+FORM\b': 'ENDFORM',r'\bOPEN\s+FORM\b': 'OPENFORM',
                         r'\bLIST\s+FIELDS\b': 'LISTFIELDS'}
@@ -197,7 +244,7 @@ class Lexer:
             ('LINEINPUT', r'\bLINEINPUT\b(?!\$)'), ('TOFILE', r'\bTOFILE\b(?!\$)'), ('READFILE', r'\bREADFILE\b(?!\$)'),
             ('ENDLOOP', r'\bENDLOOP\b(?!\$)'), ('DATABASE', r'\bDATABASE\b(?!\$)'), ('SELECT', r'\bSELECT\b(?!\$)'),
             ('INSERT', r'\bINSERT\b(?!\$)'), ('DELETE', r'\bDELETE\b(?!\$)'), ('DESCRIBE', r'\bDESCRIBE\b(?!\$)'),
-            ('UPDATE', r'\bUPDATE\b(?!\$)'), ('CREATE', r'\bCREATE\b(?!\$)'), ('DROP', r'\bDROP\b(?!\$)'),
+            ('UPDATE', r'\bUPDATE\b(?!\$)'), ('CREATE', r'\bCREATE\b(?!\$)'), ('DROP', r'\bDROP\b(?!\$)'),('ALTER', r'\bALTER\b(?!\$)'),
             ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
             ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
             ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('ERROR', r'\bERROR\b(?!\$)'),
@@ -322,6 +369,8 @@ class Lexer:
             elif u_value == 'ENDTRANSACTION': kind, value = 'END TRANSACTION', 'END TRANSACTION'
             elif u_value == 'ANALYZECSV': kind, value = 'ANALYZE CSV', 'ANALYZE CSV'
             elif u_value == 'ANALYZEJSON': kind, value = 'ANALYZE JSON', 'ANALYZE JSON'
+            elif u_value == 'ANALYZEJSONL': kind, value = 'ANALYZE JSONL', 'ANALYZE JSONL'
+            elif u_value == 'ANALYZEXML': kind, value = 'ANALYZE XML', 'ANALYZE XML'
             elif u_value == 'ANALYZEFILE': kind, value = 'ANALYZE FILE', 'ANALYZE FILE'
             elif u_value == 'ANALYZEFIXED': kind, value = 'ANALYZE FIXED', 'ANALYZE FIXED'
             elif u_value == 'ONERRORGOTO': kind, value = 'ON ERROR GOTO', 'ON ERROR GOTO'
@@ -409,7 +458,7 @@ class Formatter:
         return value
 
 class Interpreter:
-    SQL_KEYWORDS = {'SELECT', 'INSERT', 'DELETE', 'UPDATE', 'CREATE', 'DROP', 'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'END TRANSACTION'}
+    SQL_KEYWORDS = {'SELECT', 'INSERT', 'DELETE', 'UPDATE', 'CREATE', 'DROP', 'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'END TRANSACTION', 'ALTER'}
 
     def __init__(self, lexer, cmd_args=None, debug=False):
         self.lexer = lexer
@@ -871,6 +920,10 @@ class Interpreter:
             self._parse_analyze_fixed_statement()
         elif token[0] == 'ANALYZE JSON':
             self._parse_analyze_json_statement()
+        elif token[0] == 'ANALYZE JSONL':
+            self._parse_analyze_jsonl_statement()
+        elif token[0] == 'ANALYZE XML':
+            self._parse_analyze_xml_statement()
         elif token[0] == 'PRINT':
             self._parse_print_statement()
         elif token[0] == 'DESCRIBE':
@@ -1091,9 +1144,9 @@ class Interpreter:
             if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
                 self._next_token()
                 format_token = self._current_token()
-                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED']:
+                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL"]:
                     output_format = format_token[1].upper()
-                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED"]: 
+                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED", "EXCEL"]: 
                         g_output_config.format = output_format
                         self._next_token()
                     else: 
@@ -1103,6 +1156,9 @@ class Interpreter:
 
     def _handle_output(self, results, column_names):
         if g_output_config.mode == "CONSOLE":
+            if g_output_config.format == "EXCEL":
+                self._error("Excel output requires FILE mode. Use: SET OUTPUT FILE \"filename.xlsx\" FORMAT EXCEL")
+                return
             writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}"); writer_function(results, column_names, sys.stdout)
         elif g_output_config.mode == "FILE":
             try:
@@ -1225,7 +1281,76 @@ class Interpreter:
                     line_parts.append(padded_value)
             
             stream.write("".join(line_parts) + "\n")
+
+    def _write_as_excel(self, results, headers, stream):
+        """Writes query results as an Excel file."""
+        # For Excel output, we need a file path, not a stream
+        if g_output_config.mode == "CONSOLE":
+            self._error("Excel output requires FILE mode. Use: SET OUTPUT FILE \"filename.xlsx\" FORMAT EXCEL")
+            return
+        
+        filename = g_output_config.file_path
+        if not filename.lower().endswith(('.xlsx', '.xls')):
+            filename += '.xlsx'
+        
+        # Create a new workbook and worksheet
+        workbook = openpyxl.Workbook()
+        worksheet = workbook.active
+        worksheet.title = "Query Results"
+        
+        # Define styles
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
+        header_alignment = Alignment(horizontal="center", vertical="center")
+        
+        # Write headers
+        for col_idx, header in enumerate(headers, 1):
+            cell = worksheet.cell(row=1, column=col_idx, value=header)
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = header_alignment
+        
+        # Write data rows
+        for row_idx, row in enumerate(results, 2):
+            for col_idx, value in enumerate(row, 1):
+                # Handle None values
+                if value is None:
+                    value = ""
+                # Convert to appropriate Excel data types
+                elif isinstance(value, (int, float)):
+                    # Keep numeric values as numbers
+                    pass
+                else:
+                    # Convert everything else to string
+                    value = str(value)
+                
+                worksheet.cell(row=row_idx, column=col_idx, value=value)
+        
+        # Auto-adjust column widths
+        for column in worksheet.columns:
+            max_length = 0
+            column_letter = column[0].column_letter
             
+            for cell in column:
+                try:
+                    if len(str(cell.value)) > max_length:
+                        max_length = len(str(cell.value))
+                except:
+                    pass
+            
+            adjusted_width = min(max_length + 2, 50)  # Cap at 50 characters
+            worksheet.column_dimensions[column_letter].width = adjusted_width
+        
+        # Add freeze panes to keep headers visible
+        worksheet.freeze_panes = "A2"
+        
+        # Save the workbook
+        try:
+            workbook.save(filename)
+            #print(f"{len(results)} rows written to Excel file: {filename}")
+        except Exception as e:
+            self._error(f"Error writing Excel file: {e}")
+        
     def _parse_if_statement(self):
         start_if_index = self.token_index
         self._expect('IF')
@@ -3152,10 +3277,12 @@ class Interpreter:
     def _parse_load_statement(self):
         peek = self._peek_token()
         if peek and peek[0] == 'CSV': self._parse_load_csv_statement()
-        elif peek and peek[0] == 'JSON': self._parse_load_json_statement()
         elif peek and peek[0] == 'EXCEL': self._parse_load_excel_statement()
         elif peek and peek[0] == 'FIXED': self._parse_load_fixed_statement()
-        else: self._error("Expected CSV, JSON, FIXED, or EXCEL after LOAD")
+        elif peek and peek[0] == 'JSON': self._parse_load_json_statement()
+        elif peek and peek[0] == 'JSONL': self._parse_load_jsonl_statement()
+        elif peek and peek[0] == 'XML': self._parse_load_xml_statement()
+        else: self._error("Expected CSV, JSON, JSONL, FIXED, or EXCEL after LOAD")
 
     def _parse_table_name(self):
         """Parses a table name, accepting either an unquoted ID or a quoted STRING."""
@@ -3531,7 +3658,103 @@ class Interpreter:
         except FileNotFoundError: self._error(f"File not found: {excel_filename}")
         except xlrd3.biffh.XLRDError as e: self._error(f"Excel file error: {e}")
         except Exception as e: self._error(f"An error occurred during Excel load: {e}")
- 
+
+    def _parse_load_json_normalize(self, json_filename, root_table='main'):
+        """Normalizes JSON data into multiple related tables."""
+
+        # Parse options (defaults)
+        options = {
+            'max_depth': 3,
+            'array_threshold': 5,
+            'prefix': '',
+            'drop_existing': True,
+            'batchsize': 1000,
+            'keep_objects': False,
+            'keep_arrays': False,
+        }
+
+        # Allow user overrides (from OPTIONS token)
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
+
+            # Parse key=value pairs
+            for match in re.finditer(r'(\w+)\s*=\s*([^,\s]+)', options_str):
+                key, value = match.groups()
+                key = key.lower()
+
+                if key == 'max_depth':
+                    options['max_depth'] = int(value)
+                elif key == 'array_threshold':
+                    options['array_threshold'] = int(value)
+                elif key == 'prefix':
+                    options['prefix'] = value.strip('"\'')
+                elif key == 'drop_existing':
+                    options['drop_existing'] = value.lower() in ['true', '1', 'yes']
+                elif key == 'batchsize':
+                    options['batchsize'] = int(value)
+                elif key == 'keep_objects':
+                    options['keep_objects'] = value.lower() in ['true', '1', 'yes']
+                elif key == 'keep_arrays':
+                    options['keep_arrays'] = value.lower() in ['true', '1', 'yes']
+
+        try:
+            # Load JSON file
+            with open(json_filename, 'r', encoding='utf-8') as infile:
+                data = json.load(infile)
+
+            # Ensure list of records
+            if isinstance(data, dict):
+                data = [data]
+            if not isinstance(data, list):
+                self._error("JSON file must contain an array of objects or a single object.")
+                return
+            if not data:
+                print("0 records loaded (JSON is empty).")
+                return
+
+            # Initialize the new normalizer
+            normalizer = JSONToSQLiteNormalizer(
+                db_path=":memory:",
+                root_table=root_table,
+                array_threshold=options['array_threshold'],
+                keep_objects=options['keep_objects'],
+                keep_arrays=options['keep_arrays'],
+            )
+            if self.db_connection is not None:
+                # Close the temporary connection to avoid leaving it open
+                normalizer.conn.close()
+                # Now, use the interpreter's main database connection
+                normalizer.conn = self.db_connection
+                normalizer.cursor = self.db_connection.cursor()
+
+            normalizer.load_json(data)
+
+            print(f"JSON normalization complete:")
+            print(f"  - Processed {len(data)} root records")
+
+            # Report tables and row counts
+            self.db_connection.commit()
+            self.db_cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+            tables = [row[0] for row in self.db_cursor.fetchall()]
+            print(f"  - Created {len(tables)} tables:")
+            for table in tables:
+                self.db_cursor.execute(f"SELECT COUNT(*) FROM {table}")
+                count = self.db_cursor.fetchone()[0]
+                print(f"    * {table}: {count} records")
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {json_filename}")
+        except json.JSONDecodeError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"JSON parsing error: {e}"
+            self._error(f"JSON parsing error: {e}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during JSON normalization: {e}")
+            
     def _parse_load_json_statement(self):
         """Loads a JSON file (array of objects) into a database table with data type inference."""
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
@@ -3540,6 +3763,7 @@ class Interpreter:
 
         # --- 1. PARSE CLAUSES ---
         json_filename = self._parse_expression()
+        
         destination_mode = None
         destination_target = None
         db_mode = None
@@ -3559,9 +3783,14 @@ class Interpreter:
                 self._next_token()
             else:
                 self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+                # Check for NORMALIZE keyword (no table specified)
         else:
             self._error("Expected CREATE TABLE or INTO TABLE clause.")
 
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'NORMALIZE':
+            self._next_token()
+            return self._parse_load_json_normalize(json_filename, destination_target)
+            
         options = {'batchsize': 10000}
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
@@ -3636,6 +3865,365 @@ class Interpreter:
         except Exception as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"An error occurred during JSON load: {e}"
             self._error(f"An error occurred during JSON load: {e}")
+
+    def _parse_load_jsonl_statement(self):
+        """Loads a JSON Lines file line-by-line into a database table."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('LOAD')
+        self._expect('JSONL')
+
+        # --- 1. PARSE CLAUSES (Same as LOAD JSON) ---
+        jsonl_filename = self._parse_expression()
+        destination_mode, destination_target, db_mode = None, None, None
+
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
+        elif self._current_token() and self._current_token()[0] == 'INTO':
+            destination_mode = 'INTO_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+                db_mode = self._current_token()[1]
+                self._next_token()
+            else:
+                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+        else:
+            self._error("Expected CREATE TABLE or INTO TABLE clause.")
+
+        options = {'batchsize': 10000, 'sample_size': 1000} 
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
+            if 'batchsize=' in options_str:
+                options['batchsize'] = int(re.search(r'batchsize=(\d+)', options_str).group(1))
+            if 'sample_size=' in options_str:
+                options['sample_size'] = int(re.search(r'sample_size=(\d+)', options_str).group(1))
+
+        try:
+            # --- 2. SCHEMA INFERENCE (from a sample) ---
+            headers, seen_keys, col_types = [], set(), {}
+            sample_size = options['sample_size']
+            
+            with open(jsonl_filename, 'r', encoding='utf-8') as infile:
+                for i, line in enumerate(infile):
+                    if i >= sample_size: break
+                    line = line.strip()
+                    if not line: continue
+                    
+                    record = json.loads(line)
+                    if not isinstance(record, dict): self._error(f"Line {i+1} is not a JSON object.")
+                    
+                    for key, value in record.items():
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            headers.append(key)
+                            col_types[key] = 'INTEGER'
+                        
+                        # Data type promotion logic
+                        current_type = col_types[key]
+                        if value is None or current_type == 'TEXT': continue
+                        if isinstance(value, str): col_types[key] = 'TEXT'
+                        elif isinstance(value, float): col_types[key] = 'REAL'
+                        elif not isinstance(value, int): col_types[key] = 'TEXT'
+
+            if not headers:
+                print("0 records loaded (JSONL file is empty or contains no objects).")
+                return
+
+            # --- 3. DATABASE OPERATIONS ---
+            cursor = self.db_cursor
+            if destination_mode == 'CREATE_TABLE':
+                cols_def = ', '.join([f'[{h}] {col_types[h]}' for h in headers])
+                cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];')
+                cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+
+            if db_mode == 'REPLACE':
+                cursor.execute(f'DELETE FROM [{destination_target}];')
+
+            placeholders = ', '.join(['?'] * len(headers))
+            quoted_headers = ', '.join([f'[{h}]' for h in headers])
+            insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+            
+            # --- 4. FULL FILE PROCESSING (Streaming) ---
+            self.db_connection.execute('BEGIN TRANSACTION;')
+            try:
+                batch = []
+                total_rows_processed = 0
+                with open(jsonl_filename, 'r', encoding='utf-8') as infile:
+                    for line in infile:
+                        line = line.strip()
+                        if not line: continue
+                        
+                        record = json.loads(line)
+                        # Prepare row based on inferred schema, handling missing keys
+                        row = [json.dumps(record.get(h)) if isinstance(record.get(h), (dict, list)) else record.get(h) for h in headers]
+                        batch.append(row)
+                        total_rows_processed += 1
+                        
+                        if len(batch) >= options['batchsize']:
+                            cursor.executemany(insert_sql, batch)
+                            batch = []
+                
+                if batch: cursor.executemany(insert_sql, batch)
+                self.db_connection.execute('COMMIT;')
+                print(f"{total_rows_processed} records loaded into table {destination_target}")
+
+            except Exception as e:
+                self.db_connection.execute('ROLLBACK;')
+                raise e
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {jsonl_filename}")
+        except json.JSONDecodeError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"JSONL parsing error: {e}"
+            self._error(f"JSONL parsing error: {e}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"An error occurred during JSONL load: {e}"
+            self._error(f"An error occurred during JSONL load: {e}")
+
+    def _parse_load_xml_statement(self):
+        """Loads data from an XML file into a database table using a streaming parser."""
+        from collections import Counter # Local import for this specific function
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('LOAD')
+        self._expect('XML')
+
+        # --- 1. Parse Clauses ---
+        xml_filename = self._parse_expression()
+        destination_mode, destination_target, db_mode = None, None, None
+
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
+        elif self._current_token() and self._current_token()[0] == 'INTO':
+            destination_mode = 'INTO_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+                db_mode = self._current_token()[1]
+                self._next_token()
+            else:
+                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
+        else:
+            self._error("Expected CREATE TABLE or INTO TABLE clause.")
+
+        # --- NEW: Check for the NORMALIZE keyword ---
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'NORMALIZE':
+            self._next_token()
+            # Hand off to the new normalization function
+            return self._parse_load_xml_normalize(xml_filename, destination_target)
+
+        
+        # --- 2. Parse Options ---
+        options = {'record_tag': None, 'fields': None, 'batchsize': 10000}
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
+            for match in re.finditer(r'(\w+)\s*=\s*([^"\s]+|"[^"]*")', options_str):
+                key, value = match.groups()
+                options[key.lower()] = value.strip('"')
+
+        record_tag = options.get('record_tag')
+        field_list = options['fields'].split(',') if options['fields'] else None
+        is_single_record_mode = False
+
+        try:
+            # --- 3. Infer record_tag and fields if not provided ---
+            if not record_tag or not field_list:
+                tree = ET.parse(xml_filename)
+                root = tree.getroot()
+                
+                if not record_tag:
+                    if len(root) == 0: self._error("Cannot infer 'record_tag': XML file has an empty root element.")
+                    child_tags = [child.tag for child in root]
+                    tag_counts = Counter(child_tags)
+                    all_tags_are_unique = all(count == 1 for count in tag_counts.values())
+
+                    if all_tags_are_unique and len(child_tags) > 1:
+                        record_tag = root.tag
+                        is_single_record_mode = True
+                        print(f"Notice: Detected single-record structure. Using root <{root.tag}> as the record.", file=sys.stderr)
+                    elif 'row' in child_tags:
+                        record_tag = 'row'
+                        print("Notice: 'record_tag' not specified. Inferred '<row>'.", file=sys.stderr)
+                    elif 'record' in child_tags:
+                        record_tag = 'record'
+                        print("Notice: 'record_tag' not specified. Inferred '<record>'.", file=sys.stderr)
+                    else:
+                        record_tag, _ = tag_counts.most_common(1)[0]
+                        print(f"Notice: 'record_tag' not specified. Inferred most frequent tag: '<{record_tag}>'.", file=sys.stderr)
+
+                if not field_list:
+                    if is_single_record_mode:
+                        field_list = [child.tag for child in root]
+                    else:
+                        first_record_element = root.find(record_tag)
+                        if first_record_element is None: self._error(f"Could not find any elements with the tag '<{record_tag}>'.")
+                        field_list = [child.tag for child in first_record_element]
+                    
+                    if not field_list: self._error(f"Inferred record tag '<{record_tag}>' has no child elements to use as fields.")
+                    print(f"Notice: 'fields' not specified, inferred columns: {', '.join(field_list)}", file=sys.stderr)
+
+            # --- 4. Database Setup ---
+            cursor = self.db_cursor
+            if destination_mode == 'CREATE_TABLE':
+                cols_def = ', '.join([f'[{h}] TEXT' for h in field_list])
+                cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];')
+                cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+
+            if db_mode == 'REPLACE':
+                cursor.execute(f'DELETE FROM [{destination_target}];')
+
+            # --- 5. Stream and Load Data ---
+            placeholders = ', '.join(['?'] * len(field_list))
+            quoted_headers = ', '.join([f'[{h}]' for h in field_list])
+            insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+            
+            self.db_connection.execute('BEGIN TRANSACTION;')
+            try:
+                batch = []
+                total_rows_processed = 0
+                context = ET.iterparse(xml_filename, events=('end',))
+                for _, element in context:
+                    if element.tag == record_tag:
+                        row_data = [element.findtext(field, default="") for field in field_list]
+                        batch.append(row_data)
+                        total_rows_processed += 1
+
+                        if len(batch) >= options['batchsize']:
+                            cursor.executemany(insert_sql, batch)
+                            batch = []
+                        
+                        element.clear()
+                
+                if batch: cursor.executemany(insert_sql, batch)
+                self.db_connection.execute('COMMIT;')
+                print(f"{total_rows_processed} records loaded into table {destination_target}")
+
+            except Exception as e:
+                self.db_connection.execute('ROLLBACK;')
+                raise e
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {xml_filename}")
+        except ET.ParseError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"XML parsing error: {e}"
+            self._error(f"XML parsing error: {e}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during XML load: {e}")
+
+    def _value_converter(self, value):
+        """Tries to convert a string value to int or float."""
+        if not isinstance(value, str): return value
+        try:
+            # If it contains a decimal, it's a float. Otherwise, try integer.
+            return float(value) if '.' in value else int(value)
+        except (ValueError, TypeError):
+            return value # Not a number, return the original string
+
+    def _xml_element_to_dict(self, element):
+        """A helper that recursively converts an XML element to a dictionary."""
+        node = {}
+        # Convert attributes (attributes are always kept as strings)
+        for key, value in element.attrib.items():
+            node[f"@{key}"] = value
+
+        # Convert child elements
+        for child in element:
+            child_dict = self._xml_element_to_dict(child)
+            if child.tag in node:
+                if not isinstance(node[child.tag], list):
+                    node[child.tag] = [node[child.tag]]
+                node[child.tag].append(child_dict)
+            else:
+                node[child.tag] = child_dict
+        
+        text = element.text.strip() if element.text else ""
+
+        if not node and not element.attrib:
+            # This is a leaf node (like <id>1</id>). Convert its value.
+            return self._value_converter(text)
+
+        if text:
+            # This is mixed content. Convert the text part.
+            node['#text'] = self._value_converter(text)
+
+        return node
+        
+
+    def _parse_load_xml_normalize(self, xml_filename, root_table_name='main'):
+        """Converts an XML file to a list of dicts and uses the JSON normalizer."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        
+        from collections import Counter # Local import
+        
+        try:
+            tree = ET.parse(xml_filename)
+            root = tree.getroot()
+
+            if len(root) == 0:
+                self._error("Cannot normalize: XML file has an empty root or is not record-oriented.")
+            
+            # Heuristic: The most frequent tag directly under the root is the "record" tag.
+            child_tags = [child.tag for child in root]
+            tag_counts = Counter(child_tags)
+            record_tag, _ = tag_counts.most_common(1)[0]
+            print(f"Notice: Inferred record tag '<{record_tag}>' for normalization.", file=sys.stderr)
+
+            list_of_records = []
+            for record_element in root.findall(record_tag):
+                record_dict = self._xml_element_to_dict(record_element)
+                list_of_records.append(record_dict)
+
+            if not list_of_records:
+                print("0 records found to normalize.")
+                return
+
+            # --- Reuse the existing JSON Normalizer ---
+            normalizer = JSONToSQLiteNormalizer(
+                db_path=":memory:",
+                root_table=root_table_name or 'main',
+            )
+            if self.db_connection is not None:
+                normalizer.conn.close()
+                normalizer.conn = self.db_connection
+                normalizer.cursor = self.db_connection.cursor()
+            
+            normalizer.load_json(list_of_records)
+            
+            # --- Reporting Logic (copied from JSON normalize) ---
+            print(f"XML normalization complete:")
+            print(f"  - Processed {len(list_of_records)} root records")
+            self.db_connection.commit()
+            self.db_cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+            )
+            tables = [row[0] for row in self.db_cursor.fetchall()]
+            print(f"  - Created {len(tables)} tables:")
+            for table in tables:
+                self.db_cursor.execute(f"SELECT COUNT(*) FROM [{table}]")
+                count = self.db_cursor.fetchone()[0]
+                print(f"    * {table}: {count} records")
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {xml_filename}")
+        except ET.ParseError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"XML parsing error: {e}"
+            self._error(f"XML parsing error: {e}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during XML normalization: {e}")
             
     def _parse_for_each_statement(self):
         self._expect('FOR EACH')
@@ -4778,8 +5366,50 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during file analysis: {e}")
 
+    def _describe_json_node(self, node, indent=""):
+        """A recursive helper to print the structure of a JSON node."""
+        if isinstance(node, dict):
+            print(f"{indent}(Object)")
+            for key, value in node.items():
+                print(f"{indent}  - \"{key}\": ", end="")
+                self._describe_json_node(value, indent + "    ")
+        elif isinstance(node, list):
+            print(f"{indent}(Array)")
+            if not node:
+                print(f"{indent}  (empty)")
+                return
+
+            # NEW: Check if the array contains objects we can merge for a complete view
+            if any(isinstance(item, dict) for item in node):
+                merged_object = {}
+                for item in node:
+                    if isinstance(item, dict):
+                        for key, value in item.items():
+                            # Add key to the merged object if we haven't seen it yet
+                            if key not in merged_object:
+                                merged_object[key] = value
+                
+                # Describe the synthetic merged object, marked with [*]
+                print(f"{indent}  - [*]: ", end="")
+                self._describe_json_node(merged_object, indent + "       ")
+            else:
+                # It's a simple array (e.g., of strings), so just describe the first element
+                print(f"{indent}  - [0]: ", end="")
+                self._describe_json_node(node[0], indent + "       ")
+
+        elif isinstance(node, str):
+            print("(String)")
+        elif isinstance(node, bool):
+            print("(Boolean)")
+        elif isinstance(node, int) or isinstance(node, float):
+            print("(Number)")
+        elif node is None:
+            print("(Null)")
+        else:
+            print("(Unknown Type)")
+            
     def _parse_analyze_json_statement(self):
-        """Parses and executes ANALYZE JSON, reporting on structural consistency."""
+        """Parses and executes ANALYZE JSON, reporting on structural consistency and format."""
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ANALYZE JSON')
         filename = self._parse_expression()
@@ -4797,17 +5427,12 @@ class Interpreter:
                 data = json.load(infile)
             
             # If the JSON is a single object, treat it as an array with one element
-            if isinstance(data, dict):
-                data = [data]
+            records_to_analyze = data if isinstance(data, list) else [data]
 
-            if not isinstance(data, list):
-                self._error("JSON file must contain an array of objects or a single object.")
-                return
-
-            report['TOTAL_RECORDS'] = len(data)
+            report['TOTAL_RECORDS'] = len(records_to_analyze)
             
             # Analyze the consistency of keys across all objects
-            key_sets = [tuple(sorted(d.keys())) for d in data if isinstance(d, dict)]
+            key_sets = [tuple(sorted(d.keys())) for d in records_to_analyze if isinstance(d, dict)]
             key_distribution = {}
             for ks in key_sets:
                 key_distribution[ks] = key_distribution.get(ks, 0) + 1
@@ -4819,11 +5444,18 @@ class Interpreter:
                 self.variables[into_hash_name] = self._python_to_basic_data(report)
             else:
                 print(f"--- JSON Analysis Report for: {filename} ---")
-                print(f"  Total Records : {report['TOTAL_RECORDS']}")
-                print(f"  Is Consistent : {'Yes' if report['IS_CONSISTENT'] else 'No'}")
-                print("  Key Set Distribution:")
-                for key_set, count in report['KEY_SET_DISTRIBUTION'].items():
-                    print(f"    - {int(count)} record(s) with keys: {key_set}")
+                print(f"  --- Consistency Check ---")
+                print(f"  Total Records (Objects) : {report['TOTAL_RECORDS']}")
+                print(f"  Is Consistent           : {'Yes' if report['IS_CONSISTENT'] else 'No'}")
+                if report['KEY_SET_DISTRIBUTION']:
+                    print("  Key Set Distribution:")
+                    for key_set, count in report['KEY_SET_DISTRIBUTION'].items():
+                        print(f"    - {int(count)} record(s) with keys: {key_set}")
+                
+                # --- NEW: Automatically print the structure map ---
+                print(f"\n  --- Simplified Structure ---")
+                self._describe_json_node(data)
+
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -4835,7 +5467,177 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during JSON analysis: {e}")
 
+    def _parse_analyze_jsonl_statement(self):
+        """Analyzes a JSON Lines file for validity and structural consistency."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ANALYZE JSONL')
+        filename = self._parse_expression()
 
+        into_hash_name = None
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            into_hash_name = self._expect('ID')[1]
+            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
+                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+
+        report = {}
+        key_distribution = {}
+        total_lines, valid_records, invalid_records = 0, 0, 0
+        all_records = []
+        
+        try:
+            with open(filename, 'r', encoding='utf-8', errors='replace') as infile:
+                for line in infile:
+                    total_lines += 1
+                    line = line.strip()
+                    if not line:
+                        continue # Skip empty lines but count them
+
+                    try:
+                        record = json.loads(line)
+                        all_records.append(record) # Store valid records for structure analysis
+                        valid_records += 1
+                        if isinstance(record, dict):
+                            key_set = tuple(sorted(record.keys()))
+                            key_distribution[key_set] = key_distribution.get(key_set, 0) + 1
+                    except json.JSONDecodeError:
+                        invalid_records += 1
+
+            # Build the final report
+            report['TOTAL_RECORDS'] = total_lines
+            report['VALID_JSON_RECORDS'] = valid_records
+            report['INVALID_JSON_RECORDS'] = invalid_records
+            report['IS_CONSISTENT'] = -1.0 if len(key_distribution) <= 1 and valid_records > 0 else 0.0
+            
+            # Store key distribution for both INTO and print modes
+            report['KEY_SET_DISTRIBUTION'] = self._python_to_basic_data(key_distribution)
+
+            if into_hash_name:
+                self.variables[into_hash_name] = self._python_to_basic_data(report)
+            else:
+                print(f"--- JSONL Analysis Report for: {filename} ---")
+                print(f"  --- Consistency Check ---")
+                print(f"  Total Lines Read        : {report['TOTAL_RECORDS']}")
+                print(f"  Valid JSON Objects      : {report['VALID_JSON_RECORDS']}")
+                print(f"  Invalid JSON Lines      : {report['INVALID_JSON_RECORDS']}")
+                print(f"  Consistent Structure    : {'Yes' if report['IS_CONSISTENT'] else 'No'}")
+                
+                # Use the unconverted key_distribution for printing
+                if key_distribution:
+                    print("  Key Set Distribution:")
+                    for key_set, count in key_distribution.items():
+                        key_str = ", ".join(f"'{k}'" for k in key_set)
+                        print(f"    - {int(count)} record(s) with keys: ({key_str})")
+                
+                # --- NEW: Automatically print the structure map ---
+                if all_records:
+                    print(f"\n  --- Simplified Structure ---")
+                    # The file represents an array, so we pass the list of records
+                    self._describe_json_node(all_records)
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {filename}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during JSONL analysis: {e}")
+
+    def _describe_xml_node(self, element, indent=""):
+        """A recursive helper to print a reduced structure of an XML node."""
+        print(f"{indent}<{element.tag}>")
+
+        # Display attributes of the current element
+        if element.attrib:
+            for key in element.attrib:
+                print(f"{indent}  - @{key} (Attribute)")
+        
+        # Find unique child tags to describe the structure without repetition
+        processed_child_tags = set()
+        for child in element:
+            if child.tag not in processed_child_tags:
+                # Recurse on the first instance of each unique child tag
+                self._describe_xml_node(child, indent + "  ")
+                processed_child_tags.add(child.tag)
+                
+    def _parse_analyze_xml_statement(self):
+        """Analyzes an XML file to determine its structure."""
+        from collections import Counter # Local import for this specific function
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ANALYZE XML')
+        filename = self._parse_expression()
+
+        into_hash_name = None
+        if self._current_token() and self._current_token()[0] == 'INTO':
+            self._next_token()
+            into_hash_name = self._expect('ID')[1]
+            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
+                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+        
+        try:
+            report = {}
+            tree = ET.parse(filename)
+            root = tree.getroot()
+
+            report['ROOT_ELEMENT'] = root.tag
+            report['TOTAL_CHILD_ELEMENTS'] = len(root)
+
+            predominant_tag, record_count, inferred_fields = "N/A", 0, []
+
+            if len(root) > 0:
+                child_tags = [child.tag for child in root]
+                tag_counts = Counter(child_tags)
+                all_tags_are_unique = all(count == 1 for count in tag_counts.values())
+
+                if all_tags_are_unique and len(child_tags) > 1:
+                    predominant_tag = root.tag
+                    record_count = 1
+                    inferred_fields = sorted(child_tags)
+                else:
+                    predominant_tag, record_count = tag_counts.most_common(1)[0]
+                    fields_set = set()
+                    sample_limit = 100 
+                    records_sampled = 0
+                    for child in root:
+                        if child.tag == predominant_tag:
+                            if records_sampled >= sample_limit: break
+                            for field in child: fields_set.add(field.tag)
+                            records_sampled += 1
+                    inferred_fields = sorted(list(fields_set))
+
+            report['PREDOMINANT_RECORD_TAG'] = predominant_tag
+            report['RECORD_COUNT'] = record_count
+            report['INFERRED_FIELDS'] = inferred_fields
+
+            if into_hash_name:
+                self.variables[into_hash_name] = self._python_to_basic_data(report)
+            else:
+                print(f"--- XML Analysis Report for: {filename} ---")
+                print(f"  --- Heuristic Analysis ---")
+                print(f"  Root Element            : <{report['ROOT_ELEMENT']}>")
+                print(f"  Total Direct Children   : {report['TOTAL_CHILD_ELEMENTS']}")
+                print(f"  Inferred Record Tag     : <{report['PREDOMINANT_RECORD_TAG']}>")
+                print(f"  Record Count            : {report['RECORD_COUNT']}")
+                if report['INFERRED_FIELDS']:
+                    fields_str = ", ".join(f"<{f}>" for f in report['INFERRED_FIELDS'])
+                    print(f"  Inferred Record Fields  : {fields_str}")
+                else:
+                    print(f"  Inferred Record Fields  : (No child fields found in record tag)")
+
+                # --- NEW: Automatically print the structure map ---
+                print(f"\n  --- Simplified Structure ---")
+                self._describe_xml_node(root)
+
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {filename}")
+        except ET.ParseError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"XML parsing error: {e}"
+            self._error(f"XML parsing error: {e}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during XML analysis: {e}")
+            
     def _parse_describe_statement(self):
         """Parses and executes DESCRIBE TABLE, printing or capturing metadata."""
         self._expect('DESCRIBE')
@@ -4890,6 +5692,183 @@ class Interpreter:
         if not self.gosub_stack: self._error("RETURN without GOSUB.")
         self.token_index = self.gosub_stack.pop()
 
+import re
+import json
+
+class JSONToSQLiteNormalizer:
+    def __init__(
+        self,
+        db_path: str,
+        root_table: str = 'main',
+        array_threshold: int = 2,
+        keep_objects: bool = False,
+        keep_arrays: bool = False,
+    ):
+        """
+        Normalize JSON into SQLite tables.
+
+        :param db_path: Path to SQLite database file
+        :param array_threshold: If array length < threshold, expand into columns, else normalize
+        :param keep_objects: If True, keep JSON objects as a single JSON column
+        :param keep_arrays: If True, keep arrays as a single JSON column
+        """
+        self.conn = sqlite3.connect(db_path)
+        self.cursor = self.conn.cursor()
+        self.array_threshold = array_threshold
+        self.keep_objects = keep_objects
+        self.keep_arrays = keep_arrays
+        self.root_table = root_table or 'main'
+
+    # -------------------------------------------------------------------------
+    # Internal helpers
+    # -------------------------------------------------------------------------
+
+    def _ensure_table(self, table: str, schema: Dict[str, str]):
+        """Create a table if it doesn't exist, and add any missing columns if it does."""
+        try:
+            # Check which columns already exist in the table.
+            # Using quotes [] for safety with table names that might be keywords.
+            res = self.cursor.execute(f"PRAGMA table_info([{table}])")
+            existing_cols = {row[1] for row in res.fetchall()}
+        except sqlite3.OperationalError:
+            # This error means the table doesn't exist at all yet.
+            existing_cols = set()
+
+        if not existing_cols:
+            # Table is new. Create it with all columns from the current record's schema.
+            cols = [f"[{col}] {dtype}" for col, dtype in schema.items()]
+            # The 'id' and 'parent_id' columns are standard for all normalized tables.
+            ddl = (
+                f"CREATE TABLE [{table}] "
+                f"(id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER, {', '.join(cols)})"
+            )
+            self.cursor.execute(ddl)
+        else:
+            # Table already exists. Check if the current record has new fields.
+            for col, dtype in schema.items():
+                if col not in existing_cols:
+                    # A new column was found. Add it to the existing table.
+                    self.cursor.execute(f"ALTER TABLE [{table}] ADD COLUMN [{col}] {dtype}")
+
+    def _insert_row(self, table: str, parent_id: Optional[int], row: Dict[str, Any]):
+        """Insert a row into a table"""
+        if not row:
+            # If no row data, insert with only parent_id
+            sql = f"INSERT INTO {table} (parent_id) VALUES (?)"
+            self.cursor.execute(sql, (parent_id,))
+            return self.cursor.lastrowid
+
+        cols, vals = zip(*row.items())
+        placeholders = ", ".join(["?"] * len(vals))
+        colnames = ", ".join(cols)
+        sql = (
+            f"INSERT INTO {table} (parent_id, {colnames}) "
+            f"VALUES (?{', ?' * len(vals)})"
+        )
+        self.cursor.execute(sql, (parent_id,) + vals)
+        return self.cursor.lastrowid
+
+    # -------------------------------------------------------------------------
+    # Normalization logic
+    # -------------------------------------------------------------------------
+
+    def _normalize(self, data: Any, parent_id: Optional[int], table: str):
+        """Recursive normalization"""
+        if isinstance(data, dict):
+            # ----------------------------------------
+            # Case: object
+            # ----------------------------------------
+            row = {}
+            schema = {}
+
+            if self.keep_objects:
+                # Store entire object as JSON
+                row[f"{table}_json"] = json.dumps(data)
+                schema[f"{table}_json"] = "TEXT"
+            else:
+                # Flatten object fields into columns
+                for k, v in data.items():
+                    col = f"{table}_{k}"
+                    if isinstance(v, (dict, list)):
+                        # handled separately later
+                        continue
+                    schema[col] = "TEXT"
+                    row[col] = str(v) if v is not None else None
+
+            # Create table and insert row
+            self._ensure_table(table, schema)
+            row_id = self._insert_row(table, parent_id, row)
+
+            # Handle nested dicts/lists
+            if not self.keep_objects:
+                for k, v in data.items():
+                    if isinstance(v, dict):
+                        self._normalize(v, row_id, f"{table}_{k}")
+                    elif isinstance(v, list):
+                        self._normalize(v, row_id, f"{table}_{k}")
+
+        elif isinstance(data, list):
+            # ----------------------------------------
+            # Case: array
+            # ----------------------------------------
+            if self.keep_arrays:
+                # Keep array as JSON
+                schema = {f"{table}_json": "TEXT"}
+                row = {f"{table}_json": json.dumps(data)}
+                self._ensure_table(table, schema)
+                self._insert_row(table, parent_id, row)
+
+            elif (
+                len(data) < self.array_threshold
+                and all(isinstance(x, (str, int, float, type(None))) for x in data)
+            ):
+                # Flatten small primitive array
+                row = {
+                    f"{table}_item{i+1}": str(v) if v is not None else None
+                    for i, v in enumerate(data)
+                }
+                schema = {k: "TEXT" for k in row}
+                self._ensure_table(table, schema)
+                self._insert_row(table, parent_id, row)
+
+            else:
+                # Normalize array of objects into child table
+                for item in data:
+                    self._normalize(item, parent_id, table)
+
+        else:
+            # ----------------------------------------
+            # Case: primitive value
+            # ----------------------------------------
+            schema = {f"{table}_value": "TEXT"}
+            row = {f"{table}_value": str(data) if data is not None else None}
+            self._ensure_table(table, schema)
+            self._insert_row(table, parent_id, row)
+
+    # -------------------------------------------------------------------------
+    # Public API
+    # -------------------------------------------------------------------------
+
+    def load_json(self, json_data: Union[str, List, Dict]):
+        """Load JSON data into SQLite"""
+        if isinstance(json_data, str):
+            data = json.loads(json_data)
+        else:
+            data = json_data
+
+        root_table = self.root_table
+        if isinstance(data, list):
+            for item in data:
+                self._normalize(item, None, root_table)
+        elif isinstance(data, dict):
+            self._normalize(data, None, root_table)
+        else:
+            raise ValueError("Root must be object or array")
+
+        self.conn.commit()
+        
+
+
 TEST_PROGRAM_SOURCE = """
 REM --- Test complex IF statement ---
 x = 5
@@ -4939,6 +5918,8 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
         if interpreter: interpreter.close()
         #print(f"\n--- Finished {source_name} ---", file=sys.stderr)
 
+# Replace your entire main function with this one.
+
 def main():
     if len(sys.argv) < 2:
         run_interpreter(TEST_PROGRAM_SOURCE, source_name="Internal Test Program")
@@ -4965,10 +5946,14 @@ def main():
          print("Error: No source file specified.", file=sys.stderr)
          return
 
+    filepath = None 
+    base_dir = ''
     if args[0] == '-':
         source_code = sys.stdin.read()
         source_name = "stdin"
         cmd_args = args[1:]
+        # For stdin, the base path for includes is the current working directory.
+        base_dir = os.getcwd()
     else:
         filepath = args[0]
         source_name = filepath
@@ -4982,10 +5967,16 @@ def main():
         except Exception as e:
             print(f"An error occurred reading file: {e}", file=sys.stderr)
             return
+        # For a file, the base path is the directory containing that file.
+        base_dir = os.path.dirname(os.path.abspath(filepath))
 
-    new_source_code = preprocess_continuations(source_code)
-    if source_code.strip():
-        # --- PASS THE NEW FLAG HERE ---
+    processed_source_code = preprocess_includes(source_code, base_path=base_dir)
+    
+    # This line will no longer fail because processed_source_code will be a string.
+    new_source_code = preprocess_continuations(processed_source_code)
+    
+    # This check now correctly uses the final processed code.
+    if processed_source_code and processed_source_code.strip():
         run_interpreter(new_source_code, cmd_args, source_name, debug=is_debug, dump_tokens=dump_tokens_flag)
     else:
         print("No source code provided.", file=sys.stderr)
