@@ -250,7 +250,7 @@ class Lexer:
             ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('ERROR', r'\bERROR\b(?!\$)'),
             ('XML', r'\bXML\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),
             ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'),('DUMP', r'\bDUMP\b(?!\$)'), 
-            ('HASH', r'\bHASH\b(?!\$)'),('SORT', r'\bSORT\b(?!\$)'),('FIXED', r'\bFIXED\b(?!\$)'),
+            ('HASH', r'\bHASH\b(?!\$)'),('SORT', r'\bSORT\b(?!\$)'),('FIXED', r'\bFIXED\b(?!\$)'),('EXECUTE', r'\bEXECUTE\b(?!\$)'),
             ('ARRAY', r'\bARRAY\b(?!\$)'), ('GOSUB', r'\bGOSUB\b(?!\$)'), ('RETURN', r'\bRETURN\b(?!\$)'),
             ('SHELL', r'\bSHELL\b(?!\$)'), ('BROWSER', r'\bBROWSER\b(?!\$)'),('RUN', r'\bRUN\b(?!\$)'),
             ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),('CHAIN', r'\bCHAIN\b(?!\$)'),
@@ -892,6 +892,8 @@ class Interpreter:
             self._parse_kill_statement()
         elif token[0] == 'SHELL':
             self._parse_shell_statement() 
+        elif token[0] == 'EXECUTE':
+            self._parse_execute_statement()
         elif token[0] == 'CHAIN':   # Replace current script with another DbBASIC script
             self._parse_chain_statement()
         elif token[0] == 'RUN':   # Run another script and come back
@@ -1012,6 +1014,16 @@ class Interpreter:
             else:
                 print(f"Runtime Error: {e}", file=sys.stderr)
 
+    def _parse_execute_statement(self):
+        self._expect('EXECUTE')
+        # Parse any valid expression that results in a string
+        sql_string = self._parse_expression()
+        if not isinstance(sql_string, str):
+            self._error("Argument for EXECUTE must be a string containing a SQL statement.")
+        
+        # Use the existing _execute_sql helper
+        self._execute_sql(sql_string)
+    
     def _parse_on_error_statement(self):
         self._expect('ON ERROR GOTO')
         target = self._current_token()
@@ -5692,9 +5704,6 @@ class Interpreter:
         if not self.gosub_stack: self._error("RETURN without GOSUB.")
         self.token_index = self.gosub_stack.pop()
 
-import re
-import json
-
 class JSONToSQLiteNormalizer:
     def __init__(
         self,
@@ -5704,14 +5713,6 @@ class JSONToSQLiteNormalizer:
         keep_objects: bool = False,
         keep_arrays: bool = False,
     ):
-        """
-        Normalize JSON into SQLite tables.
-
-        :param db_path: Path to SQLite database file
-        :param array_threshold: If array length < threshold, expand into columns, else normalize
-        :param keep_objects: If True, keep JSON objects as a single JSON column
-        :param keep_arrays: If True, keep arrays as a single JSON column
-        """
         self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
         self.array_threshold = array_threshold
@@ -5719,138 +5720,108 @@ class JSONToSQLiteNormalizer:
         self.keep_arrays = keep_arrays
         self.root_table = root_table or 'main'
 
-    # -------------------------------------------------------------------------
-    # Internal helpers
-    # -------------------------------------------------------------------------
+    # --- HELPER: This was missing ---
+    def _infer_sql_type(self, value):
+        if isinstance(value, int): return 'INTEGER'
+        if isinstance(value, float): return 'REAL'
+        if isinstance(value, bool): return 'INTEGER'
+        return 'TEXT'
 
-    def _ensure_table(self, table: str, schema: Dict[str, str]):
-        """Create a table if it doesn't exist, and add any missing columns if it does."""
+    def _ensure_table(self, table: str, schema: Dict[str, str], parent_table: Optional[str] = None):
+        pk_name = f"pk_{table}"
         try:
-            # Check which columns already exist in the table.
-            # Using quotes [] for safety with table names that might be keywords.
             res = self.cursor.execute(f"PRAGMA table_info([{table}])")
             existing_cols = {row[1] for row in res.fetchall()}
         except sqlite3.OperationalError:
-            # This error means the table doesn't exist at all yet.
             existing_cols = set()
 
         if not existing_cols:
-            # Table is new. Create it with all columns from the current record's schema.
+            fk_clause = ""
+            if parent_table:
+                fk_name = f"{parent_table}_fk"
+                fk_clause = f"[{fk_name}] INTEGER,"
+            
             cols = [f"[{col}] {dtype}" for col, dtype in schema.items()]
-            # The 'id' and 'parent_id' columns are standard for all normalized tables.
             ddl = (
                 f"CREATE TABLE [{table}] "
-                f"(id INTEGER PRIMARY KEY AUTOINCREMENT, parent_id INTEGER, {', '.join(cols)})"
+                f"([{pk_name}] INTEGER PRIMARY KEY AUTOINCREMENT, {fk_clause} {', '.join(cols)})"
             )
             self.cursor.execute(ddl)
         else:
-            # Table already exists. Check if the current record has new fields.
             for col, dtype in schema.items():
                 if col not in existing_cols:
-                    # A new column was found. Add it to the existing table.
                     self.cursor.execute(f"ALTER TABLE [{table}] ADD COLUMN [{col}] {dtype}")
 
-    def _insert_row(self, table: str, parent_id: Optional[int], row: Dict[str, Any]):
-        """Insert a row into a table"""
-        if not row:
-            # If no row data, insert with only parent_id
-            sql = f"INSERT INTO {table} (parent_id) VALUES (?)"
-            self.cursor.execute(sql, (parent_id,))
-            return self.cursor.lastrowid
+    def _insert_row(self, table: str, parent_id: Optional[int], row: Dict[str, Any], parent_table: Optional[str] = None):
+        if not row and parent_id is None:
+            return None
 
-        cols, vals = zip(*row.items())
+        cols, vals = (), ()
+        if row:
+            cols, vals = zip(*row.items())
+        
+        if parent_id is not None and parent_table:
+            fk_name = f"{parent_table}_fk"
+            cols = (fk_name,) + cols
+            vals = (parent_id,) + vals
+
+        if not cols:
+             return None
+
         placeholders = ", ".join(["?"] * len(vals))
-        colnames = ", ".join(cols)
-        sql = (
-            f"INSERT INTO {table} (parent_id, {colnames}) "
-            f"VALUES (?{', ?' * len(vals)})"
-        )
-        self.cursor.execute(sql, (parent_id,) + vals)
+        colnames = ", ".join([f"[{col}]" for col in cols])
+        sql = f"INSERT INTO [{table}] ({colnames}) VALUES ({placeholders})"
+        self.cursor.execute(sql, vals)
         return self.cursor.lastrowid
 
-    # -------------------------------------------------------------------------
-    # Normalization logic
-    # -------------------------------------------------------------------------
-
-    def _normalize(self, data: Any, parent_id: Optional[int], table: str):
-        """Recursive normalization"""
+    def _normalize(self, data: Any, parent_id: Optional[int], table: str, parent_table: Optional[str] = None):
         if isinstance(data, dict):
-            # ----------------------------------------
-            # Case: object
-            # ----------------------------------------
-            row = {}
-            schema = {}
-
+            row, schema = {}, {}
             if self.keep_objects:
-                # Store entire object as JSON
                 row[f"{table}_json"] = json.dumps(data)
                 schema[f"{table}_json"] = "TEXT"
             else:
-                # Flatten object fields into columns
                 for k, v in data.items():
-                    col = f"{table}_{k}"
                     if isinstance(v, (dict, list)):
-                        # handled separately later
                         continue
-                    schema[col] = "TEXT"
-                    row[col] = str(v) if v is not None else None
+                    col = f"{table}_{k}"
+                    # --- FIX: Use data type inference ---
+                    schema[col] = self._infer_sql_type(v)
+                    row[col] = v
+            
+            # --- FIX: Pass parent_table to _ensure_table ---
+            self._ensure_table(table, schema, parent_table)
+            row_id = self._insert_row(table, parent_id, row, parent_table)
 
-            # Create table and insert row
-            self._ensure_table(table, schema)
-            row_id = self._insert_row(table, parent_id, row)
-
-            # Handle nested dicts/lists
             if not self.keep_objects:
                 for k, v in data.items():
-                    if isinstance(v, dict):
-                        self._normalize(v, row_id, f"{table}_{k}")
-                    elif isinstance(v, list):
-                        self._normalize(v, row_id, f"{table}_{k}")
+                    if isinstance(v, (dict, list)):
+                        self._normalize(v, row_id, f"{table}_{k}", parent_table=table)
 
         elif isinstance(data, list):
-            # ----------------------------------------
-            # Case: array
-            # ----------------------------------------
             if self.keep_arrays:
-                # Keep array as JSON
                 schema = {f"{table}_json": "TEXT"}
                 row = {f"{table}_json": json.dumps(data)}
-                self._ensure_table(table, schema)
-                self._insert_row(table, parent_id, row)
-
-            elif (
-                len(data) < self.array_threshold
-                and all(isinstance(x, (str, int, float, type(None))) for x in data)
-            ):
-                # Flatten small primitive array
-                row = {
-                    f"{table}_item{i+1}": str(v) if v is not None else None
-                    for i, v in enumerate(data)
-                }
-                schema = {k: "TEXT" for k in row}
-                self._ensure_table(table, schema)
-                self._insert_row(table, parent_id, row)
-
+                # --- FIX: Pass parent_table to helpers ---
+                self._ensure_table(table, schema, parent_table)
+                self._insert_row(table, parent_id, row, parent_table)
+            elif (len(data) < self.array_threshold and all(isinstance(x, (str, int, float, bool, type(None))) for x in data)):
+                row = {f"{table}_item{i+1}": v for i, v in enumerate(data)}
+                schema = {k: self._infer_sql_type(v) for k, v in row.items()}
+                # --- FIX: Pass parent_table to helpers ---
+                self._ensure_table(table, schema, parent_table)
+                self._insert_row(table, parent_id, row, parent_table)
             else:
-                # Normalize array of objects into child table
                 for item in data:
-                    self._normalize(item, parent_id, table)
-
-        else:
-            # ----------------------------------------
-            # Case: primitive value
-            # ----------------------------------------
-            schema = {f"{table}_value": "TEXT"}
-            row = {f"{table}_value": str(data) if data is not None else None}
-            self._ensure_table(table, schema)
-            self._insert_row(table, parent_id, row)
-
-    # -------------------------------------------------------------------------
-    # Public API
-    # -------------------------------------------------------------------------
+                    self._normalize(item, parent_id, table, parent_table)
+        else: # Primitive value
+            schema = {f"{table}_value": self._infer_sql_type(data)}
+            row = {f"{table}_value": data}
+            # --- FIX: Pass parent_table to helpers ---
+            self._ensure_table(table, schema, parent_table)
+            self._insert_row(table, parent_id, row, parent_table)
 
     def load_json(self, json_data: Union[str, List, Dict]):
-        """Load JSON data into SQLite"""
         if isinstance(json_data, str):
             data = json.loads(json_data)
         else:
@@ -5864,7 +5835,6 @@ class JSONToSQLiteNormalizer:
             self._normalize(data, None, root_table)
         else:
             raise ValueError("Root must be object or array")
-
         self.conn.commit()
         
 
