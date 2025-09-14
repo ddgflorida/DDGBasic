@@ -17,6 +17,7 @@ import webbrowser
 import zipfile
 import xlrd3
 import openpyxl
+from bs4 import BeautifulSoup
 from openpyxl.styles import Font, PatternFill, Alignment
 from tui_runner import FormRunner
 from typing import Any, Dict, List, Optional, Union
@@ -141,6 +142,7 @@ class OutputConfig:
         self.mode = "CONSOLE"
         self.format = "TEXT"
         self.file_path = ""
+        self.sql_options = {} 
 
 g_output_config = OutputConfig()
 
@@ -248,7 +250,7 @@ class Lexer:
             ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
             ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
             ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('ERROR', r'\bERROR\b(?!\$)'),
-            ('XML', r'\bXML\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),
+            ('XML', r'\bXML\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),('SHOW', r'\bSHOW\b(?!\$)'), 
             ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'),('DUMP', r'\bDUMP\b(?!\$)'), 
             ('HASH', r'\bHASH\b(?!\$)'),('SORT', r'\bSORT\b(?!\$)'),('FIXED', r'\bFIXED\b(?!\$)'),('EXECUTE', r'\bEXECUTE\b(?!\$)'),
             ('ARRAY', r'\bARRAY\b(?!\$)'), ('GOSUB', r'\bGOSUB\b(?!\$)'), ('RETURN', r'\bRETURN\b(?!\$)'),
@@ -270,15 +272,14 @@ class Lexer:
             ('MKDIR', r'\bMKDIR\b(?!\$)'), ('RMDIR', r'\bRMDIR\b(?!\$)'), ('KILL', r'\bKILL\b(?!\$)'),
             ('ONERRORGOTO', r'\bONERRORGOTO\b'),('RESUME', r'\bRESUME\b(?!\$)'),
             ('TRON', r'\bTRON\b(?!\$)'), ('TROFF', r'\bTROFF\b(?!\$)'),('GOTO', r'\bGOTO\b(?!\$)'), 
-            ('DETAILS', r'\bDETAILS\b(?!\$)'), 
-            ('PUSH', r'\bPUSH\b(?!\$)'),
-            ('POP', r'\bPOP\b(?!\$)'),
-            ('SHIFT', r'\bSHIFT\b(?!\$)'),
-            ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
-            ('SPLICE', r'\bSPLICE\b(?!\$)'),
-            ('REVERSE', r'\bREVERSE\b(?!\$)'),
-            ('ID', r'(?!INTO\b)[a-zA-Z][a-zA-Z0-9_]*\$?'), ('OP', r"[+\-*/]"),
-            ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), ('COMMA', r','),
+            ('DETAILS', r'\bDETAILS\b(?!\$)'),
+            ('PUSH', r'\bPUSH\b(?!\$)'), ('POP', r'\bPOP\b(?!\$)'),
+            ('SHIFT', r'\bSHIFT\b(?!\$)'), ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
+            ('SPLICE', r'\bSPLICE\b(?!\$)'), ('REVERSE', r'\bREVERSE\b(?!\$)'),
+            ('ID', r'(?!INTO\b)[a-zA-Z_][a-zA-Z0-9_]*\$?'),
+            ('OP', r"[+\-*/]"),
+            ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), 
+            ('LBRACKET', r'\['), ('RBRACKET', r'\]'),('COMMA', r','),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('COMMENT', r"'[^\n]*"), ('NEWLINE', r'\n'),
             ('SKIP', r'[ \t\u00A0]+'), ('MISMATCH', r'.'),
         ]
@@ -459,7 +460,12 @@ class Formatter:
 
 class Interpreter:
     SQL_KEYWORDS = {'SELECT', 'INSERT', 'DELETE', 'UPDATE', 'CREATE', 'DROP', 'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'END TRANSACTION', 'ALTER'}
-
+    SQL_RESERVED_WORDS = {
+            'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE',
+            'VIEW', 'INDEX', 'ORDER', 'GROUP', 'BY', 'JOIN', 'LEFT', 'RIGHT', 'INNER',
+            'OUTER', 'ON', 'AS', 'IN', 'IS', 'NULL', 'NOT', 'AND', 'OR', 'LIMIT', 'OFFSET'
+        }
+        
     def __init__(self, lexer, cmd_args=None, debug=False):
         self.lexer = lexer
         self.tokens = self.lexer.tokens
@@ -481,6 +487,7 @@ class Interpreter:
         self.program_terminated = False # Termination flag
         self.hash_keys_mode = 'PRESERVE_CASE'  # Default to preserve case
         self.run_stack = []
+        self.last_sql_statement = ""
                 
         # --- NEW: Error handling state ---
         self.error_handler_label = None
@@ -555,7 +562,33 @@ class Interpreter:
             line, _ = self.lexer.get_line_col(self.tokens[start_index][2])
             self._error(f"Mismatched '{start_type}' on line {line} without a corresponding closing statement.")
 
+    def _quote_identifier(self, identifier: str, quote_style: str = '"') -> str:
+            """
+            Wraps a SQL identifier in quotes only if it's a reserved
+            keyword or contains characters that require quoting.
+            Supports different quoting styles ('"' or '[').
+            """
+            identifier_str = str(identifier)
+            
+            # Determine the quote characters based on the chosen style
+            if quote_style == '[':
+                open_quote, close_quote = '[', ']'
+            else:
+                open_quote, close_quote = '"', '"'
 
+            # Rule 1: If it's a reserved keyword, it must be quoted.
+            if identifier_str.upper() in self.SQL_RESERVED_WORDS:
+                return f'{open_quote}{identifier_str}{close_quote}'
+            
+            # Rule 2: If it's a "simple" identifier, it doesn't need quotes.
+            if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', identifier_str):
+                return identifier_str
+                
+            # Rule 3: If it's not simple, it must be quoted.
+            # Before quoting, remove any characters that would conflict with the quotes.
+            safe_identifier = identifier_str.replace(open_quote, '').replace(close_quote, '')
+            return f'{open_quote}{safe_identifier}{close_quote}'
+        
     def _find_next_statement_index(self, start_index):
         """Find the index of the next statement (after a COLON or NEWLINE token)"""
         index = start_index
@@ -633,8 +666,7 @@ class Interpreter:
         elif token and token[0] == 'CLOSE':
             self._next_token()
             self._init_db() # Re-initializes a new in-memory database
-        elif token and token[0] == 'ID' and token[1].upper() == 'ENGINE':
-            # --- ADD THIS LOGIC ---
+        elif token[0] == 'ID' and token[1].upper() == 'ENGINE':
             self._next_token() # Consume ENGINE
             engine_token = self._expect('ID')
             engine_name = engine_token[1].lower()
@@ -645,6 +677,8 @@ class Interpreter:
                 if self.db_connection:
                     self.db_connection.close()
                     self.db_connection = None
+                # Reinitialize with new engine
+                self._init_db()
             else:
                 self._error("Unsupported engine. Use SQLITE or DUCKDB.")
         else:
@@ -819,6 +853,7 @@ class Interpreter:
 
         if token[0] == 'SQL_STRING':
             sql_text = token[1].strip()
+            self.last_sql_statement = sql_text
             self._next_token()
             is_select = sql_text.upper().startswith(('SELECT', 'WITH'))
             if is_select:
@@ -845,34 +880,32 @@ class Interpreter:
         elif token[0] == 'FOR EACH': 
             self._parse_for_each_statement()
         elif token[0] == 'FOR':
-             # Look ahead to see if there's an 'IN' before an '='.
+            # Peek ahead to determine the type of FOR loop without consuming tokens
             is_in_loop = False
-            temp_index = self.token_index + 1
-            while temp_index < len(self.tokens) and self.tokens[temp_index][0] != 'NEWLINE':
-                if self.tokens[temp_index][0] == 'IN':
+            peek_index = self.token_index + 1
+            while peek_index < len(self.tokens) and self.tokens[peek_index][0] != 'NEWLINE':
+                if self.tokens[peek_index][0] == 'ASSIGN':
+                    break # This is a FOR i = 1 TO 10 loop
+                if self.tokens[peek_index][0] == 'IN':
                     is_in_loop = True
                     break
-                if self.tokens[temp_index][0] == 'ASSIGN':
-                    break # This is a FOR i = 1 TO 10 loop
-                temp_index += 1
-            
+                peek_index += 1
+
             if is_in_loop:
-                # It's a FOR...IN loop. Now, is it SQL or CSV?
-                # We need to find the 'IN' token again to check what follows it.
-                in_index = self.token_index + 1
-                while self.tokens[in_index][0] != 'IN':
-                    in_index += 1
-                
-                # Check the token right after 'IN'
-                if (in_index + 1) < len(self.tokens) and self.tokens[in_index + 1][0] == 'CSV':
+                # The token after IN determines the loop type
+                loop_type_token = self.tokens[peek_index + 1]
+                if loop_type_token[0] == 'CSV':
                     self._parse_for_in_csv_loop()
-                elif (in_index + 1) < len(self.tokens) and self.tokens[in_index + 1][0] == 'JSONL':
+                elif loop_type_token[0] == 'JSONL':
                     self._parse_for_in_jsonl_loop()
-                elif (in_index + 1) < len(self.tokens) and self.tokens[in_index + 1][0] == 'JSON':
+                elif loop_type_token[0] == 'JSON':
                     self._parse_for_in_json_loop()
-                else:  # Otherwise, assume it's a SQL loop that expects parentheses.
+                elif loop_type_token[0] == 'FILES':
+                    self._parse_for_in_files_loop() # <-- YOUR NEW LOOP
+                else: # Default to SQL loop
                     self._parse_for_in_sql_loop()
-            else:   # It's a standard FOR i = 1 TO 10 loop.
+            else:
+                # If 'IN' was not found, it's a standard FOR i = 1 TO 10 loop
                 self._parse_for_statement()
         elif token[0] == 'SORT':
             self._parse_sort_statement()
@@ -892,6 +925,8 @@ class Interpreter:
             self._parse_kill_statement()
         elif token[0] == 'SHELL':
             self._parse_shell_statement() 
+        elif token[0] == 'SHOW':
+            self._parse_show_statement()
         elif token[0] == 'EXECUTE':
             self._parse_execute_statement()
         elif token[0] == 'CHAIN':   # Replace current script with another DbBASIC script
@@ -910,7 +945,7 @@ class Interpreter:
             self._parse_error_statement()
         elif token[0] == 'FETCH':
             self._parse_fetch_statement()
-        elif token[0] == 'PARSE': 
+        elif token[0] == 'PARSE':                    # PARSE JSON
             self._parse_json_statement()
         elif token[0] == 'LOAD':
             self._parse_load_statement()
@@ -984,6 +1019,23 @@ class Interpreter:
         else:
             self._error(f"Unknown statement: {token[0]}")
 
+    def _extract_table_from_select(self, sql_string):
+        """
+        Uses a regex to find the first table name after a FROM clause.
+        Handles quoted and unquoted identifiers. Not a full SQL parser.
+        """
+        # This regex looks for FROM followed by an optional quote ([ or "),
+        # captures the name, then matches the optional closing quote.
+        match = re.search(
+            r'\bFROM\s+(?:\[([^\]]+)\]|"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_]*))',
+            sql_string,
+            re.IGNORECASE
+        )
+        if match:
+            # The result will be in one of the capture groups
+            return next((group for group in match.groups() if group is not None), None)
+        return None
+        
     def run(self):
         try:
             while self._current_token() and self._current_token()[0] != 'END':
@@ -1156,22 +1208,43 @@ class Interpreter:
             if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
                 self._next_token()
                 format_token = self._current_token()
-                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL"]:
+                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL", "SQL"]:
                     output_format = format_token[1].upper()
-                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED", "EXCEL"]: 
+                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED", "EXCEL", "SQL"]: 
                         g_output_config.format = output_format
                         self._next_token()
+                        
+                        # --- NEW: Parse the optional OPTIONS clause for SQL ---
+                        g_output_config.sql_options = {} # Reset on each call
+                        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+                            if output_format != 'SQL':
+                                self._error("OPTIONS clause is only supported for FORMAT SQL.")
+                            self._next_token()
+                            options_str = self._parse_expression()
+                            
+                            # Use the robust parser to get key-value pairs
+                            temp_options = {}
+                            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+                            for i, match in enumerate(key_matches):
+                                key, start_pos = match.group(1).lower(), match.end()
+                                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                                value = options_str[start_pos:end_pos].strip().strip(',')
+                                if value.startswith("'") and value.endswith("'"): value = value[1:-1]
+                                temp_options[key] = value
+                            g_output_config.sql_options = temp_options
                     else: 
                         self._error(f"Unknown format type '{output_format}'")
                 else: 
                     self._error("Missing or invalid format type after FORMAT")
+
 
     def _handle_output(self, results, column_names):
         if g_output_config.mode == "CONSOLE":
             if g_output_config.format == "EXCEL":
                 self._error("Excel output requires FILE mode. Use: SET OUTPUT FILE \"filename.xlsx\" FORMAT EXCEL")
                 return
-            writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}"); writer_function(results, column_names, sys.stdout)
+            writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}")
+            writer_function(results, column_names, sys.stdout, g_output_config.sql_options)
         elif g_output_config.mode == "FILE":
             try:
                 with open(g_output_config.file_path, "w", encoding="utf-8", newline='') as f:
@@ -1179,7 +1252,7 @@ class Interpreter:
                 print(f"{len(results)} rows written to {g_output_config.file_path}")
             except IOError as e: self._error(f"Error writing to file: {e}")
 
-    def _write_as_text(self, results, headers, stream):
+    def _write_as_text(self, results, headers, stream, options={}):
         if not results: stream.write("(0 rows returned)\n"); return
         widths = {h: len(h) for h in headers}
         for row in results:
@@ -1202,16 +1275,16 @@ class Interpreter:
             stream.write(f"+-{separator}-+\n")
         stream.write(f"({len(results)} rows returned)\n")
 
-    def _write_as_csv(self, results, headers, stream):
+    def _write_as_csv(self, results, headers, stream, options={}):
         csv_writer = csv.writer(stream); csv_writer.writerow(headers); csv_writer.writerows(results)
     
-    def _write_as_json(self, results, headers, stream):
+    def _write_as_json(self, results, headers, stream, options={}):
         json.dump([dict(zip(headers, row)) for row in results], stream, indent=2)
     
-    def _write_as_jsonl(self, results, headers, stream):
+    def _write_as_jsonl(self, results, headers, stream, options={}):
         for row in results: stream.write(json.dumps(dict(zip(headers, row))) + "\n")
     
-    def _write_as_xml(self, results, headers, stream):
+    def _write_as_xml(self, results, headers, stream, options={}):
         """Writes query results as XML."""
         stream.write('<?xml version="1.0" encoding="UTF-8"?>\n')
         stream.write('<resultset>\n')
@@ -1227,7 +1300,7 @@ class Interpreter:
         
         stream.write('</resultset>\n')   
     
-    def _write_as_html(self, results, headers, stream):
+    def _write_as_html(self, results, headers, stream, options={}):
         """Writes query results as a basic HTML table."""
         stream.write("<!DOCTYPE html>\n")
         stream.write("<html>\n<head>\n<title>Query Result</title>\n")
@@ -1263,7 +1336,7 @@ class Interpreter:
 
         stream.write("</body>\n</html>\n")
         
-    def _write_as_fixed(self, results, headers, stream):
+    def _write_as_fixed(self, results, headers, stream, options={}):
         """Writes query results as a fixed-width text file without headers."""
         if not results:
             return
@@ -1294,7 +1367,7 @@ class Interpreter:
             
             stream.write("".join(line_parts) + "\n")
 
-    def _write_as_excel(self, results, headers, stream):
+    def _write_as_excel(self, results, headers, stream, options={}):
         """Writes query results as an Excel file."""
         # For Excel output, we need a file path, not a stream
         if g_output_config.mode == "CONSOLE":
@@ -1362,7 +1435,47 @@ class Interpreter:
             #print(f"{len(results)} rows written to Excel file: {filename}")
         except Exception as e:
             self._error(f"Error writing Excel file: {e}")
+
+    def _write_as_sql(self, results, headers, stream, options={}):
+        if not results:
+            stream.write("-- (0 rows returned)\n")
+            return
+
+        # Get table name from options first.
+        table_name = options.get('tablename')
         
+        # If not provided, try to extract it from the last SQL query.
+        if not table_name:
+            table_name = self._extract_table_from_select(self.last_sql_statement)
+
+        # If it's still not found, use a placeholder.
+        if not table_name:
+            table_name = "YourTableName"
+            
+        # Get mode from options, defaulting to 'insert'
+        mode = options.get('mode', 'insert').lower()
+        
+        # Prepare the appropriate SQL command prefix
+        quoted_headers = ', '.join([f'{self._quote_identifier(h)}' for h in headers])
+        if mode == 'replace':
+            command_prefix = f"INSERT OR REPLACE INTO {self._quote_identifier(table_name)} ({quoted_headers}) VALUES "
+        else: # Default to standard INSERT
+            command_prefix = f"INSERT INTO {self._quote_identifier(table_name)} ({quoted_headers}) VALUES "
+
+        for row in results:
+            values_list = []
+            for value in row:
+                if value is None:
+                    values_list.append("NULL")
+                elif isinstance(value, (int, float)):
+                    values_list.append(str(value))
+                else:
+                    escaped_value = str(value).replace("'", "''")
+                    values_list.append(f"'{escaped_value}'")
+            
+            values_str = ', '.join(values_list)
+            stream.write(f"{command_prefix}({values_str});\n")
+            
     def _parse_if_statement(self):
         start_if_index = self.token_index
         self._expect('IF')
@@ -1533,6 +1646,11 @@ class Interpreter:
             if not isinstance(args[0], list): self._error("First argument to ARRAY_JOIN must be an array.")
             delimiter = str(args[1]) if len(args) >= 2 else ","
             return delimiter.join(str(item) for item in args[0])
+        elif name == 'ARRAY':
+            # The 'args' parameter is already a Python list of the evaluated arguments.
+            # We simply return it, and the interpreter will assign this new list
+            # to the variable.
+            return args
         elif name == 'JSON_SERIALIZE$':
             if not (1 <= len(args) <= 5):
                 self._error("JSON_SERIALIZE$ requires 1 to 5 arguments: data, [indent], [sort_option$], [case_option$], ...")
@@ -2037,6 +2155,21 @@ class Interpreter:
                 else: 
                     break
             return current_value
+        elif token[0] == 'ARRAY':
+            # This handles the specific case of the ARRAY() constructor function.
+            # The logic is a simplified version of a function call.
+            function_name = self._expect('ARRAY')[1]
+            self._expect('LPAREN')
+            
+            args = []
+            if self._current_token()[0] != 'RPAREN':
+                while True:
+                    args.append(self._parse_expression())
+                    if self._current_token()[0] == 'RPAREN': break
+                    self._expect('COMMA')
+            
+            self._expect('RPAREN')
+            return self._execute_function(function_name, args)
         else:
             self._error(f"Unexpected token in factor: {token}")
             print("\n--- TOKEN DUMP IN LEXER ---")
@@ -2634,6 +2767,59 @@ class Interpreter:
                 self.variables[into_array_name] = detailed_list
             else: self.variables[into_array_name] = [os.path.basename(p) for p in glob.glob(glob_pattern)]
 
+    def _parse_for_in_files_loop(self):
+        self._expect('FOR')
+        loop_var_name = self._expect('ID')[1]
+        self._expect('IN')
+        self._expect('FILES')
+        
+        self._expect('LPAREN')
+        pattern = self._parse_expression()
+        self._expect('RPAREN')
+        
+        if not isinstance(pattern, str):
+            self._error("Argument for FILES() in a FOR loop must be a string pattern.")
+            
+        try:
+            # Use glob to get the list of files, and sort it for consistency
+            file_list = sorted(glob.glob(pattern))
+        except Exception as e:
+            self._error(f"Invalid pattern for FILES loop: {e}")
+
+        loop_body_start_index = self.token_index
+        original_value = self.variables.get(loop_var_name)
+
+        try:
+            if not file_list:
+                self.token_index = loop_body_start_index
+                self._skip_block('FOR', 'NEXT')
+                return
+
+            for filepath in file_list:
+                # Assign the filename (without the path) to the loop variable
+                self.variables[loop_var_name] = os.path.basename(filepath)
+
+                # Execute the loop body
+                self.token_index = loop_body_start_index
+                if self._current_token() and self.tokens[self.token_index][0] == 'NEWLINE': self._next_token()
+                self.run_block(end_tokens={'NEXT'})
+                
+                self._expect('NEXT')
+                if self._current_token() and self.tokens[self.token_index][0] == 'ID':
+                    self._next_token()
+
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                self._skip_block('FOR', 'NEXT')
+            else:
+                raise e
+        finally:
+            # Restore the loop variable to its original state
+            if original_value is not None:
+                self.variables[loop_var_name] = original_value
+            elif loop_var_name in self.variables:
+                del self.variables[loop_var_name]
+                
     def _parse_name_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ID'); old_filename = self._parse_expression(); self._expect('AS'); new_filename = self._parse_expression()
@@ -3286,6 +3472,31 @@ class Interpreter:
         except FileNotFoundError: self.variables['ERR'] = -2.0
         except requests.exceptions.RequestException: self.variables['ERR'] = -1.0
 
+    def _clean_and_deduplicate_headers(self, headers: List[str]) -> List[str]:
+        """
+        Takes a list of header strings and returns a new list where:
+        1. Characters that conflict with quoting ([]) are removed.
+        2. Duplicate names are made unique by appending a suffix (_2, _3, etc.).
+        """
+        final_headers = []
+        header_counts = {}
+        for header in headers:
+            # Step 1: Perform minimal cleaning. Just remove characters that would break quoting.
+            clean_header = str(header).replace('[', '').replace(']', '').strip()
+            
+            # Step 2: Check for duplicates and create a unique name.
+            if clean_header in header_counts:
+                header_counts[clean_header] += 1
+                unique_header = f"{clean_header}_{header_counts[clean_header]}"
+            else:
+                unique_header = clean_header
+            
+            final_headers.append(unique_header)
+            # Always update the count for the original clean name to track it.
+            header_counts[clean_header] = header_counts.get(clean_header, 0) + 1
+            
+        return final_headers
+        
     def _parse_load_statement(self):
         peek = self._peek_token()
         if peek and peek[0] == 'CSV': self._parse_load_csv_statement()
@@ -3294,6 +3505,7 @@ class Interpreter:
         elif peek and peek[0] == 'JSON': self._parse_load_json_statement()
         elif peek and peek[0] == 'JSONL': self._parse_load_jsonl_statement()
         elif peek and peek[0] == 'XML': self._parse_load_xml_statement()
+        elif peek and peek[0] == 'HTML': self._parse_load_html_statement()
         else: self._error("Expected CSV, JSON, JSONL, FIXED, or EXCEL after LOAD")
 
     def _parse_table_name(self):
@@ -3332,20 +3544,34 @@ class Interpreter:
 
         options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 
                    'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 'fields': ''}
+        temp_options = {}
+        add_line_num = False
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token(); options_str = self._parse_expression(); temp_options = {}
+            self._next_token(); options_str = self._parse_expression()
             key_matches = list(re.finditer(r'\b(\w+)=', options_str))
             for i, match in enumerate(key_matches):
                 key, start_pos = match.group(1).lower(), match.end()
                 end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip()
+                value = options_str[start_pos:end_pos].strip().strip(',')
                 if value.startswith('"') and value.endswith('"'): value = value[1:-1]
                 temp_options[key] = value
             for key, value in temp_options.items():
                 if key == 'header': options['header'] = value.lower() in ['true', 'y', '1']
                 elif key in ['skip', 'limit', 'batchsize']: options[key] = int(value)
+                elif 'linenum' in temp_options:
+                    add_line_num = temp_options['linenum'].lower() in ['true', 'y', '1']
                 else: options[key] = value
         
+        transform_rules = {}
+        if 'transform' in temp_options:
+            for rule in temp_options['transform'].split(','):
+                parts = rule.strip().split(':')
+                if len(parts) == 2:
+                    col_name, func_name = parts
+                    # Store as lowercase for case-insensitive matching
+                    transform_rules[col_name.lower()] = func_name.lower()
+        #print("DEBUG:", options)
+        #print("DEBUG destination_mode:", destination_mode)
         try:
             with open(csv_filename, 'r', newline='', encoding=options['encoding']) as infile:
                 for _ in range(options['skip']): next(infile)
@@ -3357,11 +3583,11 @@ class Interpreter:
                     except StopIteration: return
 
                 final_headers, column_map = original_headers, list(range(len(original_headers))) if original_headers else None
-                
+                print("DEBUG:","BEFORE CHECK OF FIELDS")
                 if options['fields']:
                     if not options['header']: self._error("FIELDS option requires header=true.")
                     field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
-                    
+                    print("DEBUG:","INSIDE CHECK OF FIELDS")
                     if field_specs[0].strip() == '*':
                         excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
                         final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
@@ -3383,34 +3609,62 @@ class Interpreter:
                             new_headers.append(final_field_name)
                         final_headers, column_map = new_headers, new_map
 
-                elif destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
+                if destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
                     cursor = self.db_cursor
+                    #print("DEBUG:","INSIDE CREATE_TABLE AND INTO_TABLE")
+                    if add_line_num:
+                        final_headers.append('_linenum') 
                     if destination_mode == 'CREATE_TABLE':
-                        if not final_headers and not options['fields']: self._error("CREATE TABLE requires header=true or a FIELDS option.")
-                        cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
-                        cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];'); cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
-                    if db_mode == 'REPLACE': cursor.execute(f'DELETE FROM [{destination_target}];')
+                        if not final_headers and not options['fields']:
+                            #print("DEBUG ERROR:","No header nor fields")
+                            self._error("CREATE TABLE requires header=true or a FIELDS option.")
+                        #cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
+                        cols_def = ', '.join([f"[{h}] {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in final_headers])
+                        #print("DEBUG DROP:",f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
+                        cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
+                        print("DEBUG CREATE:",f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
+                        cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
+                    if db_mode == 'REPLACE': 
+                        cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
                     
                     insert_sql, batch, total_rows_processed = None, [], 0
                     self.db_connection.execute('BEGIN TRANSACTION;')
                     try:
+                        line_counter = 1 # Initialize the counter here
                         for row in reader:
                             if column_map is None: column_map = list(range(len(row)))
                             if not row: continue
                             processed_row = [row[i] for i in column_map if i < len(row)]
                             
+                            if transform_rules:
+                                for i, header_name in enumerate(final_headers):
+                                    rule = transform_rules.get(header_name.lower())
+                                    if rule and i < len(processed_row):
+                                        original_value = str(processed_row[i]) # Ensure it's a string
+                                        if rule == 'upper':
+                                            processed_row[i] = original_value.upper()
+                                        elif rule == 'lower':
+                                            processed_row[i] = original_value.lower()
+                                        elif rule == 'proper':
+                                            processed_row[i] = original_value.title()
+                                        elif rule == 'trim':
+                                            processed_row[i] = original_value.strip()
                             if insert_sql is None:
-                                num_cols = len(processed_row)
+                                num_cols = len(final_headers)
                                 if num_cols == 0: continue
                                 placeholders = ', '.join(['?'] * num_cols)
                                 if final_headers:
                                     quoted_headers = ", ".join([f'[{h}]' for h in final_headers])
-                                    insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+                                    if add_line_num:
+                                       final_headers.append('_linenum') 
+                                    insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
                                 else:
-                                    insert_sql = f'INSERT INTO [{destination_target}] VALUES ({placeholders});'
-                            
+                                    insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} VALUES ({placeholders});'
+                            if add_line_num:
+                                processed_row.append(line_counter)
                             batch.append(processed_row)
                             total_rows_processed += 1
+                            line_counter += 1 # Increment for the next row
                             if len(batch) >= options['batchsize']:
                                 cursor.executemany(insert_sql, batch); batch = []
                         
@@ -3420,9 +3674,11 @@ class Interpreter:
                     except Exception as e:
                         self.db_connection.execute('ROLLBACK;'); raise e
         except FileNotFoundError as e:
+            print("DEBUG1",e)
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
             self._error(f"File not found: {csv_filename}")
         except Exception as e:
+            print("DEBUG2",e)
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"CSV load error: {e}"
             self._error(f"An error occurred during CSV load: {e}")
 
@@ -3462,7 +3718,7 @@ class Interpreter:
         
         self._next_token()
         fields_spec = self._parse_expression()
-        #print("DEBUG-FIXED",destination_target)
+
         field_definitions = []
         for field_def in fields_spec.split(','):
             field_def = field_def.strip()
@@ -3481,16 +3737,16 @@ class Interpreter:
             if destination_mode == 'CREATE_TABLE':
                 field_names = [f['name'] for f in field_definitions]
                 cols_def = ', '.join([f'[{name}] TEXT' for name in field_names])
-                cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}]')
-                cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def})')
+                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)}')
+                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def})')
 
             if db_mode == 'REPLACE':
-                cursor.execute(f'DELETE FROM [{destination_target}]')
+                cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)}')
             
             field_names = [f['name'] for f in field_definitions]
             placeholders = ', '.join(['?'] * len(field_names))
             quoted_fields = ', '.join([f'[{name}]' for name in field_names])
-            insert_sql = f'INSERT INTO [{destination_target}] ({quoted_fields}) VALUES ({placeholders})'
+            insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_fields}) VALUES ({placeholders})'
 
             batch, total_rows_processed = [], 0
             batch_size = 10000
@@ -3640,13 +3896,13 @@ class Interpreter:
                 cursor = self.db_cursor
                 if destination_mode == 'CREATE_TABLE':
                     cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
-                    cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];')
-                    cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
-                if db_mode == 'REPLACE': cursor.execute(f'DELETE FROM [{destination_target}];')
+                    cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
+                    cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
+                if db_mode == 'REPLACE': cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
                 placeholders = ', '.join(['?'] * len(final_headers))
                 quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
-                insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+                insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
                 
                 batch, total_rows_processed = [], 0
                 limit = options.get('limit')
@@ -3837,15 +4093,15 @@ class Interpreter:
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
                 cols_def = ', '.join([f'[{h}] {col_types[h]}' for h in headers])
-                cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];')
-                cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
+                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
             if db_mode == 'REPLACE':
-                cursor.execute(f'DELETE FROM [{destination_target}];')
+                cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
             placeholders = ', '.join(['?'] * len(headers))
             quoted_headers = ', '.join([f'[{h}]' for h in headers])
-            insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+            insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
             
             batch_size = options['batchsize']
             total_rows_processed = 0
@@ -3884,7 +4140,6 @@ class Interpreter:
         self._expect('LOAD')
         self._expect('JSONL')
 
-        # --- 1. PARSE CLAUSES (Same as LOAD JSON) ---
         jsonl_filename = self._parse_expression()
         destination_mode, destination_target, db_mode = None, None, None
 
@@ -3907,16 +4162,40 @@ class Interpreter:
             self._error("Expected CREATE TABLE or INTO TABLE clause.")
 
         options = {'batchsize': 10000, 'sample_size': 1000} 
+        # --- NEW: Initialize a flag for the linenum feature ---
+        add_line_num = False
+        transform_rules = {}
+        
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
             options_str = self._parse_expression()
-            if 'batchsize=' in options_str:
-                options['batchsize'] = int(re.search(r'batchsize=(\d+)', options_str).group(1))
-            if 'sample_size=' in options_str:
-                options['sample_size'] = int(re.search(r'sample_size=(\d+)', options_str).group(1))
+            
+            # --- Using the more robust OPTIONS parser ---
+            temp_options = {}
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key, start_pos = match.group(1).lower(), match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip().strip(',')
+                if value.startswith('"') and value.endswith('"'): value = value[1:-1]
+                temp_options[key] = value
+
+            for key, value in temp_options.items():
+                if key in ['batchsize', 'sample_size']:
+                    options[key] = int(value)
+                # --- NEW: Check for the linenum option ---
+                elif key == 'linenum':
+                    add_line_num = value.lower() in ['true', 'y', '1']
+                elif key == 'transform':
+                    for rule in value.split(','):
+                        parts = rule.strip().split(':')
+                        if len(parts) == 2:
+                            col_name, func_name = parts
+                            transform_rules[col_name.lower()] = func_name.lower()
+
 
         try:
-            # --- 2. SCHEMA INFERENCE (from a sample) ---
+            # --- Schema Inference (from a sample) ---
             headers, seen_keys, col_types = [], set(), {}
             sample_size = options['sample_size']
             
@@ -3935,7 +4214,6 @@ class Interpreter:
                             headers.append(key)
                             col_types[key] = 'INTEGER'
                         
-                        # Data type promotion logic
                         current_type = col_types[key]
                         if value is None or current_type == 'TEXT': continue
                         if isinstance(value, str): col_types[key] = 'TEXT'
@@ -3946,35 +4224,63 @@ class Interpreter:
                 print("0 records loaded (JSONL file is empty or contains no objects).")
                 return
 
-            # --- 3. DATABASE OPERATIONS ---
+            # --- NEW: Add the _linenum column to the schema if requested ---
+            if add_line_num:
+                headers.append('_linenum')
+                col_types['_linenum'] = 'INTEGER'
+
+            # --- Database Operations ---
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
-                cols_def = ', '.join([f'[{h}] {col_types[h]}' for h in headers])
-                cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];')
-                cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+                # This DDL generation now automatically includes the _linenum column
+                cols_def = ', '.join([f'[{h}] {col_types.get(h, "TEXT")}' for h in headers])
+                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
+                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
             if db_mode == 'REPLACE':
-                cursor.execute(f'DELETE FROM [{destination_target}];')
+                cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
             placeholders = ', '.join(['?'] * len(headers))
             quoted_headers = ', '.join([f'[{h}]' for h in headers])
-            insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+            insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
             
-            # --- 4. FULL FILE PROCESSING (Streaming) ---
+            # --- Full File Processing (Streaming) ---
             self.db_connection.execute('BEGIN TRANSACTION;')
             try:
                 batch = []
                 total_rows_processed = 0
+                # --- NEW: Initialize the line counter ---
+                line_counter = 1
+                
                 with open(jsonl_filename, 'r', encoding='utf-8') as infile:
                     for line in infile:
                         line = line.strip()
-                        if not line: continue
+                        if not line: 
+                            line_counter += 1
+                            continue
                         
                         record = json.loads(line)
-                        # Prepare row based on inferred schema, handling missing keys
-                        row = [json.dumps(record.get(h)) if isinstance(record.get(h), (dict, list)) else record.get(h) for h in headers]
+                        # The original headers list (without _linenum) is used to extract data
+                        original_headers = [h for h in headers if h != '_linenum']
+                        row = [json.dumps(record.get(h)) if isinstance(record.get(h), (dict, list)) else record.get(h) for h in original_headers]
+
+                        if transform_rules:
+                            for i, header_name in enumerate(original_headers):
+                                rule = transform_rules.get(header_name.lower())
+                                if rule and i < len(row):
+                                    original_value = str(row[i])
+                                    if rule == 'upper': row[i] = original_value.upper()
+                                    elif rule == 'lower': row[i] = original_value.lower()
+                                    elif rule == 'proper': row[i] = original_value.title()
+                                    elif rule == 'trim': row[i] = original_value.strip()
+                        
+                        # --- NEW: Append the line number to the row data ---
+                        if add_line_num:
+                            row.append(line_counter)
+                        
                         batch.append(row)
                         total_rows_processed += 1
+                        line_counter += 1
                         
                         if len(batch) >= options['batchsize']:
                             cursor.executemany(insert_sql, batch)
@@ -3998,6 +4304,135 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"An error occurred during JSONL load: {e}"
             self._error(f"An error occurred during JSONL load: {e}")
 
+    # Currently targeting HTML TABLE rows
+    def _parse_load_html_statement(self):
+        # Note: This method requires 'from bs4 import BeautifulSoup' at the top of your file.
+
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('LOAD')
+        self._expect('HTML')
+
+        html_filename = self._parse_expression()
+        destination_mode, destination_target, db_mode = None, None, None
+
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
+        else:
+            self._error("Expected CREATE TABLE clause for LOAD HTML.")
+
+        options = {'header': True, 'table_index': 0, 'batchsize': 10000}
+        # --- NEW: Initialize a flag for the linenum feature ---
+        add_line_num = False
+        
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token() 
+            options_str = self._parse_expression()
+            
+            temp_options = {}
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key, start_pos = match.group(1).lower(), match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip().strip(',')
+                if value.startswith('"') and value.endswith('"'): value = value[1:-1]
+                temp_options[key] = value
+
+            for key, value in temp_options.items():
+                if key == 'header':
+                    options['header'] = value.lower() in ['true', 'y', '1']
+                elif key in ['table_index', 'batchsize']:
+                    try:
+                        options[key] = int(value)
+                    except ValueError:
+                        self._error(f"Invalid integer value for option '{key}'.")
+                # --- NEW: Check for the linenum option ---
+                elif key == 'linenum':
+                    add_line_num = value.lower() in ['true', 'y', '1']
+        
+        try:
+            with open(html_filename, 'r', encoding='utf-8') as infile:
+                soup = BeautifulSoup(infile, 'lxml')
+
+            tables = soup.find_all('table')
+            if not tables:
+                print("Warning: No <table> elements found in the HTML file.")
+                return
+            if options['table_index'] >= len(tables):
+                self._error(f"Error: table_index {options['table_index']} is out of bounds. Only {len(tables)} tables found.")
+            
+            target_table = tables[options['table_index']]
+            
+            headers = []
+            data_rows = []
+            
+            for i, row_element in enumerate(target_table.find_all('tr')):
+                cells = row_element.find_all(['th', 'td'])
+                row_data = [cell.get_text(strip=True) for cell in cells]
+
+                if i == 0 and options['header']:
+                    headers = row_data
+                else:
+                    data_rows.append(row_data)
+
+            if not headers and data_rows:
+                num_cols = len(data_rows[0])
+                headers = [f"column_{i+1}" for i in range(num_cols)]
+
+            if not data_rows:
+                print("Warning: Table found, but it contains no data rows.")
+                return
+            
+            clean_headers = self._clean_and_deduplicate_headers(headers)
+            
+            # --- NEW: Add the _linenum column to the header list if requested ---
+            if add_line_num:
+                clean_headers.append('_linenum')
+            
+            cursor = self.db_cursor
+            if destination_mode == 'CREATE_TABLE':
+                # --- NEW: Generate DDL with INTEGER type for the _linenum column ---
+                cols_def = []
+                for h in clean_headers:
+                    dtype = 'INTEGER' if h == '_linenum' else 'TEXT'
+                    cols_def.append(f'[{h}] {dtype}')
+                
+                cols_def_str = ', '.join(cols_def)
+                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
+                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def_str});')
+
+                # Prepare data for insertion
+                num_data_cols = len(headers)
+                num_final_cols = len(clean_headers)
+                line_counter = 1
+                prepared_data = []
+
+                for row in data_rows:
+                    prepared_row = row[:num_data_cols]
+                    prepared_row.extend([''] * (num_data_cols - len(prepared_row)))
+                    # --- NEW: Append the line number to the row data ---
+                    if add_line_num:
+                        prepared_row.append(line_counter)
+                    prepared_data.append(prepared_row)
+                    line_counter += 1
+
+                if prepared_data:
+                    placeholders = ', '.join(['?'] * num_final_cols)
+                    insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({", ".join(f"[{h}]" for h in clean_headers)}) VALUES ({placeholders});'
+                    
+                    cursor.executemany(insert_sql, prepared_data)
+                    self.db_connection.commit()
+                    print(f"{len(prepared_data)} records loaded from HTML table into {destination_target}")
+
+        except FileNotFoundError:
+            self._error(f"File not found: {html_filename}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during HTML load: {e}")
+
+            
     def _parse_load_xml_statement(self):
         """Loads data from an XML file into a database table using a streaming parser."""
         from collections import Counter # Local import for this specific function
@@ -4088,16 +4523,16 @@ class Interpreter:
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
                 cols_def = ', '.join([f'[{h}] TEXT' for h in field_list])
-                cursor.execute(f'DROP TABLE IF EXISTS [{destination_target}];')
-                cursor.execute(f'CREATE TABLE [{destination_target}] ({cols_def});')
+                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
+                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
             if db_mode == 'REPLACE':
-                cursor.execute(f'DELETE FROM [{destination_target}];')
+                cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
             # --- 5. Stream and Load Data ---
             placeholders = ', '.join(['?'] * len(field_list))
             quoted_headers = ', '.join([f'[{h}]' for h in field_list])
-            insert_sql = f'INSERT INTO [{destination_target}] ({quoted_headers}) VALUES ({placeholders});'
+            insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
             
             self.db_connection.execute('BEGIN TRANSACTION;')
             try:
@@ -4223,7 +4658,7 @@ class Interpreter:
             tables = [row[0] for row in self.db_cursor.fetchall()]
             print(f"  - Created {len(tables)} tables:")
             for table in tables:
-                self.db_cursor.execute(f"SELECT COUNT(*) FROM [{table}]")
+                self.db_cursor.execute(f"SELECT COUNT(*) FROM {self._quote_identifier(table)}")
                 count = self.db_cursor.fetchone()[0]
                 print(f"    * {table}: {count} records")
 
@@ -5649,8 +6084,122 @@ class Interpreter:
         except Exception as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during XML analysis: {e}")
+
+    def _parse_show_statement(self):
+        self._expect('SHOW')
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'TABLES':
+            self._next_token()
+            
+            # Optional: consume semicolon if present
+            if self._current_token() and self._current_token()[0] == 'SEMICOLON':
+                self._next_token()
+                
+            if self.db_engine == 'duckdb':
+                sql = "SHOW TABLES"
+            else:  # SQLite
+                sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+                
+            results = self._execute_sql(sql, is_query=True)
+            if results:
+                for row in results:
+                    print(row[0])
+            else:
+                print("No tables found.")
+        # INDEXES
+        elif self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'INDEXES':
+            self._next_token()
+            
+            # Optional: consume semicolon if present
+            if self._current_token() and self._current_token()[0] == 'SEMICOLON':
+                self._next_token()
+                
+            if self.db_engine == 'duckdb':
+                sql = """
+SELECT sql FROM duckdb_indexes()
+UNION ALL
+-- Primary keys and unique constraints
+SELECT 
+    'ALTER TABLE "' || tc.table_name || '" ADD CONSTRAINT "' || tc.constraint_name || 
+    '" ' || tc.constraint_type || ' (' || 
+    string_agg('"' || kcu.column_name || '"', ', ' ORDER BY kcu.ordinal_position) || ');' AS sql
+FROM information_schema.table_constraints tc
+JOIN information_schema.key_column_usage kcu
+    ON tc.constraint_name = kcu.constraint_name
+    AND tc.table_name = kcu.table_name
+WHERE tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+GROUP BY tc.table_name, tc.constraint_name, tc.constraint_type
+ORDER BY 1
+"""
+
+            else:  # SQLite
+                sql = """
+SELECT sql FROM sqlite_master 
+WHERE type = 'index' AND sql IS NOT NULL
+
+UNION ALL
+
+SELECT 
+    'ALTER TABLE "' || m.name || '" ADD CONSTRAINT "pk_' || m.name || 
+    '" PRIMARY KEY (' || group_concat('"' || p.name || '"', ', ') || ');' AS sql
+FROM sqlite_master m
+JOIN pragma_table_info(m.name) p
+    ON m.name IS NOT NULL
+WHERE p.pk > 0
+GROUP BY m.name
+HAVING COUNT(p.pk) > 0
+
+UNION ALL
+
+SELECT 
+    'ALTER TABLE "' || m.name || '" ADD CONSTRAINT "unique_' || m.name || '_' || group_concat(p.name, '_') || 
+    '" UNIQUE (' || group_concat('"' || p.name || '"', ', ') || ');' AS sql
+FROM sqlite_master m
+JOIN pragma_index_list(m.name) il ON m.name IS NOT NULL
+JOIN pragma_index_info(il.name) p ON il.name = p.name
+WHERE il.origin = 'u'
+GROUP BY m.name, il.name
+
+ORDER BY 1
+"""
+                
+            results = self._execute_sql(sql, is_query=True)
+            if results:
+                for row in results:
+                    print(row[0])
+            else:
+                print("No indexes found.")
+        else:
+            self._error("Expected TABLES after SHOW")
             
     def _parse_describe_statement(self):
+        self._expect('DESCRIBE')
+        if self._current_token() and self._current_token()[0] == 'TABLE':
+            self._next_token()
+        
+        table_name = self._parse_expression()
+        
+        try:
+            if self.db_engine == 'duckdb':
+                # DuckDB approach
+                sql = f"SELECT sql FROM duckdb_tables() WHERE table_name = '{table_name}'"
+            else:
+                # SQLite approach  
+                sql = f"SELECT sql FROM sqlite_master WHERE type='table' AND name = '{table_name}'"
+            
+            results = self._execute_sql(sql, is_query=True)
+            
+            if results and results[0][0]:
+                print(results[0][0] + (';' if self.db_engine == 'sqlite' else ''))
+            else:
+                print(f"Table '{table_name}' not found.", file=sys.stderr)
+                
+        except Exception as e:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = str(e)
+            if self.sql_fatal_errors:
+                self._error(f"Error describing table: {e}")
+                
+    def _parse_describe_statement_old(self):
         """Parses and executes DESCRIBE TABLE, printing or capturing metadata."""
         self._expect('DESCRIBE')
         # The TABLE keyword is optional for usability
@@ -5743,14 +6292,14 @@ class JSONToSQLiteNormalizer:
             
             cols = [f"[{col}] {dtype}" for col, dtype in schema.items()]
             ddl = (
-                f"CREATE TABLE [{table}] "
+                f"CREATE TABLE {self._quote_identifier(table)} "
                 f"([{pk_name}] INTEGER PRIMARY KEY AUTOINCREMENT, {fk_clause} {', '.join(cols)})"
             )
             self.cursor.execute(ddl)
         else:
             for col, dtype in schema.items():
                 if col not in existing_cols:
-                    self.cursor.execute(f"ALTER TABLE [{table}] ADD COLUMN [{col}] {dtype}")
+                    self.cursor.execute(f"ALTER TABLE {self._quote_identifier(table)} ADD COLUMN {self._quote_identifier(col)} {dtype}")
 
     def _insert_row(self, table: str, parent_id: Optional[int], row: Dict[str, Any], parent_table: Optional[str] = None):
         if not row and parent_id is None:
@@ -5770,7 +6319,7 @@ class JSONToSQLiteNormalizer:
 
         placeholders = ", ".join(["?"] * len(vals))
         colnames = ", ".join([f"[{col}]" for col in cols])
-        sql = f"INSERT INTO [{table}] ({colnames}) VALUES ({placeholders})"
+        sql = f"INSERT INTO {self._quote_identifier(table)} ({colnames}) VALUES ({placeholders})"
         self.cursor.execute(sql, vals)
         return self.cursor.lastrowid
 
