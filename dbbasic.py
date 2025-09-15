@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import glob
+import fnmatch
 import subprocess
 import requests
 from datetime import datetime, timedelta
@@ -208,6 +209,8 @@ class Lexer:
             r'\bEND\s+FORM\b': 'ENDFORM',r'\bOPEN\s+FORM\b': 'OPENFORM',
             r'\bWITH\s+DETAILS\b': 'WITHDETAILS',
             r'\bWITH\s+FULLPATH\b': 'WITHFULLPATH',
+            r'\bWITH\s+FOLDERSONLY\b': 'WITHFOLDERSONLY',
+            r'\bWITH\s+FILESONLY\b': 'WITHFILESONLY', 
             r'\bLIST\s+FIELDS\b': 'LISTFIELDS'
         }
         code = self.raw_source_code
@@ -255,6 +258,7 @@ class Lexer:
             ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
             ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), 
             ('WITHFULLPATH', r'\bWITHFULLPATH\b(?!\$)'), ('WITHDETAILS', r'\bWITHDETAILS\b(?!\$)'),
+            ('WITHFOLDERSONLY', r'\bWITHFOLDERSONLY\b(?!\$)'), ('WITHFILESONLY', r'\bWITHFILESONLY\b(?!\$)'),
             ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
             ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('ERROR', r'\bERROR\b(?!\$)'),
             ('XML', r'\bXML\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),('SHOW', r'\bSHOW\b(?!\$)'), 
@@ -385,6 +389,8 @@ class Lexer:
             elif u_value == 'ONERRORGOTO': kind, value = 'ON ERROR GOTO', 'ON ERROR GOTO'
             elif u_value == 'WITHFULLPATH': kind, value = 'WITH FULLPATH', 'WITH FULLPATH'
             elif u_value == 'WITHDETAILS': kind, value = 'WITH DETAILS', 'WITH DETAILS'
+            elif u_value == 'WITHFOLDERSONLY': kind, value = 'WITH FOLDERSONLY', 'WITH FOLDERSONLY'
+            elif u_value == 'WITHFILESONLY': kind, value = 'WITH FILESONLY', 'WITH FILESONLY' 
             tokens.append((kind, value, pos)); is_start_of_line = False; i += 1
         return tokens
         
@@ -2744,95 +2750,147 @@ class Interpreter:
                 the_array.sort(key=lambda item: str(item.get(sort_key, "")) if isinstance(item, dict) else "", reverse=reverse_order)
             else:
                 the_array.sort(key=lambda item: str(item), reverse=reverse_order)
-                
+    
     def _parse_files_statement(self):
         self.variables['ERR'] = 0.0
         self._expect('FILES')
         
         path_arg = "."
-        if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'INTO', 'ID', 'WITH DETAILS', 'WITH FULLPATH']:
+        if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'INTO', 'ID', 'WITH DETAILS', 'WITH FULLPATH', 'WITH FOLDERSONLY', 'WITH FILESONLY']:
             path_arg = self._parse_expression()
 
         into_array_name = None
-        if self._current_token() and self._current_token()[0] == 'INTO':
-            self._next_token()
-            into_array_name = self._expect('ID')[1]
-            if into_array_name not in self.variables or not isinstance(self.variables.get(into_array_name), list):
-                self._error(f"'{into_array_name}' is not a dimensioned array.")
-        
         with_details, is_recursive, with_fullpath = False, False, False
+        filter_mode = None # Can be 'folders' or 'files'
+        
         while self._current_token() and self._current_token()[0] != 'NEWLINE':
             token_type = self._current_token()[0]
             token_value = self._current_token()[1].upper()
 
             if token_type == 'INTO':
-                self._next_token()
-                into_array_name = self._expect('ID')[1]
+                self._next_token(); into_array_name = self._expect('ID')[1]
                 if into_array_name not in self.variables or not isinstance(self.variables.get(into_array_name), list):
                     self._error(f"'{into_array_name}' is not a dimensioned array.")
             elif token_type == 'WITH DETAILS':
-                with_details = True
-                self._next_token()
+                with_details = True; self._next_token()
             elif token_type == 'WITH FULLPATH':
-                with_fullpath = True
-                self._next_token()
+                with_fullpath = True; self._next_token()
             elif token_type == 'ID' and token_value == 'RECURSIVE':
-                is_recursive = True
-                self._next_token()
+                is_recursive = True; self._next_token()
+            elif token_type == 'WITH FOLDERSONLY':
+                filter_mode = 'folders'; self._next_token()
+            elif token_type == 'WITH FILESONLY':
+                filter_mode = 'files'; self._next_token()
             else:
-                # If the token isn't a recognized clause, assume we're done with options
                 break 
-        
-        try:
-            glob_pattern = os.path.expanduser(str(path_arg))
-            if os.path.isdir(glob_pattern):
-                wildcard = os.path.join('**', '*') if is_recursive else '*'
-                glob_pattern = os.path.join(glob_pattern, wildcard)
-            elif is_recursive and '**' not in glob_pattern:
-                dir_part, file_part = os.path.split(glob_pattern)
-                glob_pattern = os.path.join(dir_part, '**', file_part)
-        except Exception:
-            self.variables['ERR'] = 1.0; glob_pattern = path_arg
-        
-        file_list = sorted(glob.glob(glob_pattern, recursive=is_recursive))
 
-        if into_array_name is None:
-            if not file_list: print("File not found"); return
-            if with_details:
-                name_width = 70 if with_fullpath else 25
-                for fp in file_list:
-                    try:
-                        # --- MODIFIED LINE ---
-                        name = os.path.abspath(fp) if with_fullpath else os.path.basename(fp)
-                        stats = os.stat(fp)
-                        date_str = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
-                        size_str = "<DIR>" if os.path.isdir(fp) else str(stats.st_size)
-                        print(f"{name:<{name_width}}\t{size_str:>12}\t{date_str}")
-                    except OSError: continue
-            else:
-                for fp in file_list:
-                    # --- MODIFIED LINE ---
-                    print(os.path.abspath(fp) if with_fullpath else os.path.basename(fp))
+        if is_recursive:
+            try:
+                path_pattern = os.path.expanduser(str(path_arg))
+                if os.path.isdir(path_pattern):
+                    start_dir, pattern = path_pattern, '*'
+                else:
+                    start_dir, pattern = os.path.split(path_pattern)
+                    if not start_dir: start_dir = '.'
+                
+                if not os.path.isdir(start_dir):
+                    if into_array_name is None: print("Directory not found"); return
+
+                found_items_for_array = []
+                for dirpath, dirnames, filenames in os.walk(start_dir):
+                    # Process directories if they are not being filtered out
+                    if filter_mode != 'files':
+                        for dirname in sorted(dirnames):
+                            full_path = os.path.join(dirpath, dirname)
+                            if into_array_name is None:
+                                name_to_print = os.path.abspath(full_path) if with_fullpath else os.path.basename(full_path)
+                                if with_details:
+                                    try:
+                                        stats = os.stat(full_path); size_str = "<DIR>"
+                                        date_str = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                                        print(f"{name_to_print:<70}\t{size_str:>12}\t{date_str}")
+                                    except OSError: continue
+                                else:
+                                    print(name_to_print)
+                            else:
+                                found_items_for_array.append(full_path)
+
+                    # Process files if they are not being filtered out
+                    if filter_mode != 'folders':
+                        for filename in sorted(filenames):
+                            if fnmatch.fnmatch(filename, pattern):
+                                full_path = os.path.join(dirpath, filename)
+                                if into_array_name is None:
+                                    name_to_print = os.path.abspath(full_path) if with_fullpath else os.path.basename(full_path)
+                                    if with_details:
+                                        try:
+                                            stats = os.stat(full_path); size_str = str(stats.st_size)
+                                            date_str = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                                            print(f"{name_to_print:<70}\t{size_str:>12}\t{date_str}")
+                                        except OSError: continue
+                                    else:
+                                        print(name_to_print)
+                                else:
+                                    found_items_for_array.append(full_path)
+                
+                if into_array_name is not None:
+                    if with_details:
+                        detailed_list = []
+                        for fp in found_items_for_array:
+                            try:
+                                stats = os.stat(fp)
+                                detailed_list.append({"name": os.path.abspath(fp) if with_fullpath else os.path.basename(fp),"size": float(stats.st_size),"date": datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),"isdir": -1.0 if os.path.isdir(fp) else 0.0})
+                            except OSError: continue
+                        self.variables[into_array_name] = detailed_list
+                    else:
+                        self.variables[into_array_name] = [os.path.abspath(p) if with_fullpath else os.path.basename(p) for p in found_items_for_array]
+            except Exception as e:
+                self._error(f"An error occurred during recursive file search: {e}")
         else:
-            if with_details:
-                detailed_list = []
-                for fp in file_list:
-                    try:
-                        stats = os.stat(fp)
-                        detailed_list.append({
-                            # --- MODIFIED LINE ---
-                            "name": os.path.abspath(fp) if with_fullpath else os.path.basename(fp),
-                            "size": float(stats.st_size),
-                            "date": datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
-                            "isdir": -1.0 if os.path.isdir(fp) else 0.0
-                        })
-                    except OSError: continue
-                self.variables[into_array_name] = detailed_list
-            else: 
-                # --- MODIFIED LINE ---
-                self.variables[into_array_name] = [os.path.abspath(p) if with_fullpath else os.path.basename(p) for p in file_list]
+            # --- NON-RECURSIVE PATH ---
+            try:
+                glob_pattern = os.path.expanduser(str(path_arg))
+                if os.path.isdir(glob_pattern):
+                    glob_pattern = os.path.join(glob_pattern, '*')
+                
+                file_list = sorted(glob.glob(glob_pattern))
+                
+                if filter_mode == 'files':
+                    file_list = [p for p in file_list if os.path.isfile(p)]
+                elif filter_mode == 'folders':
+                    file_list = [p for p in file_list if os.path.isdir(p)]
+
+                if into_array_name is None:
+                    if not file_list: print("File not found"); return
+                    if with_details:
+                        name_width = 70 if with_fullpath else 25
+                        for fp in file_list:
+                            try:
+                                name = os.path.abspath(fp) if with_fullpath else os.path.basename(fp)
+                                stats = os.stat(fp)
+                                date_str = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+                                size_str = "<DIR>" if os.path.isdir(fp) else str(stats.st_size)
+                                print(f"{name:<{name_width}}\t{size_str:>12}\t{date_str}")
+                            except OSError: continue
+                    else:
+                        for fp in file_list:
+                            print(os.path.abspath(fp) if with_fullpath else os.path.basename(fp))
+                else:
+                    if with_details:
+                        detailed_list = []
+                        for fp in file_list:
+                            try:
+                                stats = os.stat(fp)
+                                detailed_list.append({"name": os.path.abspath(fp) if with_fullpath else os.path.basename(fp),"size": float(stats.st_size),"date": datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),"isdir": -1.0 if os.path.isdir(fp) else 0.0})
+                            except OSError: continue
+                        self.variables[into_array_name] = detailed_list
+                    else: 
+                        self.variables[into_array_name] = [os.path.abspath(p) if with_fullpath else os.path.basename(p) for p in file_list]
+            except Exception as e:
+                self._error(f"An error occurred during file search: {e}")              
 
     def _parse_for_in_files_loop(self):
+        """Parses a FOR...IN FILES(...) loop to iterate over file paths, with optional keywords."""
         self._expect('FOR')
         loop_var_name = self._expect('ID')[1]
         self._expect('IN')
@@ -2840,14 +2898,49 @@ class Interpreter:
         
         self._expect('LPAREN')
         pattern = self._parse_expression()
+        
+        # --- NEW: Parse all optional keywords inside the parentheses ---
+        is_recursive = False
+        with_fullpath = False
+        filter_mode = None # Can be 'folders' or 'files'
+        
+        while self._current_token() and self._current_token()[0] != 'RPAREN':
+            token_type = self._current_token()[0]
+            token_value = self._current_token()[1].upper()
+
+            if token_type == 'ID' and token_value == 'RECURSIVE':
+                is_recursive = True; self._next_token()
+            elif token_type == 'WITH FULLPATH':
+                with_fullpath = True; self._next_token()
+            elif token_type == 'WITH FOLDERSONLY':
+                filter_mode = 'folders'; self._next_token()
+            elif token_type == 'WITH FILESONLY':
+                filter_mode = 'files'; self._next_token()
+            else:
+                self._error(f"Unexpected token '{self._current_token()[1]}' inside FILES().")
+        
         self._expect('RPAREN')
         
         if not isinstance(pattern, str):
             self._error("Argument for FILES() in a FOR loop must be a string pattern.")
             
         try:
-            # Use glob to get the list of files, and sort it for consistency
-            file_list = sorted(glob.glob(pattern))
+            glob_pattern = os.path.expanduser(str(pattern))
+            if os.path.isdir(glob_pattern):
+                wildcard = os.path.join('**', '*') if is_recursive else '*'
+                glob_pattern = os.path.join(glob_pattern, wildcard)
+            elif is_recursive and '**' not in glob_pattern:
+                dir_part, file_part = os.path.split(glob_pattern)
+                glob_pattern = os.path.join(dir_part, '**', file_part)
+            
+            file_list = sorted(glob.glob(glob_pattern, recursive=is_recursive))
+
+            # --- NEW: Filter the results based on the chosen mode ---
+            if filter_mode == 'files':
+                file_list = [p for p in file_list if os.path.isfile(p)]
+            elif filter_mode == 'folders':
+                file_list = [p for p in file_list if os.path.isdir(p)]
+
         except Exception as e:
             self._error(f"Invalid pattern for FILES loop: {e}")
 
@@ -2861,16 +2954,15 @@ class Interpreter:
                 return
 
             for filepath in file_list:
-                # Assign the filename (without the path) to the loop variable
-                self.variables[loop_var_name] = os.path.basename(filepath)
+                value_to_assign = os.path.abspath(filepath) if with_fullpath else os.path.basename(filepath)
+                self.variables[loop_var_name] = value_to_assign
 
-                # Execute the loop body
                 self.token_index = loop_body_start_index
-                if self._current_token() and self.tokens[self.token_index][0] == 'NEWLINE': self._next_token()
+                if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
                 self.run_block(end_tokens={'NEXT'})
                 
                 self._expect('NEXT')
-                if self._current_token() and self.tokens[self.token_index][0] == 'ID':
+                if self._current_token() and self._current_token()[0] == 'ID':
                     self._next_token()
 
         except LoopExit as e:
@@ -2879,11 +2971,11 @@ class Interpreter:
             else:
                 raise e
         finally:
-            # Restore the loop variable to its original state
             if original_value is not None:
                 self.variables[loop_var_name] = original_value
             elif loop_var_name in self.variables:
                 del self.variables[loop_var_name]
+                
                 
     def _parse_name_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
@@ -5145,84 +5237,6 @@ class Interpreter:
                 del self.variables[loop_var_name]
             if 'RECNO' in self.variables:
                 del self.variables['RECNO']
-
-    def _parse_for_in_files_loop(self):
-        """Parses a FOR...IN FILES(...) loop to iterate over file paths, with optional recursion."""
-        self._expect('FOR')
-        loop_var_name = self._expect('ID')[1]
-        self._expect('IN')
-        self._expect('FILES')
-        
-        self._expect('LPAREN')
-        pattern = self._parse_expression()
-        
-        # --- NEW: Parse optional keywords inside the parentheses ---
-        is_recursive = False
-        with_fullpath = False
-        while self._current_token() and self._current_token()[0] != 'RPAREN':
-            token_type = self._current_token()[0]
-            token_value = self._current_token()[1].upper()
-
-            if token_type == 'ID' and token_value == 'RECURSIVE':
-                is_recursive = True
-                self._next_token()
-            elif token_type == 'WITH FULLPATH':
-                with_fullpath = True
-                self._next_token()
-            else:
-                self._error(f"Unexpected token '{self._current_token()[1]}' inside FILES().")
-        
-        self._expect('RPAREN')
-        
-        if not isinstance(pattern, str):
-            self._error("Argument for FILES() in a FOR loop must be a string pattern.")
-            
-        try:
-            glob_pattern = os.path.expanduser(str(pattern))
-            if os.path.isdir(glob_pattern):
-                wildcard = os.path.join('**', '*') if is_recursive else '*'
-                glob_pattern = os.path.join(glob_pattern, wildcard)
-            elif is_recursive and '**' not in glob_pattern:
-                dir_part, file_part = os.path.split(glob_pattern)
-                glob_pattern = os.path.join(dir_part, '**', file_part)
-            
-            file_list = sorted(glob.glob(glob_pattern, recursive=is_recursive))
-        except Exception as e:
-            self._error(f"Invalid pattern for FILES loop: {e}")
-
-        loop_body_start_index = self.token_index
-        original_value = self.variables.get(loop_var_name)
-
-        try:
-            if not file_list:
-                self.token_index = loop_body_start_index
-                self._skip_block('FOR', 'NEXT')
-                return
-
-            for filepath in file_list:
-                # --- NEW: Respect the with_fullpath flag ---
-                value_to_assign = os.path.abspath(filepath) if with_fullpath else os.path.basename(filepath)
-                self.variables[loop_var_name] = value_to_assign
-
-                # Execute the loop body
-                self.token_index = loop_body_start_index
-                if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
-                self.run_block(end_tokens={'NEXT'})
-                
-                self._expect('NEXT')
-                if self._current_token() and self._current_token()[0] == 'ID':
-                    self._next_token()
-
-        except LoopExit as e:
-            if e.args[0] == 'FOR':
-                self._skip_block('FOR', 'NEXT')
-            else:
-                raise e
-        finally:
-            if original_value is not None:
-                self.variables[loop_var_name] = original_value
-            elif loop_var_name in self.variables:
-                del self.variables[loop_var_name]
                 
     def _parse_dim_statement(self):
         self._expect('DIM'); var_name = self._expect('ID')[1]
