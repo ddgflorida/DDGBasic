@@ -5,6 +5,7 @@
 ![Status](https://img.shields.io/badge/status-Active-brightgreen.svg)
 
 DbBasic is a custom, modern dialect of the BASIC programming language, built from the ground up in Python. It is designed with a strong focus on data processing, file manipulation, and direct database interaction, making it a powerful tool for scripting and data analysis tasks.
+You can think of it as either SQLite/DuckDb wrapped in a procedural language, or a BASIC with direct SQLite/DuckDb support.
 
 ---
 
@@ -59,6 +60,7 @@ LIMIT 5;
 
 DATABASE CLOSE
 END
+
 
 
 
