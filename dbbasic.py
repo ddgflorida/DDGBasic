@@ -217,6 +217,7 @@ class Lexer:
             ('ENDFORM', r'\bENDFORM\b(?!\$)'),
             ('FIELD', r'\bFIELD\b(?!\$)'),
             ('BUTTON', r'\bBUTTON\b(?!\$)'),
+            ('BELL', r'\bBELL\b(?!\$)'), 
             ('TITLE', r'\bTITLE\b(?!\$)'),
             ('TYPE', r'\bTYPE\b(?!\$)'),
             ('SIZE', r'\bSIZE\b(?!\$)'),
@@ -256,7 +257,8 @@ class Lexer:
             ('ARRAY', r'\bARRAY\b(?!\$)'), ('GOSUB', r'\bGOSUB\b(?!\$)'), ('RETURN', r'\bRETURN\b(?!\$)'),
             ('SHELL', r'\bSHELL\b(?!\$)'), ('BROWSER', r'\bBROWSER\b(?!\$)'),('RUN', r'\bRUN\b(?!\$)'),
             ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),('CHAIN', r'\bCHAIN\b(?!\$)'),
-            ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), ('TABLE', r'\bTABLE\b(?!\$)'),
+            ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), 
+            ('TABLE', r'\bTABLE\b(?!\$)'), ('TEXT', r'\bTEXT\b(?!\$)'), 
             ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('REPLACE', r'\bREPLACE\b(?!\$)'),
             ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
             ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
@@ -1011,7 +1013,8 @@ class Interpreter:
             self._error(f"Unexpected '{token[0]}'")
         elif token[0] == 'ID' and token[1].upper() == 'COPY':
             self._parse_copy_statement()
-        
+        elif token[0] == 'BELL':
+            self._parse_bell_statement()
         elif token[0] == 'FORM':
             self._parse_form_statement()
         elif token[0] == 'OPENFORM':
@@ -1019,6 +1022,13 @@ class Interpreter:
         else:
             self._error(f"Unknown statement: {token[0]}")
 
+    def _parse_bell_statement(self):
+        """Parses and executes a BELL statement."""
+        self._expect('BELL')
+        # The '\a' is the ASCII BEL character.
+        # end='' prevents a newline, and flush=True ensures it beeps immediately.
+        print('\a', end='', flush=True)
+        
     def _extract_table_from_select(self, sql_string):
         """
         Uses a regex to find the first table name after a FROM clause.
@@ -3439,12 +3449,22 @@ class Interpreter:
                     self._next_token(); field_name = self._parse_expression(); self._expect('ASSIGN'); file_path = self._parse_expression()
                     upload_file_info = (field_name, file_path)
                 elif next_clause[0] == 'ID' and next_clause[1] == 'HEADERS':
-                    self._next_token(); hash_name = self._expect('ID')[1]; headers_hash = self.variables.get(hash_name)
-                    if self._current_token() and self._current_token()[0] == 'LPAREN': self._next_token(); self._expect('RPAREN')
+                    self._next_token(); hash_name = self._expect('ID')[1]
+                    headers_hash = self.variables.get(hash_name)
+                    if self._current_token() and self._current_token()[0] == 'LPAREN': 
+                        self._next_token(); self._expect('RPAREN')
                 else: self._error("Expected FILE or HEADERS after USING")
             else: self._error(f"Unexpected token '{clause[0]}' in FETCH statement")
         destination_token = self._current_token()
         if not destination_token: self._error("FETCH statement requires an INTO or TO FILE clause.")
+        final_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+            "Accept-Language": "en-US,en;q=0.9"
+        }
+        if headers_hash:
+            final_headers.update(headers_hash) # User headers override defaults
+        
         try:
             if destination_token[0] == 'TO FILE':
                 self._next_token(); local_filename = self._parse_expression()
@@ -3462,7 +3482,8 @@ class Interpreter:
                 self._next_token(); dest_var = self._expect('ID')[1]
                 if upload_file_info and method == 'POST':
                     with open(upload_file_info[1], 'rb') as f:
-                        files = {upload_file_info[0]: f}; response = requests.post(url, data=post_data_hash, headers=headers_hash, files=files, timeout=30)
+                        files = {upload_file_info[0]: f}
+                        response = requests.post(url, data=post_data_hash, headers=headers_hash, files=files, timeout=30)
                 elif method == 'POST': response = requests.post(url, data=post_data_hash, headers=headers_hash, timeout=15)
                 else: response = requests.get(url, headers=headers_hash, timeout=15)
                 self.variables['ERR'] = float(response.status_code)
@@ -3506,6 +3527,7 @@ class Interpreter:
         elif peek and peek[0] == 'JSONL': self._parse_load_jsonl_statement()
         elif peek and peek[0] == 'XML': self._parse_load_xml_statement()
         elif peek and peek[0] == 'HTML': self._parse_load_html_statement()
+        elif peek and peek[0] == 'TEXT': self._parse_load_text_statement()
         else: self._error("Expected CSV, JSON, JSONL, FIXED, or EXCEL after LOAD")
 
     def _parse_table_name(self):
@@ -4304,7 +4326,70 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"An error occurred during JSONL load: {e}"
             self._error(f"An error occurred during JSONL load: {e}")
 
-    # Currently targeting HTML TABLE rows
+    def _parse_load_text_statement(self):
+        """Loads a plain text file line-by-line into a single-column table."""
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('LOAD')
+        self._expect('TEXT')
+
+        text_filename = self._parse_expression()
+        destination_target = None
+        if self._current_token() and self._current_token()[0] == 'CREATE':
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
+        else:
+            self._error("Expected CREATE TABLE clause for LOAD TEXT.")
+
+        add_line_num = False
+        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
+            if 'linenum=true' in options_str.lower() or 'linenum=1' in options_str.lower():
+                add_line_num = True
+
+        try:
+            # --- 1. Define the complete table schema FIRST ---
+            headers = ['line_text']
+            if add_line_num:
+                headers.append('_linenum')
+            
+            # --- 2. Create the table using the final schema ---
+            cursor = self.db_cursor
+            cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in headers])
+            cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
+            cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
+            
+            # --- 3. Read the file and prepare the data rows ---
+            with open(text_filename, 'r', encoding='utf-8', errors='replace') as infile:
+                batch = []
+                line_counter = 1
+                for line in infile:
+                    line_content = line.rstrip('\n\r')
+                    
+                    row_data = [line_content]
+                    if add_line_num:
+                        row_data.append(line_counter)
+                    
+                    batch.append(row_data)
+                    line_counter += 1
+            
+            # --- 4. Insert the prepared data ---
+            if batch:
+                placeholders = ', '.join(['?'] * len(headers))
+                quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
+                insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
+                
+                cursor.executemany(insert_sql, batch)
+                self.db_connection.commit()
+                print(f"{len(batch)} lines loaded into table {destination_target}")
+
+        except FileNotFoundError:
+            self._error(f"File not found: {text_filename}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during TEXT load: {e}")
+            
     def _parse_load_html_statement(self):
         # Note: This method requires 'from bs4 import BeautifulSoup' at the top of your file.
 
@@ -4312,19 +4397,27 @@ class Interpreter:
         self._expect('LOAD')
         self._expect('HTML')
 
+        # --- 1. PARSE THE COMMAND SYNTAX ---
+        element_type = 'TABLES' # Default to TABLES for backward compatibility
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() in ['TABLES', 'LINKS', 'IMAGES']:
+            element_type = self._current_token()[1].upper()
+            self._next_token()
+            # Check for an optional 'FROM' keyword and consume it if it exists.
+            if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'FROM':
+                self._next_token() 
+        
         html_filename = self._parse_expression()
-        destination_mode, destination_target, db_mode = None, None, None
+        destination_mode, destination_target = 'CREATE_TABLE', None
 
         if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_table_name()
         else:
             self._error("Expected CREATE TABLE clause for LOAD HTML.")
 
-        options = {'header': True, 'table_index': 0, 'batchsize': 10000}
-        # --- NEW: Initialize a flag for the linenum feature ---
+        # --- 2. PARSE THE OPTIONS CLAUSE ---
+        options = {'header': True, 'table_index': 0, 'source_url': None}
         add_line_num = False
         
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
@@ -4343,88 +4436,92 @@ class Interpreter:
             for key, value in temp_options.items():
                 if key == 'header':
                     options['header'] = value.lower() in ['true', 'y', '1']
-                elif key in ['table_index', 'batchsize']:
-                    try:
-                        options[key] = int(value)
-                    except ValueError:
-                        self._error(f"Invalid integer value for option '{key}'.")
-                # --- NEW: Check for the linenum option ---
+                elif key == 'table_index':
+                    options['table_index'] = int(value)
                 elif key == 'linenum':
                     add_line_num = value.lower() in ['true', 'y', '1']
+                elif key == 'source_url':
+                    options['source_url'] = value
         
         try:
+            # --- 3. EXTRACT DATA FROM HTML ---
             with open(html_filename, 'r', encoding='utf-8') as infile:
                 soup = BeautifulSoup(infile, 'lxml')
 
-            tables = soup.find_all('table')
-            if not tables:
-                print("Warning: No <table> elements found in the HTML file.")
-                return
-            if options['table_index'] >= len(tables):
-                self._error(f"Error: table_index {options['table_index']} is out of bounds. Only {len(tables)} tables found.")
-            
-            target_table = tables[options['table_index']]
-            
+            source_value = options.get('source_url') or html_filename
             headers = []
             data_rows = []
+
+            if element_type == 'TABLES':
+                headers.append('source')
+                tables = soup.find_all('table')
+                if not tables: self._error("No <table> elements found in the HTML file.")
+                if options['table_index'] >= len(tables): self._error(f"Error: table_index is out of bounds.")
+                
+                target_table = tables[options['table_index']]
+                table_headers = []
+                for i, row_element in enumerate(target_table.find_all('tr')):
+                    cells = row_element.find_all(['th', 'td'])
+                    row_data = [cell.get_text(strip=True) for cell in cells]
+                    if i == 0 and options['header']:
+                        table_headers = row_data
+                    else:
+                        data_rows.append([source_value] + row_data)
+                headers.extend(table_headers)
+
+            elif element_type == 'LINKS':
+                headers = ['source', 'text', 'href']
+                for link in soup.find_all('a'):
+                    text = link.get_text(strip=True)
+                    href = link.get('href', '')
+                    if href: data_rows.append([source_value, text, href])
+
+            elif element_type == 'IMAGES':
+                headers = ['source', 'src', 'alt', 'title']
+                for img in soup.find_all('img'):
+                    src = img.get('src', '')
+                    alt = img.get('alt', '')
+                    title = img.get('title', '')
+                    if src: data_rows.append([source_value, src, alt, title])
             
-            for i, row_element in enumerate(target_table.find_all('tr')):
-                cells = row_element.find_all(['th', 'td'])
-                row_data = [cell.get_text(strip=True) for cell in cells]
-
-                if i == 0 and options['header']:
-                    headers = row_data
-                else:
-                    data_rows.append(row_data)
-
-            if not headers and data_rows:
-                num_cols = len(data_rows[0])
-                headers = [f"column_{i+1}" for i in range(num_cols)]
-
-            if not data_rows:
-                print("Warning: Table found, but it contains no data rows.")
-                return
-            
+            # --- 4. PREPARE SCHEMA AND DATABASE TABLE ---
             clean_headers = self._clean_and_deduplicate_headers(headers)
-            
-            # --- NEW: Add the _linenum column to the header list if requested ---
             if add_line_num:
                 clean_headers.append('_linenum')
             
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
-                # --- NEW: Generate DDL with INTEGER type for the _linenum column ---
-                cols_def = []
-                for h in clean_headers:
-                    dtype = 'INTEGER' if h == '_linenum' else 'TEXT'
-                    cols_def.append(f'[{h}] {dtype}')
+                cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in clean_headers])
                 
-                cols_def_str = ', '.join(cols_def)
                 cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
-                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def_str});')
+                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
-                # Prepare data for insertion
-                num_data_cols = len(headers)
-                num_final_cols = len(clean_headers)
-                line_counter = 1
-                prepared_data = []
+            # --- 5. PREPARE AND INSERT DATA ---
+            if not data_rows:
+                print(f"Warning: No data records found for {element_type}. An empty table was created.")
+                return
 
-                for row in data_rows:
-                    prepared_row = row[:num_data_cols]
-                    prepared_row.extend([''] * (num_data_cols - len(prepared_row)))
-                    # --- NEW: Append the line number to the row data ---
-                    if add_line_num:
-                        prepared_row.append(line_counter)
-                    prepared_data.append(prepared_row)
-                    line_counter += 1
+            num_final_cols = len(clean_headers)
+            num_data_cols = len(headers)
+            line_counter = 1
+            prepared_data = []
 
-                if prepared_data:
-                    placeholders = ', '.join(['?'] * num_final_cols)
-                    insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({", ".join(f"[{h}]" for h in clean_headers)}) VALUES ({placeholders});'
-                    
-                    cursor.executemany(insert_sql, prepared_data)
-                    self.db_connection.commit()
-                    print(f"{len(prepared_data)} records loaded from HTML table into {destination_target}")
+            for row in data_rows:
+                prepared_row = row[:num_data_cols]
+                prepared_row.extend([''] * (num_data_cols - len(prepared_row)))
+                if add_line_num:
+                    prepared_row.append(line_counter)
+                prepared_data.append(prepared_row)
+                line_counter += 1
+
+            if prepared_data:
+                placeholders = ', '.join(['?'] * num_final_cols)
+                quoted_headers = ', '.join([self._quote_identifier(h) for h in clean_headers])
+                insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
+                
+                cursor.executemany(insert_sql, prepared_data)
+                self.db_connection.commit()
+                print(f"{len(prepared_data)} records loaded from HTML {element_type} into {destination_target}")
 
         except FileNotFoundError:
             self._error(f"File not found: {html_filename}")
