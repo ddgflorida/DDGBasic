@@ -197,15 +197,19 @@ class Lexer:
         return line, col
 
     def _tokenize(self):
-        replacements = {r'\bEND\s+IF\b': 'ENDIF', r'\bLINE\s+INPUT\b': 'LINEINPUT', r'\bEND\s+LOOP\b': 'ENDLOOP',
-                        r'\bFOR\s+EACH\b': 'FOREACH', r'\bEND\s+TRANSACTION\b': 'ENDTRANSACTION', r'\bREAD\s+FILE\b': 'READFILE',
-                        r'\bTO\s+FILE\b': 'TOFILE', r'\bINTO\s+FILE\b': 'INTOFILE', 
-                        r'\bANALYZE\s+CSV\b': 'ANALYZECSV',r'\bANALYZE\s+FIXED\b': 'ANALYZEFIXED',
-                        r'\bANALYZE\s+JSONL\b': 'ANALYZEJSONL', r'\bANALYZE\s+JSON\b': 'ANALYZEJSON',
-                        r'\bANALYZE\s+XML\b': 'ANALYZEXML',r'\bANALYZE\s+FILE\b': 'ANALYZEFILE',
-                        r'\bON\s+ERROR\s+GOTO\b': 'ONERRORGOTO',
-                        r'\bEND\s+FORM\b': 'ENDFORM',r'\bOPEN\s+FORM\b': 'OPENFORM',
-                        r'\bLIST\s+FIELDS\b': 'LISTFIELDS'}
+        replacements = {
+            r'\bEND\s+IF\b': 'ENDIF', r'\bLINE\s+INPUT\b': 'LINEINPUT', r'\bEND\s+LOOP\b': 'ENDLOOP',
+            r'\bFOR\s+EACH\b': 'FOREACH', r'\bEND\s+TRANSACTION\b': 'ENDTRANSACTION', r'\bREAD\s+FILE\b': 'READFILE',
+            r'\bTO\s+FILE\b': 'TOFILE', r'\bINTO\s+FILE\b': 'INTOFILE', 
+            r'\bANALYZE\s+CSV\b': 'ANALYZECSV',r'\bANALYZE\s+FIXED\b': 'ANALYZEFIXED',
+            r'\bANALYZE\s+JSONL\b': 'ANALYZEJSONL', r'\bANALYZE\s+JSON\b': 'ANALYZEJSON',
+            r'\bANALYZE\s+XML\b': 'ANALYZEXML',r'\bANALYZE\s+TEXT\b': 'ANALYZETEXT',
+            r'\bON\s+ERROR\s+GOTO\b': 'ONERRORGOTO',
+            r'\bEND\s+FORM\b': 'ENDFORM',r'\bOPEN\s+FORM\b': 'OPENFORM',
+            r'\bWITH\s+DETAILS\b': 'WITHDETAILS',
+            r'\bWITH\s+FULLPATH\b': 'WITHFULLPATH',
+            r'\bLIST\s+FIELDS\b': 'LISTFIELDS'
+        }
         code = self.raw_source_code
         for pattern, repl in replacements.items():
             code = re.sub(pattern, repl, code, flags=re.IGNORECASE)
@@ -243,13 +247,15 @@ class Lexer:
             # ---------------------------
             ('STRING', r'"([^"]|"")*"'), ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?'),
             ('REM', r'REM[^\n]*'), ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
-            ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZEFILE', r'\bANALYZEFILE\b'),
+            ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZETEXT', r'\bANALYZETEXT\b'),
             ('LINEINPUT', r'\bLINEINPUT\b(?!\$)'), ('TOFILE', r'\bTOFILE\b(?!\$)'), ('READFILE', r'\bREADFILE\b(?!\$)'),
             ('ENDLOOP', r'\bENDLOOP\b(?!\$)'), ('DATABASE', r'\bDATABASE\b(?!\$)'), ('SELECT', r'\bSELECT\b(?!\$)'),
             ('INSERT', r'\bINSERT\b(?!\$)'), ('DELETE', r'\bDELETE\b(?!\$)'), ('DESCRIBE', r'\bDESCRIBE\b(?!\$)'),
             ('UPDATE', r'\bUPDATE\b(?!\$)'), ('CREATE', r'\bCREATE\b(?!\$)'), ('DROP', r'\bDROP\b(?!\$)'),('ALTER', r'\bALTER\b(?!\$)'),
             ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
-            ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
+            ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), 
+            ('WITHFULLPATH', r'\bWITHFULLPATH\b(?!\$)'), ('WITHDETAILS', r'\bWITHDETAILS\b(?!\$)'),
+            ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
             ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('ERROR', r'\bERROR\b(?!\$)'),
             ('XML', r'\bXML\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),('SHOW', r'\bSHOW\b(?!\$)'), 
             ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'),('DUMP', r'\bDUMP\b(?!\$)'), 
@@ -374,9 +380,11 @@ class Lexer:
             elif u_value == 'ANALYZEJSON': kind, value = 'ANALYZE JSON', 'ANALYZE JSON'
             elif u_value == 'ANALYZEJSONL': kind, value = 'ANALYZE JSONL', 'ANALYZE JSONL'
             elif u_value == 'ANALYZEXML': kind, value = 'ANALYZE XML', 'ANALYZE XML'
-            elif u_value == 'ANALYZEFILE': kind, value = 'ANALYZE FILE', 'ANALYZE FILE'
+            elif u_value == 'ANALYZETEXT': kind, value = 'ANALYZE TEXT', 'ANALYZE TEXT'
             elif u_value == 'ANALYZEFIXED': kind, value = 'ANALYZE FIXED', 'ANALYZE FIXED'
             elif u_value == 'ONERRORGOTO': kind, value = 'ON ERROR GOTO', 'ON ERROR GOTO'
+            elif u_value == 'WITHFULLPATH': kind, value = 'WITH FULLPATH', 'WITH FULLPATH'
+            elif u_value == 'WITHDETAILS': kind, value = 'WITH DETAILS', 'WITH DETAILS'
             tokens.append((kind, value, pos)); is_start_of_line = False; i += 1
         return tokens
         
@@ -896,63 +904,63 @@ class Interpreter:
             if is_in_loop:
                 # The token after IN determines the loop type
                 loop_type_token = self.tokens[peek_index + 1]
-                if loop_type_token[0] == 'CSV':
+                if loop_type_token[0] == 'CSV':                  # iteral csv file
                     self._parse_for_in_csv_loop()
-                elif loop_type_token[0] == 'JSONL':
+                elif loop_type_token[0] == 'JSONL':              # interate json lines file
                     self._parse_for_in_jsonl_loop()
-                elif loop_type_token[0] == 'JSON':
+                elif loop_type_token[0] == 'JSON':               # iterate json keys
                     self._parse_for_in_json_loop()
-                elif loop_type_token[0] == 'FILES':
-                    self._parse_for_in_files_loop() # <-- YOUR NEW LOOP
-                else: # Default to SQL loop
+                elif loop_type_token[0] == 'FILES':              # loop through files
+                    self._parse_for_in_files_loop()              
+                else: # Default to SQL loop                      # iterate sql result set
                     self._parse_for_in_sql_loop()
             else:
                 # If 'IN' was not found, it's a standard FOR i = 1 TO 10 loop
                 self._parse_for_statement()
         elif token[0] == 'SORT':
             self._parse_sort_statement()
-        elif token[0] == 'FILES':
+        elif token[0] == 'FILES':                                 # get directory listing
             self._parse_files_statement()
-        elif token[0] == 'ID' and token[1].upper() == 'NAME':
+        elif token[0] == 'ID' and token[1].upper() == 'NAME':     # rename file
             self._parse_name_statement()
-        elif token[0] == 'DUMP':           
+        elif token[0] == 'DUMP':                                  # see internals
             self._parse_dump_statement()
-        elif token[0] == 'CHDIR':           
+        elif token[0] == 'CHDIR':                                 # change directory   
             self._parse_chdir_statement()
-        elif token[0] == 'MKDIR':           
+        elif token[0] == 'MKDIR':                                 # make directory   
             self._parse_mkdir_statement()
-        elif token[0] == 'RMDIR':           
+        elif token[0] == 'RMDIR':                                 # remove directory
             self._parse_rmdir_statement()
-        elif token[0] == 'KILL':           
+        elif token[0] == 'KILL':                                  # delete file
             self._parse_kill_statement()
-        elif token[0] == 'SHELL':
+        elif token[0] == 'SHELL':                                 # invoke o/s shell
             self._parse_shell_statement() 
         elif token[0] == 'SHOW':
             self._parse_show_statement()
-        elif token[0] == 'EXECUTE':
+        elif token[0] == 'EXECUTE':                               # execute dynamic sql
             self._parse_execute_statement()
-        elif token[0] == 'CHAIN':   # Replace current script with another DbBASIC script
+        elif token[0] == 'CHAIN':                                 # Replace current script with another DbBASIC script
             self._parse_chain_statement()
-        elif token[0] == 'RUN':   # Run another script and come back
+        elif token[0] == 'RUN':                                   # Run another script and come back
             self._parse_run_statement()
-        elif token[0] == 'ZIP':
+        elif token[0] == 'ZIP':                                   # zip file to zip folder
             self._parse_zip_statement()
-        elif token[0] == 'UNZIP':
+        elif token[0] == 'UNZIP':                                 # unzip zip folder
             self._parse_unzip_statement()
-        elif token[0] == 'BROWSER':
-            self._parse_browser_statement()
+        elif token[0] == 'BROWSER':                               # invoice default browser
+            self._parse_browser_statement() 
         elif token[0] == 'EXIT':
             self._parse_exit_statement()
         elif token[0] == 'ERROR':
             self._parse_error_statement()
-        elif token[0] == 'FETCH':
+        elif token[0] == 'FETCH':                                 # invoke URL
             self._parse_fetch_statement()
-        elif token[0] == 'PARSE':                    # PARSE JSON
+        elif token[0] == 'PARSE':                                 # PARSE JSON
             self._parse_json_statement()
         elif token[0] == 'LOAD':
             self._parse_load_statement()
-        elif token[0] == 'ANALYZE FILE':
-            self._parse_analyze_file_statement()
+        elif token[0] == 'ANALYZE TEXT':
+            self._parse_analyze_text_statement()
         elif token[0] == 'ANALYZE CSV':
             self._parse_analyze_csv_statement()
         elif token[0] == 'ANALYZE FIXED':
@@ -965,37 +973,37 @@ class Interpreter:
             self._parse_analyze_xml_statement()
         elif token[0] == 'PRINT':
             self._parse_print_statement()
-        elif token[0] == 'DESCRIBE':
+        elif token[0] == 'DESCRIBE':                              # describe sql table/view
             self._parse_describe_statement()
-        elif token[0] == 'WRITE':
+        elif token[0] == 'WRITE':                                 # write variables as csv
             self._parse_write_statement()
-        elif token[0] == 'DATABASE':
+        elif token[0] == 'DATABASE':                              # define database in use
             self._parse_database_statement()
-        elif token[0] == 'LET' or token[0] == 'ID':
+        elif token[0] == 'LET' or token[0] == 'ID':               # optional let var = value
              self._parse_assignment_statement()
-        elif token[0] == 'DIM':
+        elif token[0] == 'DIM':                                   # declare variable
             self._parse_dim_statement()
-        elif token[0] == 'REDIM':
+        elif token[0] == 'REDIM':                                 # redeclare array
             self._parse_redim_statement()
-        elif token[0] == 'WHILE':
+        elif token[0] == 'WHILE':                                 # while loop
             self._parse_while_statement()
-        elif token[0] == 'OPEN':
+        elif token[0] == 'OPEN':                                  # open file
             self._parse_open_statement()
-        elif token[0] == 'CLOSE':
+        elif token[0] == 'CLOSE':                                 # close file
             self._parse_close_statement()
-        elif token[0] == 'READ FILE':
+        elif token[0] == 'READ FILE':                             # read file into variable
             self._parse_read_file_statement()
-        elif token[0] == 'LINE INPUT':
+        elif token[0] == 'LINE INPUT':                            # read a line from file
             self._parse_line_input_statement()
-        elif token[0] == 'INPUT':
+        elif token[0] == 'INPUT':                                 # read input from stdin
             self._parse_input_statement()
-        elif token[0] == 'GOSUB':
+        elif token[0] == 'GOSUB':                                 # call named subroutine
             self._parse_gosub_statement()
-        elif token[0] == 'RETURN':
+        elif token[0] == 'RETURN':                                # return from subroutine
             self._parse_return_statement()
-        elif token[0] == 'PUSH':
+        elif token[0] == 'PUSH':                                  # Push item on array
             self._parse_push_statement()
-        elif token[0] == 'POP':
+        elif token[0] == 'POP':                                   # Pop array
             self._parse_pop_statement()
         elif token[0] == 'UNSHIFT':
             self._parse_unshift_statement()
@@ -1005,17 +1013,17 @@ class Interpreter:
             self._parse_splice_statement()
         elif token[0] == 'REVERSE':
             self._parse_reverse_statement()
-        elif token[0] == 'TRON':
+        elif token[0] == 'TRON':                                  # trace on
             self._parse_tron_statement()
-        elif token[0] == 'TROFF':
+        elif token[0] == 'TROFF':                                 # trace off
             self._parse_troff_statement()
         elif token[0] in ['ELSE', 'ELSEIF', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
             self._error(f"Unexpected '{token[0]}'")
         elif token[0] == 'ID' and token[1].upper() == 'COPY':
             self._parse_copy_statement()
-        elif token[0] == 'BELL':
+        elif token[0] == 'BELL':                                  # Ring a bell
             self._parse_bell_statement()
-        elif token[0] == 'FORM':
+        elif token[0] == 'FORM':                                   
             self._parse_form_statement()
         elif token[0] == 'OPENFORM':
             self._parse_open_form_statement()
@@ -2738,44 +2746,91 @@ class Interpreter:
                 the_array.sort(key=lambda item: str(item), reverse=reverse_order)
                 
     def _parse_files_statement(self):
-        self.variables['ERR'] = 0.0; self._expect('FILES')
-        path_arg, with_details, into_array_name = ".", False, None
-        if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'INTO', 'WITH']: path_arg = self._parse_expression()
+        self.variables['ERR'] = 0.0
+        self._expect('FILES')
+        
+        path_arg = "."
+        if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'INTO', 'ID', 'WITH DETAILS', 'WITH FULLPATH']:
+            path_arg = self._parse_expression()
+
+        into_array_name = None
         if self._current_token() and self._current_token()[0] == 'INTO':
-            self._next_token(); into_array_name = self._expect('ID')[1]
+            self._next_token()
+            into_array_name = self._expect('ID')[1]
             if into_array_name not in self.variables or not isinstance(self.variables.get(into_array_name), list):
                 self._error(f"'{into_array_name}' is not a dimensioned array.")
-        if self._current_token() and self._current_token()[0] == 'WITH':
-            self._next_token(); self._expect('DETAILS'); with_details = True
+        
+        with_details, is_recursive, with_fullpath = False, False, False
+        while self._current_token() and self._current_token()[0] != 'NEWLINE':
+            token_type = self._current_token()[0]
+            token_value = self._current_token()[1].upper()
+
+            if token_type == 'INTO':
+                self._next_token()
+                into_array_name = self._expect('ID')[1]
+                if into_array_name not in self.variables or not isinstance(self.variables.get(into_array_name), list):
+                    self._error(f"'{into_array_name}' is not a dimensioned array.")
+            elif token_type == 'WITH DETAILS':
+                with_details = True
+                self._next_token()
+            elif token_type == 'WITH FULLPATH':
+                with_fullpath = True
+                self._next_token()
+            elif token_type == 'ID' and token_value == 'RECURSIVE':
+                is_recursive = True
+                self._next_token()
+            else:
+                # If the token isn't a recognized clause, assume we're done with options
+                break 
+        
         try:
-            expanded_path = os.path.expanduser(str(path_arg))
-            glob_pattern = os.path.join(expanded_path, '*') if os.path.isdir(expanded_path) else expanded_path
-        except Exception: self.variables['ERR'] = 1.0; glob_pattern = path_arg
+            glob_pattern = os.path.expanduser(str(path_arg))
+            if os.path.isdir(glob_pattern):
+                wildcard = os.path.join('**', '*') if is_recursive else '*'
+                glob_pattern = os.path.join(glob_pattern, wildcard)
+            elif is_recursive and '**' not in glob_pattern:
+                dir_part, file_part = os.path.split(glob_pattern)
+                glob_pattern = os.path.join(dir_part, '**', file_part)
+        except Exception:
+            self.variables['ERR'] = 1.0; glob_pattern = path_arg
+        
+        file_list = sorted(glob.glob(glob_pattern, recursive=is_recursive))
+
         if into_array_name is None:
-            file_paths = sorted(glob.glob(glob_pattern))
-            if not file_paths: print("File not found"); return
+            if not file_list: print("File not found"); return
             if with_details:
-                for fp in file_paths:
+                name_width = 70 if with_fullpath else 25
+                for fp in file_list:
                     try:
-                        stats = os.stat(fp); name = os.path.basename(fp)
+                        # --- MODIFIED LINE ---
+                        name = os.path.abspath(fp) if with_fullpath else os.path.basename(fp)
+                        stats = os.stat(fp)
                         date_str = datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
                         size_str = "<DIR>" if os.path.isdir(fp) else str(stats.st_size)
-                        print(f"{name:<25}\t{size_str:>12}\t{date_str}")
+                        print(f"{name:<{name_width}}\t{size_str:>12}\t{date_str}")
                     except OSError: continue
             else:
-                for fp in file_paths: print(os.path.basename(fp))
+                for fp in file_list:
+                    # --- MODIFIED LINE ---
+                    print(os.path.abspath(fp) if with_fullpath else os.path.basename(fp))
         else:
             if with_details:
                 detailed_list = []
-                for fp in glob.glob(glob_pattern):
+                for fp in file_list:
                     try:
                         stats = os.stat(fp)
-                        detailed_list.append({"name": os.path.basename(fp), "size": float(stats.st_size),
-                                              "date": datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
-                                              "isdir": -1.0 if os.path.isdir(fp) else 0.0})
+                        detailed_list.append({
+                            # --- MODIFIED LINE ---
+                            "name": os.path.abspath(fp) if with_fullpath else os.path.basename(fp),
+                            "size": float(stats.st_size),
+                            "date": datetime.fromtimestamp(stats.st_mtime).strftime('%Y-%m-%d %H:%M:%S'),
+                            "isdir": -1.0 if os.path.isdir(fp) else 0.0
+                        })
                     except OSError: continue
                 self.variables[into_array_name] = detailed_list
-            else: self.variables[into_array_name] = [os.path.basename(p) for p in glob.glob(glob_pattern)]
+            else: 
+                # --- MODIFIED LINE ---
+                self.variables[into_array_name] = [os.path.abspath(p) if with_fullpath else os.path.basename(p) for p in file_list]
 
     def _parse_for_in_files_loop(self):
         self._expect('FOR')
@@ -5090,7 +5145,85 @@ class Interpreter:
                 del self.variables[loop_var_name]
             if 'RECNO' in self.variables:
                 del self.variables['RECNO']
+
+    def _parse_for_in_files_loop(self):
+        """Parses a FOR...IN FILES(...) loop to iterate over file paths, with optional recursion."""
+        self._expect('FOR')
+        loop_var_name = self._expect('ID')[1]
+        self._expect('IN')
+        self._expect('FILES')
         
+        self._expect('LPAREN')
+        pattern = self._parse_expression()
+        
+        # --- NEW: Parse optional keywords inside the parentheses ---
+        is_recursive = False
+        with_fullpath = False
+        while self._current_token() and self._current_token()[0] != 'RPAREN':
+            token_type = self._current_token()[0]
+            token_value = self._current_token()[1].upper()
+
+            if token_type == 'ID' and token_value == 'RECURSIVE':
+                is_recursive = True
+                self._next_token()
+            elif token_type == 'WITH FULLPATH':
+                with_fullpath = True
+                self._next_token()
+            else:
+                self._error(f"Unexpected token '{self._current_token()[1]}' inside FILES().")
+        
+        self._expect('RPAREN')
+        
+        if not isinstance(pattern, str):
+            self._error("Argument for FILES() in a FOR loop must be a string pattern.")
+            
+        try:
+            glob_pattern = os.path.expanduser(str(pattern))
+            if os.path.isdir(glob_pattern):
+                wildcard = os.path.join('**', '*') if is_recursive else '*'
+                glob_pattern = os.path.join(glob_pattern, wildcard)
+            elif is_recursive and '**' not in glob_pattern:
+                dir_part, file_part = os.path.split(glob_pattern)
+                glob_pattern = os.path.join(dir_part, '**', file_part)
+            
+            file_list = sorted(glob.glob(glob_pattern, recursive=is_recursive))
+        except Exception as e:
+            self._error(f"Invalid pattern for FILES loop: {e}")
+
+        loop_body_start_index = self.token_index
+        original_value = self.variables.get(loop_var_name)
+
+        try:
+            if not file_list:
+                self.token_index = loop_body_start_index
+                self._skip_block('FOR', 'NEXT')
+                return
+
+            for filepath in file_list:
+                # --- NEW: Respect the with_fullpath flag ---
+                value_to_assign = os.path.abspath(filepath) if with_fullpath else os.path.basename(filepath)
+                self.variables[loop_var_name] = value_to_assign
+
+                # Execute the loop body
+                self.token_index = loop_body_start_index
+                if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+                self.run_block(end_tokens={'NEXT'})
+                
+                self._expect('NEXT')
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token()
+
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                self._skip_block('FOR', 'NEXT')
+            else:
+                raise e
+        finally:
+            if original_value is not None:
+                self.variables[loop_var_name] = original_value
+            elif loop_var_name in self.variables:
+                del self.variables[loop_var_name]
+                
     def _parse_dim_statement(self):
         self._expect('DIM'); var_name = self._expect('ID')[1]
         if self._current_token() and self._current_token()[0] == 'AS':
@@ -5862,10 +5995,11 @@ class Interpreter:
         else:
             return f"{size/1024**3:.2f} GB"
 
-    def _parse_analyze_file_statement(self):
-        """Performs a detailed statistical analysis of a text file."""
+    def _parse_analyze_text_statement(self):
+        """Performs a detailed statistical analysis of a text file, including encoding and newlines."""
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('ANALYZE FILE')
+        # I changed the name of this function
+        self._expect('ANALYZE TEXT')
         filename = self._parse_expression()
 
         into_hash_name = None
@@ -5880,10 +6014,38 @@ class Interpreter:
             file_size = os.path.getsize(filename)
             report['FILE_SIZE_BYTES'] = file_size
             
-            with open(filename, 'r', encoding='utf-8', errors='replace') as f:
-                lines = f.readlines()
+            # --- NEW: Encoding and Newline Detection ---
+            encoding = 'unknown'
+            newline_type = 'N/A'
+            with open(filename, 'rb') as f_binary:
+                # Encoding detection: Check for BOM, then try UTF-8 decode.
+                bom = f_binary.read(3)
+                if bom == b'\xef\xbb\xbf':
+                    encoding = 'UTF-8 (with BOM)'
+                else:
+                    f_binary.seek(0)
+                    try:
+                        f_binary.read().decode('utf-8')
+                        encoding = 'UTF-8 (no BOM)'
+                    except UnicodeDecodeError:
+                        encoding = 'ANSI / Western (e.g., Latin-1, CP-1252)'
+                
+                # Newline detection
+                f_binary.seek(0)
+                content_sample = f_binary.read(8192) # Read a sample
+                if b'\r\n' in content_sample:
+                    newline_type = 'CRLF (Windows)'
+                elif b'\n' in content_sample:
+                    newline_type = 'LF (Unix/macOS)'
             
-            full_content = "".join(lines)
+            report['ENCODING'] = encoding
+            report['NEWLINE_TYPE'] = newline_type
+            
+            # --- More efficient content analysis ---
+            with open(filename, 'r', encoding='utf-8', errors='replace') as f:
+                full_content = f.read()
+            
+            lines = full_content.splitlines()
             total_lines = len(lines)
             empty_lines = sum(1 for line in lines if not line.strip())
             
@@ -5896,12 +6058,14 @@ class Interpreter:
             if into_hash_name:
                 self.variables[into_hash_name] = self._python_to_basic_data(report)
             else:
-                print(f"--- File Analysis Report for: {filename} ---")
-                print(f"  File Size    : {self._format_bytes(file_size)}")
-                print(f"  Total Lines  : {report['TOTAL_LINES']}")
-                print(f"  Empty Lines  : {report['EMPTY_LINES']}")
-                print(f"  Total Chars  : {report['TOTAL_CHARACTERS']}")
-                print(f"  Total Words  : {report['TOTAL_WORDS']}")
+                print(f"--- Text File Analysis Report for: {filename} ---")
+                print(f"  File Size       : {self._format_bytes(file_size)}")
+                print(f"  Encoding        : {report['ENCODING']}")
+                print(f"  Newline Style   : {report['NEWLINE_TYPE']}")
+                print(f"  Total Lines     : {report['TOTAL_LINES']}")
+                print(f"  Empty Lines     : {report['EMPTY_LINES']}")
+                print(f"  Total Chars     : {report['TOTAL_CHARACTERS']}")
+                print(f"  Total Words     : {report['TOTAL_WORDS']}")
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
