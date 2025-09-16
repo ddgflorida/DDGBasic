@@ -19,14 +19,15 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * **Engine Switching:** Use the `DATABASE ENGINE [SQLITE|DUCKDB]` command to change the backend at any time within a script.
 
 * ### Powerful Data Ingestion & Transformation
-    * **`LOAD` Command:** Ingest data directly from `.csv`, `.json`, and `.xls`/`.xlsx` (**Excel**) files into database tables or for file-to-file conversion.
+    * **`LOAD` Command:** Ingest data directly from `.csv`, `fixed`, `.json`,`.jsonl`, `xml`, and `.xls`/`.xlsx` (**Excel**) files into database tables or for file-to-file conversion.
     * **Advanced Options:** The `LOAD` command includes a rich `OPTIONS` string to handle headers, delimiters, and powerful transformations.
     * **Field Manipulation:** Select, rename (`fields=[Name] as N`), and exclude (`fields=*,-[Name]`) columns on the fly during data loading.
 
 * ### Modern Connectivity & Tooling
     * **`FETCH` Command:** Download data directly from web URLs via GET or POST requests, with support for file uploads and custom headers.
     * **`SHELL` Command:** Execute shell commands directly from the script to interact with the underlying operating system.
-    * **Data Analysis:** Use `ANALYZE [CSV|JSON|FILE]` commands to get detailed statistical reports and schema information about local files.
+    * **Data Analysis:** Use `ANALYZE [CSV|JSON|JSONL|FIXED|TEXT|XML]` commands to get detailed statistical reports and schema information about local files.
+    * **Format Conversion:** Use LOAD command combined with SET OUTPUT/FORMAT [format] with a SELECT statement to convert files to different formats.
 
 * ### Rich Language & SQL Integration
     * **Full Control Flow:** Includes robust, nestable control structures like `IF...THEN...ELSE...END IF`, `FOR...TO...NEXT`, `WHILE...WEND`, and `FOR EACH`.
@@ -60,6 +61,7 @@ LIMIT 5;
 
 DATABASE CLOSE
 END
+
 
 
 
