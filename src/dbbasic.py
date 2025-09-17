@@ -24,6 +24,7 @@ from tui_runner import FormRunner
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
+
 csv.field_size_limit(1024 * 1024)
 
 
@@ -244,6 +245,7 @@ class Lexer:
             ('PLACEHOLDER', r'\bPLACEHOLDER\b(?!\$)'),
             ('MATCHES', r'\bMATCHES\b(?!\$)'),
             ('DISPLAY', r'\bDISPLAY\b(?!\$)'),
+            ('GRIDEDIT', r'\bGRIDEDIT\b(?!\$)'),
             # ---------------------------
             ('STRING', r'"([^"]|"")*"'), ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?'),
             ('REM', r'REM[^\n]*'), ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
@@ -744,11 +746,15 @@ class Interpreter:
     def _extract_sql_from_parens(self):
         self._expect('LPAREN'); sql_token = self._expect('SQL_STRING'); self._expect('RPAREN'); return sql_token[1]
 
-    def _execute_sql(self, sql_string, is_query=False):
+    def _execute_sql(self, sql_string, is_query=False, params=None):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': "", 'SQL_ROWCOUNT': 0.0, 'SQL_FOUND': 0.0, 'SQL_NOTFOUND': -1.0})
         bind_vars = re.findall(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', sql_string)
-        params = [self.variables[var.upper()] for var in bind_vars if var.upper() in self.variables or self._error(f"Bind variable ':{var}' not found.")]
-        final_sql = re.sub(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', '?', sql_string)
+        if params is None: # Only parse for bind variables if no direct params are given
+            bind_vars = re.findall(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', sql_string)
+            params = [self.variables[var.upper()] for var in bind_vars if var.upper() in self.variables or self._error(f"Bind variable ':{var}' not found.")]
+            final_sql = re.sub(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', '?', sql_string)
+        else:
+            final_sql = sql_string
         try:
             result = self.db_cursor.execute(final_sql, params)
             if not is_query:
@@ -1034,6 +1040,8 @@ class Interpreter:
             self._parse_form_statement()
         elif token[0] == 'OPENFORM':
             self._parse_open_form_statement()
+        elif token[0] == 'GRIDEDIT':
+            self._parse_gridedit_statement()
         else:
             self._error(f"Unknown statement: {token[0]}")
 
@@ -5787,7 +5795,143 @@ class Interpreter:
         except Exception as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during fixed-width analysis: {e}")
+
+    def _parse_gridedit_statement(self):
+        self._expect('GRIDEDIT')
+        table_name = self._parse_expression()
+
+        user_columns = None
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'FIELDS':
+            self._next_token() # Consume FIELDS
+            fields_str = self._parse_expression()
+            user_columns = [field.strip() for field in fields_str.split(',')]
+
+        # Step 1: Inspect the table schema to get column names and the primary key.
+        pk_column = None
+        all_column_names  = []
+        try:
+            if self.db_engine == 'duckdb':
+                cols_sql = f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}' ORDER BY ordinal_position"
+                all_column_names  = [row[0] for row in self._execute_sql(cols_sql, is_query=True)]
+                pk_sql = f"""
+                    SELECT kcu.column_name FROM information_schema.table_constraints AS tc
+                    JOIN information_schema.key_column_usage AS kcu ON tc.constraint_name = kcu.constraint_name
+                    WHERE tc.table_name = '{table_name}' AND tc.constraint_type = 'PRIMARY KEY'"""
+                pk_result = self._execute_sql(pk_sql, is_query=True)
+                if pk_result: pk_column = pk_result[0][0]
+            else: # SQLite
+                schema_info = self._execute_sql(f"PRAGMA table_info('{table_name}')", is_query=True)
+                if not schema_info: self._error(f"Table '{table_name}' not found.")
+                
+                # First, try to find an explicit primary key.
+                pk_column = next((col[1] for col in schema_info if col[5] == 1), None)
+                
+                # If no explicit PK is found, check for the implicit 'rowid'.
+                if not pk_column:
+                    table_sql_result = self._execute_sql(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table_name}'", is_query=True)
+                    is_without_rowid = False
+                    if table_sql_result and table_sql_result[0][0]:
+                        is_without_rowid = "WITHOUT ROWID" in table_sql_result[0][0].upper()
+                    
+                    if not is_without_rowid:
+                        print(f"Notice: No explicit PRIMARY KEY found for '{table_name}'. Using the internal 'rowid' for editing.", file=sys.stderr)
+                        pk_column = "rowid"
+                all_column_names  = [col[1] for col in schema_info]
+
+            if not pk_column: self._error(f"Table '{table_name}' must have a primary key for GRIDEDIT.")
+            if not all_column_names : self._error(f"Could not find columns for table '{table_name}'.")
+        except Exception as e:
+            self._error(f"Failed to inspect table schema: {e}")
+
+        column_names = []
+        if user_columns:
+            # If the user provided a list, use it.
+            column_names = user_columns
+            # Ensure the primary key is included for editing to work.
+            if pk_column.lower() not in {col.lower() for col in column_names}:
+                column_names.insert(0, pk_column) # Add PK to the front if the user forgot it.
+        else:
+            # If no FIELDS clause, default to all columns.
+            column_names = all_column_names
         
+        # Part 3: Dynamically build the SELECT statement) ---
+        quoted_columns = ', '.join([self._quote_identifier(col) for col in column_names])
+        source_query = f"SELECT {quoted_columns} FROM {self._quote_identifier(table_name)}"
+            
+        # Step 4: Auto-generate the list and entry form definitions.
+        list_form_def = {
+            "name": f"{table_name}_list", "title": f"Browsing: {table_name}", "display_rows": 15,
+            "source": {"type": "SQL", "query": f"{source_query} ORDER BY {self._quote_identifier(pk_column)}"},
+            "elements": [{"type": "HEADING", "text": f"Browsing Table: {table_name}"}] + \
+                        [{"type": "FIELD", "name": col, "label": col.replace('_', ' ').title()} for col in column_names],
+            "buttons": [{"name": "Edit", "action": "EDIT"}, {"name": "Close", "action": "CLOSE"}]
+        }
+        entry_form_def = {
+            "name": f"{table_name}_entry", "title": f"Editing: {table_name}", "display_rows": 1,
+            "source": {"type": "SQL", "query": source_query},
+            "elements": [{"type": "FIELD", "name": col, "label": f"{col.replace('_', ' ').title()}", "field_type": "TEXT", "readonly": (col.lower() == pk_column.lower())} for col in column_names],
+            "buttons": [{"name": "Save", "action": "UPDATE"}, {"name": "Cancel", "action": "CANCEL"}]
+        }
+
+        # Step 3: Run the application loop.
+        while True:
+            # Fetch the data for the grid view before creating the runner.
+            grid_query = list_form_def["source"]["query"]
+            rows = self._execute_sql(grid_query, is_query=True)
+            headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
+            initial_grid_data = {"headers": headers, "rows": rows}
+            
+            # Now, pass the fetched data to the FormRunner.
+            list_runner = FormRunner(list_form_def, initial_data=initial_grid_data, view_mode='grid', pk_column_name=pk_column)
+            list_results = list_runner.run()
+            # --- END OF FIX ---
+
+            action = list_results.get("action")
+            if action == "CLOSE" or not action:
+                break
+
+            if action == "EDIT":
+                selected_id = list_results.get("selected_id")
+                if selected_id is None: continue
+
+                # Fetch the single record's data for the entry form.
+                self.variables['GRIDEDIT_ID'] = selected_id
+                single_query = f"SELECT * FROM {self._quote_identifier(table_name)} WHERE {self._quote_identifier(pk_column)} = :GRIDEDIT_ID"
+                row_data_list = self._execute_sql(single_query, is_query=True)
+                
+                initial_entry_data = {}
+                if row_data_list and self.db_cursor.description:
+                    entry_headers = [desc[0] for desc in self.db_cursor.description]
+                    initial_entry_data = dict(zip(entry_headers, row_data_list[0]))
+
+                entry_runner = FormRunner(entry_form_def, initial_data=initial_entry_data, view_mode='single', nav_info={}, pk_column_name=pk_column)
+                entry_results = entry_runner.run()
+                
+                if entry_results.get("action") == "UPDATE":
+                    updated_data = entry_results.get("data")
+                    if not updated_data: continue
+                    
+                    # Get the primary key value from the data dictionary using the correct name
+                    record_id = updated_data.get(pk_column)
+                    if record_id is None:
+                        record_id = entry_results.get("pk")
+                    if record_id is None: continue
+                    
+                    # Auto-generate and execute the UPDATE SQL statement.
+                    set_clauses = [f"{self._quote_identifier(k)} = ?" for k in updated_data if k.lower() != pk_column.lower()]
+                    params = [v for k, v in updated_data.items() if k.lower() != pk_column.lower()]
+                    params.append(record_id)
+                    
+                    if not set_clauses: continue
+
+                    update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
+                    # Use a temporary method to execute SQL with direct params, since _execute_sql uses bind variables.
+                    try:
+                        self._execute_sql(update_sql, False, params)
+                        #self.db_cursor.execute(update_sql, params)
+                        if self.db_engine == 'sqlite': self.db_connection.commit()
+                    except Exception as e:
+                        self._error(f"GRIDEDIT update failed: {e}")      
         
     def _parse_form_statement(self):
         self._expect('FORM')
@@ -5796,12 +5940,12 @@ class Interpreter:
         form_def = {
             "name": form_name,
             "source": None,
-            "display_rows": 1, # Default to a single-record form
+            "display_rows": 1,
             "elements": [],
             "buttons": []
         }
 
-        # --- Parse form-level attributes like DISPLAY and SOURCE ---
+        # Parse form-level attributes like DISPLAY and SOURCE first
         parsing_attributes = True
         while parsing_attributes:
             tok = self._current_token()
@@ -5812,15 +5956,19 @@ class Interpreter:
                 self._next_token()
                 form_def["source"] = {"type": "SQL", "query": self._extract_sql_from_parens()}
             elif tok and tok[0] == 'NEWLINE':
-                # This is the key fix: simply consume newlines and continue the loop.
                 self._next_token()
                 continue
             else:
-                parsing_attributes = False # No more top-level attributes found
+                parsing_attributes = False
 
-        # Loop through the rest of the form elements (FIELD, HEADING, etc.)
+        # Now, loop through the rest of the form elements until ENDFORM
         while self._current_token() and self._current_token()[0] != 'ENDFORM':
             tok = self._current_token()
+
+            INVALID_KEY_TOKENS = {
+                'ASSIGN', 'LPAREN', 'RPAREN', 'COMMA', 'STRING', 'NUMBER',
+                'OP', 'RELOP', 'DOT', 'SEMICOLON', 'COLON', 'NEWLINE', 'HASH_SYM'
+            }
 
             if tok[0] == 'HEADING':
                 self._next_token()
@@ -5838,9 +5986,26 @@ class Interpreter:
             
             elif tok[0] == 'FIELD':
                 self._next_token()
-                field_name = self._expect('ID')[1]
+                field_name_token = self._current_token()
+                
+                INVALID_NAME_TOKENS = {
+                    'ASSIGN', 'LPAREN', 'RPAREN', 'COMMA', 'STRING', 'NUMBER',
+                    'OP', 'RELOP', 'DOT', 'SEMICOLON', 'COLON', 'NEWLINE', 'HASH_SYM'
+                }
+
+                if not field_name_token or field_name_token[0] in INVALID_NAME_TOKENS:
+                    self._error(f"Invalid token '{field_name_token[1]}' used as a FIELD name.")
+
+                field_name = field_name_token[1]
+                self._next_token() # Consume the field name token
+
+                
                 self._expect('TYPE')
-                field_type = self._expect('ID')[1].upper()
+                type_token = self._current_token()
+                if not type_token or type_token[0] in INVALID_KEY_TOKENS:
+                    self._error(f"Expected a valid field type name but got '{type_token[1]}'")
+                field_type = type_token[1].upper()
+                self._next_token() # Consume the type token
 
                 field_def = {
                     "type": "FIELD", "name": field_name, "field_type": field_type,
@@ -5848,80 +6013,83 @@ class Interpreter:
                     "validations": {}
                 }
                 
-                # --- FULL attribute parsing loop for a FIELD ---
+                # This is the full, restored logic for parsing all field attributes
                 while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ENDFORM', 'FIELD', 'BUTTON', 'HEADING', 'SEPARATOR']:
                     attr_tok = self._current_token()
                     
                     if attr_tok[0] == 'READONLY':
                         self._next_token()
                         field_def["readonly"] = True
-                    
                     elif attr_tok[0] == 'LABEL':
                         self._next_token()
                         field_def["label"] = self._expect('STRING')[1].strip('"')
-                    
+                    elif attr_tok[0] == 'SOURCE':
+                        self._next_token() # Consume SOURCE
+                        source_var_name = self._expect('ID')[1]
+                        field_def["source_array"] = source_var_name
                     elif attr_tok[0] == 'PLACEHOLDER':
                         self._next_token()
                         field_def["placeholder"] = self._expect('STRING')[1].strip('"')
-
                     elif attr_tok[0] == 'REQUIRED':
                         self._next_token()
                         self._expect('MESSAGE')
                         msg = self._expect('STRING')[1].strip('"')
                         field_def["validations"]["required"] = {"message": msg}
-
                     elif attr_tok[0] == 'MINLENGTH':
                         self._next_token()
                         val = int(self._expect('NUMBER')[1])
                         self._expect('MESSAGE')
                         msg = self._expect('STRING')[1].strip('"')
                         field_def["validations"]["minlength"] = {"value": val, "message": msg}
-                    
                     elif attr_tok[0] == 'MAXLENGTH':
                         self._next_token()
                         val = int(self._expect('NUMBER')[1])
                         self._expect('MESSAGE')
                         msg = self._expect('STRING')[1].strip('"')
                         field_def["validations"]["maxlength"] = {"value": val, "message": msg}
-
                     elif attr_tok[0] == 'MINVALUE':
                         self._next_token()
                         val = float(self._expect('NUMBER')[1])
                         self._expect('MESSAGE')
                         msg = self._expect('STRING')[1].strip('"')
                         field_def["validations"]["minvalue"] = {"value": val, "message": msg}
-
                     elif attr_tok[0] == 'PATTERN':
                         self._next_token()
                         val = self._expect('STRING')[1].strip('"')
                         self._expect('MESSAGE')
                         msg = self._expect('STRING')[1].strip('"')
                         field_def["validations"]["pattern"] = {"value": val, "message": msg}
-
                     elif attr_tok[0] == 'MATCHES':
                         self._next_token()
                         val = self._expect('STRING')[1].strip('"')
                         self._expect('MESSAGE')
                         msg = self._expect('STRING')[1].strip('"')
                         field_def["validations"]["matches"] = {"value": val, "message": msg}
-                    
                     else:
                         self._error(f"Unexpected attribute '{attr_tok[1]}' for FIELD.")
-                
+
                 form_def["elements"].append(field_def)
 
             elif tok[0] == 'BUTTON':
-                self._next_token()
+                self._next_token() # Consume BUTTON
                 button_tok = self._current_token()
                 if button_tok[0] == 'STRING':
                     button_name = button_tok[1].strip('"')
                 else:
                     button_name = button_tok[1]
-                self._next_token()
-                self._expect('ACTION')
-                action = self._current_token()[1].upper()
-                self._next_token()
-                form_def["buttons"].append({"name": button_name, "action": action})
+                self._next_token() # Consume the name token
+
+                self._expect('ACTION') # Consume the ACTION keyword.
+
+                action_tok = self._current_token()
+                action = ""
+                if action_tok[0] == 'STRING':
+                    action = action_tok[1].strip('"')
+                else:
+                    action = action_tok[1]
+                self._next_token() # Consume the action value token
+                
+                form_def["buttons"].append({"name": button_name, "action": action.upper()})
 
             elif tok[0] == 'NEWLINE':
                 self._next_token()
@@ -5934,20 +6102,44 @@ class Interpreter:
         if form_name in self.form_definitions:
             self._error(f"Duplicate FORM definition: '{form_name}'")
         
-        self.form_definitions[form_name] = form_def
+        # This debug print is very helpful, you may want to keep it
         print("DEBUG", form_def)
+        self.form_definitions[form_name] = form_def
         
-
     def _parse_open_form_statement(self):
         self._expect('OPENFORM')
         form_name = self._expect('ID')[1]
 
-        # --- 1. Parse optional USING clause to get the starting record ID ---
         record_id = None
         if self._current_token() and self._current_token()[0] == 'USING':
             self._next_token()
             record_id = self._parse_expression()
 
+        if form_name not in self.form_definitions:
+            self._error(f"FORM '{form_name}' is not defined.")
+        
+        form_def = self.form_definitions[form_name].copy() # Use a copy to avoid modifying the original
+
+        # Inject choices for any CHOICE fields before running the form.
+        for element in form_def.get("elements", []):
+            if element.get("type") == "FIELD" and element.get("field_type") == "CHOICE":
+                source_array_name = element.get("source_array")
+                if not source_array_name:
+                    self._error(f"FIELD '{element['name']}' of TYPE CHOICE is missing a SOURCE array.")
+                
+                choices_array = None
+                upper_source_name = source_array_name.upper()
+                for var_name, var_value in self.variables.items():
+                    if var_name.upper() == upper_source_name:
+                        choices_array = var_value
+                        break               
+                if not isinstance(choices_array, list):
+                    self._error(f"SOURCE '{source_array_name}' for FIELD '{element['name']}' is not a valid ARRAY.")
+                
+                # Inject the actual array data into the form definition
+                element["choices"] = choices_array
+                
+        # --- 1. Parse optional USING clause to get the starting record ID ---
         if form_name not in self.form_definitions:
             self._error(f"FORM '{form_name}' is not defined.")
         
@@ -5960,30 +6152,30 @@ class Interpreter:
 
         # If the form is data-bound, fetch the list of all IDs for navigation
         if form_def.get("source"):
-            # FIX #1: Derive navigation IDs from the SOURCE query itself, assuming an 'id' column exists.
-            # This respects any ordering in the user's original query.
             grid_query = form_def["source"]["query"]
+            # To enable navigation, the source query must contain a unique 'id' column
             nav_query = f"SELECT id FROM ({grid_query}) AS t"
-            all_ids_result = self._execute_sql(nav_query, is_query=True)
-            record_ids = [row[0] for row in all_ids_result]
-            
+            try:
+                all_ids_result = self._execute_sql(nav_query, is_query=True)
+                record_ids = [row[0] for row in all_ids_result]
+            except Exception as e:
+                self._error(f"Failed to get navigation IDs from form SOURCE. Ensure query has an 'id' column. Error: {e}")
+
             if record_id in record_ids:
                 current_index = record_ids.index(record_id)
             elif record_ids:
                 current_index = 0 # Default to the first record if no ID is specified
 
-
         # --- 3. The Main Controller Loop ---
-        # This loop runs the form, waits for an action, and then re-runs or exits.
+        # This loop runs the form, waits for an action, and then re-runs (for navigation) or exits.
         while True:
             initial_data = {}
             # Fetch data for the current record if we are in single view mode
-            if current_view_mode == 'single' and current_index != -1:
+            if current_view_mode == 'single' and current_index != -1 and record_ids:
                 current_id = record_ids[current_index]
                 self.variables['ID'] = current_id # Set bind variable for the query
                 
-                # FIX #2: Wrap the grid query to create a filtered query for the single view.
-                # This robustly filters the full dataset down to the specific record.
+                # Wrap the grid query to create a filtered query for the single view.
                 grid_query = form_def["source"]["query"]
                 single_query = f"SELECT * FROM ({grid_query}) AS t WHERE id = :id"
                 row_data = self._execute_sql(single_query, is_query=True)
@@ -5993,23 +6185,18 @@ class Interpreter:
                     initial_data = dict(zip(headers, row_data[0]))
             # For grid view, fetch all data
             elif current_view_mode == 'grid' and form_def.get("source"):
-                # This part is correct: it uses the original query for the grid.
                 rows = self._execute_sql(form_def["source"]["query"], is_query=True)
                 headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
                 initial_data = {"headers": headers, "rows": rows}
 
-
-
             # Pass navigation and view info to the TUI
             nav_info = {
-                "current_mode": current_view_mode,
                 "has_prev": current_index > 0,
                 "has_next": current_index < len(record_ids) - 1
             }
 
             # Run the TUI and wait for the user to perform an action
             try:
-                # Run the TUI and wait for the user to perform an action
                 runner = FormRunner(form_def, initial_data, nav_info, view_mode=current_view_mode)
                 results = runner.run()
                 action = results.get("action")
@@ -6020,36 +6207,44 @@ class Interpreter:
                 break
 
             # --- 4. Handle the Action Returned from the TUI ---
-            if not action or action in ["CLOSE", "CANCEL", "INSERT", "UPDATE"]:
-                self.variables["FORM_RESULT$"] = action
-                if action == "UPDATE":
-                    print(f"INTERPRETER: Would execute UPDATE for record {results.get('id')}")
-                # Any of these actions will break the loop and exit the form.
-                break 
-            
-            elif action == "VIEW_GRID":
-                current_view_mode = 'grid'
+            # Always set all special variables from the results dictionary.
+            self.variables["FORM_RESULT$"] = str(action).upper() if action is not None else ""
 
+            record_id = results.get("pk", results.get("selected_id"))
+            self.variables["FORM_SELECTED_ID"] = float(record_id) if record_id is not None else 0.0
+
+            form_data = results.get("data")
+            if isinstance(form_data, dict):
+                # If the form returns data (e.g., from an UPDATE), convert it to a DbBasic hash.
+                self.variables["FORM_DATA"] = self._python_to_basic_data(form_data)
+            else:
+                # Always ensure FORM_DATA is a hash, even if empty.
+                self.variables["FORM_DATA"] = {}
+            
+            # Decide whether to re-loop (for internal navigation) or break (return to BASIC script)
+            if action == "VIEW_GRID":
+                current_view_mode = 'grid'
             elif action == "VIEW_SINGLE":
                 current_view_mode = 'single'
                 if "selected_id" in results and results["selected_id"] in record_ids:
                     current_index = record_ids.index(results["selected_id"])
-            
             elif action == "NEXT_RECORD":
                 if current_index < len(record_ids) - 1:
                     current_index += 1
-            
             elif action == "PREV_RECORD":
                 if current_index > 0:
                     current_index -= 1
-            
             elif action == "FIRST_RECORD":
                 if record_ids:
                     current_index = 0
-
             elif action == "LAST_RECORD":
                 if record_ids:
                     current_index = len(record_ids) - 1
+            else:
+                # Any other action (CLOSE, EDIT, UPDATE, CANCEL, custom actions, or None)
+                # should break this Python loop and return control to the BASIC script.
+                break
+
             
     def _format_bytes(self, size):
         """Helper function to format bytes into KB, MB, etc."""
