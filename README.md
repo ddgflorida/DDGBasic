@@ -49,7 +49,7 @@ DATABASE OPEN ":memory:"
 
 REM --- Download a CSV and create a table from it in one command ---
 PRINT "Fetching and loading data..."
-CREATE TABLE domains AS SELECT * FROM read_csv_auto('[https://raw.githubusercontent.com/cisagov/dotgov-data/main/current-full.csv](https://raw.githubusercontent.com/cisagov/dotgov-data/main/current-full.csv)');
+CREATE TABLE domains AS SELECT * FROM read_csv_auto('https://raw.githubusercontent.com/cisagov/dotgov-data/main/current-full.csv');
 
 REM --- Run a query on the loaded data ---
 PRINT "Top 5 States with the most .gov domains:"
@@ -61,6 +61,7 @@ LIMIT 5;
 
 DATABASE CLOSE
 END
+
 
 
 
