@@ -255,7 +255,9 @@ class Lexer:
             ('INSERT', r'\bINSERT\b(?!\$)'), ('DELETE', r'\bDELETE\b(?!\$)'), ('DESCRIBE', r'\bDESCRIBE\b(?!\$)'),
             ('UPDATE', r'\bUPDATE\b(?!\$)'), ('CREATE', r'\bCREATE\b(?!\$)'), ('DROP', r'\bDROP\b(?!\$)'),('ALTER', r'\bALTER\b(?!\$)'),
             ('BEGIN', r'\bBEGIN\b(?!\$)'), ('COMMIT', r'\bCOMMIT\b(?!\$)'), ('ROLLBACK', r'\bROLLBACK\b(?!\$)'),
-            ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), 
+            ('ENDTRANSACTION', r'\bENDTRANSACTION\b(?!\$)'), ('SUMMARIZE', r'\bSUMMARIZE\b(?!\$)'), 
+            ('PRAGMA', r'\bPRAGMA\b(?!\$)'),('MERGE', r'\bMERGE\b(?!\$)'),('UPSERT', r'\bUPSERT\b(?!\$)'),
+            ('COPY', r'\bCOPY\b(?!\$)'),('ATTACH', r'\bATTACH\b(?!\$)'),
             ('WITHFULLPATH', r'\bWITHFULLPATH\b(?!\$)'), ('WITHDETAILS', r'\bWITHDETAILS\b(?!\$)'),
             ('WITHFOLDERSONLY', r'\bWITHFOLDERSONLY\b(?!\$)'), ('WITHFILESONLY', r'\bWITHFILESONLY\b(?!\$)'),
             ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
@@ -288,7 +290,7 @@ class Lexer:
             ('SHIFT', r'\bSHIFT\b(?!\$)'), ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
             ('SPLICE', r'\bSPLICE\b(?!\$)'), ('REVERSE', r'\bREVERSE\b(?!\$)'),
             ('ID', r'(?!INTO\b)[a-zA-Z_][a-zA-Z0-9_]*\$?'),
-            ('OP', r"[+\-*/]"),
+            ('OP', r"[+\*/-]"),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), 
             ('LBRACKET', r'\['), ('RBRACKET', r'\]'),('COMMA', r','),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('COMMENT', r"'[^\n]*"), ('NEWLINE', r'\n'),
@@ -474,10 +476,11 @@ class Formatter:
         return value
 
 class Interpreter:
-    SQL_KEYWORDS = {'SELECT', 'INSERT', 'DELETE', 'UPDATE', 'CREATE', 'DROP', 'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'END TRANSACTION', 'ALTER'}
+    SQL_KEYWORDS = {'SELECT', 'INSERT', 'DELETE', 'UPDATE', 'CREATE', 'DROP', 'ATTACH', 'COPY',
+                    'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'END TRANSACTION', 'ALTER', 'SUMMARIZE', 'PRAGMA'}
     SQL_RESERVED_WORDS = {
-            'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE',
-            'VIEW', 'INDEX', 'ORDER', 'GROUP', 'BY', 'JOIN', 'LEFT', 'RIGHT', 'INNER',
+            'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 'ATTACH', 'COPY',
+            'VIEW', 'INDEX', 'ORDER', 'GROUP', 'BY', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'SUMMARIZE', 'PRAGMA',
             'OUTER', 'ON', 'AS', 'IN', 'IS', 'NULL', 'NOT', 'AND', 'OR', 'LIMIT', 'OFFSET'
         }
     INVALID_KEY_TOKENS = {
@@ -878,7 +881,7 @@ class Interpreter:
             sql_text = token[1].strip()
             self.last_sql_statement = sql_text
             self._next_token()
-            is_select = sql_text.upper().startswith(('SELECT', 'WITH'))
+            is_select = sql_text.upper().startswith(('SELECT', 'WITH', 'SUMMARIZE', 'PRAGMA'))
             if is_select:
                 if g_output_config.mode == "OFF": return
                 results = self._execute_sql(sql_text, is_query=True)
@@ -1197,31 +1200,30 @@ class Interpreter:
     def _parse_set_statement(self):
         self._expect('SET')
         token = self._current_token()
+        
         if token[0] == 'ID' and token[1].upper() == 'SQL_FATAL_ERRORS':
-            self._next_token(); setting_token = self._current_token()
-            if not setting_token or setting_token[0] != 'ID' or setting_token[1] not in ['ON', 'OFF']:
+            self._next_token()
+            setting_token = self._current_token()
+            if not setting_token or setting_token[0] != 'ID' or setting_token[1].upper() not in ['ON', 'OFF']:
                 self._error("Expected ON or OFF after SET SQL_FATAL_ERRORS")
-            self.sql_fatal_errors = (setting_token[1] == 'ON'); self._next_token()
+            self.sql_fatal_errors = (setting_token[1].upper() == 'ON')
+            self._next_token()
+
         elif token[0] == 'ID' and token[1].upper() == 'HASH_KEYS':
             self._next_token()
             mode_token = self._current_token()
-            if not mode_token or mode_token[0] != 'ID' or mode_token[1] not in ['PRESERVE_CASE', 'IGNORE_CASE']:
+            if not mode_token or mode_token[0] != 'ID' or mode_token[1].upper() not in ['PRESERVE_CASE', 'IGNORE_CASE']:
                 self._error("Expected PRESERVE_CASE or IGNORE_CASE after SET HASH_KEYS")
-            self.hash_keys_mode = mode_token[1]
+            self.hash_keys_mode = mode_token[1].upper()
             self._next_token()
-            #print(f"DEBUG: Hash key mode set to {self.hash_keys_mode}", file=sys.stderr)
+
         elif token[0] == 'OUTPUT':
             self._next_token()
             token = self._current_token()
             
-            # Check if the next token is FORMAT (shorthand syntax)
             if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
-                # Default to CONSOLE when FORMAT is specified without destination
                 g_output_config.mode = "CONSOLE"
-                # Don't consume the FORMAT token yet - let it fall through to FORMAT handling below
-            elif not token or token[0] not in ['ID']:
-                g_output_config.mode = "CONSOLE"
-            elif token[0] == 'ID':
+            elif token and token[0] == 'ID':
                 mode_value = token[1].upper()
                 if mode_value == 'CONSOLE': 
                     self._next_token()
@@ -1236,7 +1238,6 @@ class Interpreter:
                 else:
                     self._error(f"Unknown output mode: {token[1]}")
             
-            # Handle FORMAT clause (works for both explicit and shorthand syntax)
             token = self._current_token()
             if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
                 self._next_token()
@@ -1247,24 +1248,33 @@ class Interpreter:
                         g_output_config.format = output_format
                         self._next_token()
                         
-                        # --- NEW: Parse the optional OPTIONS clause for SQL ---
-                        g_output_config.sql_options = {} # Reset on each call
-                        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-                            if output_format != 'SQL':
-                                self._error("OPTIONS clause is only supported for FORMAT SQL.")
-                            self._next_token()
-                            options_str = self._parse_expression()
-                            
-                            # Use the robust parser to get key-value pairs
+                        # --- START OF MODIFIED LOGIC ---
+                        if output_format == 'SQL':
+                            g_output_config.sql_options = {}
                             temp_options = {}
-                            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-                            for i, match in enumerate(key_matches):
-                                key, start_pos = match.group(1).lower(), match.end()
-                                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                                value = options_str[start_pos:end_pos].strip().strip(',')
-                                if value.startswith("'") and value.endswith("'"): value = value[1:-1]
-                                temp_options[key] = value
+
+                            # Check for optional, direct mode keywords (INSERT, UPDATE, etc.)
+                            mode_keywords = ['INSERT', 'UPDATE', 'MERGE', 'REPLACE', 'UPSERT']
+                            mode_token = self._current_token()
+                            if mode_token and mode_token[0] in mode_keywords:
+                                temp_options['mode'] = mode_token[1].lower()
+                                self._next_token() # Consume the mode keyword
+                            
+                            # Now, check for the OPTIONS clause for other settings (tablename, pk)
+                            if self._current_token() and self._current_token()[0] == 'OPTIONS':
+                                self._next_token()
+                                options_str = self._parse_expression()
+                                
+                                key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+                                for i, match in enumerate(key_matches):
+                                    key = match.group(1).lower()
+                                    start_pos = match.end()
+                                    end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                                    value = options_str[start_pos:end_pos].strip().strip(',').strip("'")
+                                    temp_options[key] = value
+                            
                             g_output_config.sql_options = temp_options
+                        # --- END OF MODIFIED LOGIC ---
                     else: 
                         self._error(f"Unknown format type '{output_format}'")
                 else: 
@@ -1474,41 +1484,130 @@ class Interpreter:
             stream.write("-- (0 rows returned)\n")
             return
 
-        # Get table name from options first.
-        table_name = options.get('tablename')
-        
-        # If not provided, try to extract it from the last SQL query.
-        if not table_name:
-            table_name = self._extract_table_from_select(self.last_sql_statement)
+        # 1. Determine the SOURCE table name for schema inspection.
+        source_table_name = options.get('tablename')
+        if not source_table_name:
+            source_table_name = self._extract_table_from_select(self.last_sql_statement)
 
-        # If it's still not found, use a placeholder.
-        if not table_name:
-            table_name = "YourTableName"
+        # 2. Determine the TARGET table name for the output SQL.
+        #    It defaults to the source table name if not explicitly provided.
+        target_table_name = options.get('target_tablename', source_table_name)
+        
+        if not target_table_name:
+            # We need at least a target table to generate SQL.
+            self._error("FORMAT SQL requires a 'target_tablename' in OPTIONS or a simple FROM clause.")
+            return
             
-        # Get mode from options, defaulting to 'insert'
+        vendor = options.get('vendor', self.db_engine).lower()    
         mode = options.get('mode', 'insert').lower()
-        
-        # Prepare the appropriate SQL command prefix
-        quoted_headers = ', '.join([f'{self._quote_identifier(h)}' for h in headers])
-        if mode == 'replace':
-            command_prefix = f"INSERT OR REPLACE INTO {self._quote_identifier(table_name)} ({quoted_headers}) VALUES "
-        else: # Default to standard INSERT
-            command_prefix = f"INSERT INTO {self._quote_identifier(table_name)} ({quoted_headers}) VALUES "
+        pk_column = options.get('pk')
+        if not pk_column and mode in ('upsert', 'update', 'merge'):
+            try:
+                if self.db_engine == 'duckdb':
+                    pk_sql = f"SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name WHERE tc.table_name = '{source_table_name}' AND tc.constraint_type = 'PRIMARY KEY'"
+                    pk_result = self._execute_sql(pk_sql, is_query=True)
+                    if pk_result: pk_column = pk_result[0][0]
+                else: # SQLite
+                    schema_info = self._execute_sql(f"PRAGMA table_info('{source_table_name}')", is_query=True)
+                    if schema_info:
+                        pk_column = next((col[1] for col in schema_info if col[5] == 1), None)
+            except Exception as e:
+                self._error(f"Failed to auto-discover primary key for {source_table_name}: {e}")
+                
+        # --- Value formatting helper ---
+        def format_value(value):
+            if value is None: return "NULL"
+            if isinstance(value, (int, float)): return str(value)
+            # 1. Convert the original value to a string.
+            string_value = str(value)
+            
+            # 2. Escape any single quotes by replacing them with two single quotes.
+            escaped_string = string_value.replace("'", "''")
+            
+            # 3. Add the single quotes around the outside and return.
+            return "'" + escaped_string + "'"
 
-        for row in results:
-            values_list = []
-            for value in row:
-                if value is None:
-                    values_list.append("NULL")
-                elif isinstance(value, (int, float)):
-                    values_list.append(str(value))
+        if mode in ('insert', 'replace'):
+            # This is the existing logic for INSERT and INSERT OR REPLACE
+            command_prefix = f"INSERT OR REPLACE INTO {self._quote_identifier(target_table_name)}" if mode == 'replace' else f"INSERT INTO {self._quote_identifier(table_name)}"
+            quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
+            for row in results:
+                values_str = ', '.join([format_value(v) for v in row])
+                stream.write(f"{command_prefix} ({quoted_headers}) VALUES ({values_str});\n")
+
+        elif mode == 'update':
+            try:
+                pk_index = [h.lower() for h in headers].index(pk_column.lower())
+            except ValueError:
+                self._error(f"Primary key '{pk_column}' not found in the SELECT statement's results.")
+                return
+
+            for row in results:
+                pk_value = row[pk_index]
+                set_clauses = []
+                for i, header in enumerate(headers):
+                    if i == pk_index: continue
+                    set_clauses.append(f"{self._quote_identifier(header)} = {format_value(row[i])}")
+                if not set_clauses:
+                    set_clauses.append(f"{self._quote_identifier(pk_column)} = {format_value(pk_value)}")
+                stream.write(f"UPDATE {self._quote_identifier(target_table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = {format_value(pk_value)};\n")
+
+        elif mode == 'upsert':
+            if not pk_column: self._error("mode='upsert' requires the 'pk' option to be set.")
+            quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
+            
+            # --- START of Vendor-Specific Logic ---
+            if vendor == 'mysql':
+                # MySQL uses ON DUPLICATE KEY UPDATE
+                update_clauses = [f"{self._quote_identifier(h)} = VALUES({self._quote_identifier(h)})" for h in headers if h.lower() != pk_column.lower()]
+                for row in results:
+                    values_str = ', '.join([format_value(v) for v in row])
+                    stream.write(
+                        f"INSERT INTO {self._quote_identifier(target_table_name)} ({quoted_headers}) VALUES ({values_str}) "
+                        f"ON DUPLICATE KEY UPDATE {', '.join(update_clauses)};\n"
+                    )
+            else:
+                # SQLite, DuckDB, and PostgreSQL use ON CONFLICT
+                update_clauses = [f"{self._quote_identifier(h)} = excluded.{self._quote_identifier(h)}" for h in headers if h.lower() != pk_column.lower()]
+                for row in results:
+                    values_str = ', '.join([format_value(v) for v in row])
+                    stream.write(
+                        f"INSERT INTO {self._quote_identifier(target_table_name)} ({quoted_headers}) VALUES ({values_str}) "
+                        f"ON CONFLICT ({self._quote_identifier(pk_column)}) DO UPDATE SET {', '.join(update_clauses)};\n"
+                    )
+            # --- END of Vendor-Specific Logic ---
+
+        elif mode == 'merge':
+            if not pk_column: self._error("mode='merge' requires the 'pk' option to be set.")
+            quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
+            update_clauses = [f"T.{self._quote_identifier(h)} = S.{self._quote_identifier(h)}" for h in headers if h.lower() != pk_column.lower()]
+            insert_s_cols = ', '.join([f"S.{self._quote_identifier(h)}" for h in headers])
+            
+            for row in results:
+                values_str = ', '.join([format_value(v) for v in row])
+
+                # --- START of Vendor-Specific Logic ---
+                if vendor == 'oracle':
+                    # Oracle uses SELECT ... FROM DUAL for the source
+                    using_selects = [f"{format_value(row[i])} AS {self._quote_identifier(h)}" for i, h in enumerate(headers)]
+                    using_clause = f"USING (SELECT {', '.join(using_selects)} FROM DUAL) S"
                 else:
-                    escaped_value = str(value).replace("'", "''")
-                    values_list.append(f"'{escaped_value}'")
-            
-            values_str = ', '.join(values_list)
-            stream.write(f"{command_prefix}({values_str});\n")
-            
+                    # SQL Server and DuckDB use VALUES
+                    using_clause = f"USING (VALUES ({values_str})) AS S({quoted_headers})"
+                # --- END of Vendor-Specific Logic ---
+
+                merge_statement = (
+                    f"MERGE INTO {self._quote_identifier(target_table_name)} T "
+                    f"{using_clause} "
+                    f"ON (T.{self._quote_identifier(pk_column)} = S.{self._quote_identifier(pk_column)}) "
+                    f"\n   WHEN MATCHED THEN UPDATE SET {', '.join(update_clauses)} "
+                    f"\n   WHEN NOT MATCHED THEN INSERT ({quoted_headers}) VALUES ({insert_s_cols});\n"
+                )
+                stream.write(merge_statement)
+        
+        else:
+            self._error(f"Invalid mode '{mode}'. Use 'insert', 'replace', 'update', 'upsert', or 'merge'.")
+                   
     def _parse_if_statement(self):
         start_if_index = self.token_index
         self._expect('IF')
@@ -5818,7 +5917,10 @@ class Interpreter:
                     JOIN information_schema.key_column_usage AS kcu ON tc.constraint_name = kcu.constraint_name
                     WHERE tc.table_name = '{table_name}' AND tc.constraint_type = 'PRIMARY KEY'"""
                 pk_result = self._execute_sql(pk_sql, is_query=True)
-                if pk_result: pk_column = pk_result[0][0]
+                if pk_result: 
+                    pk_column = pk_result[0][0]
+                else:
+                    pk_column = "rowid"
             else: # SQLite
                 schema_info = self._execute_sql(f"PRAGMA table_info('{table_name}')", is_query=True)
                 if not schema_info: self._error(f"Table '{table_name}' not found.")
