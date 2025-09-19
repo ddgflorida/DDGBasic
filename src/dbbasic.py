@@ -746,6 +746,66 @@ class Interpreter:
         if token and token[0] == kind: self._next_token(); return token
         self._error(f'Expected token {kind} but got {token[0] if token else "None"}')
 
+    def _get_primary_key(self, table_name):
+        """
+        Determines the primary key column for a given table.
+        Returns the column name or 'rowid' for SQLite tables without explicit PKs.
+        """
+        try:
+            if self.db_engine == 'duckdb':
+                # DuckDB: Query information schema for primary key constraints
+                pk_sql = f"""
+                    SELECT kcu.column_name 
+                    FROM information_schema.table_constraints tc 
+                    JOIN information_schema.key_column_usage kcu 
+                        ON tc.constraint_name = kcu.constraint_name 
+                    WHERE tc.table_name = '{table_name}' 
+                        AND tc.constraint_type = 'PRIMARY KEY'
+                    ORDER BY kcu.ordinal_position
+                    LIMIT 1
+                """
+                pk_result = self._execute_sql(pk_sql, is_query=True)
+                if pk_result:
+                    return pk_result[0][0]
+                else:
+                    # DuckDB also supports rowid as fallback
+                    return "rowid"
+                    
+            else:  # SQLite
+                # First, check for explicit primary key columns
+                schema_info = self._execute_sql(f"PRAGMA table_info('{table_name}')", is_query=True)
+                if not schema_info:
+                    raise RuntimeError(f"Table '{table_name}' does not exist")
+                
+                # Look for columns marked as primary key (pk = 1)
+                explicit_pk = next((col[1] for col in schema_info if col[5] == 1), None)
+                if explicit_pk:
+                    return explicit_pk
+                
+                # No explicit PK found, check if table uses implicit rowid
+                table_sql_result = self._execute_sql(
+                    f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table_name}'", 
+                    is_query=True
+                )
+                
+                if table_sql_result and table_sql_result[0][0]:
+                    table_ddl = table_sql_result[0][0].upper()
+                    if "WITHOUT ROWID" in table_ddl:
+                        # Table was created WITHOUT ROWID, so no implicit primary key
+                        return None
+                    else:
+                        # Table has implicit rowid
+                        return "rowid"
+                else:
+                    # Shouldn't happen if table exists, but fallback to rowid
+                    return "rowid"
+                    
+        except Exception as e:
+            # Log the error but don't crash the program
+            print(f"Warning: Failed to auto-discover primary key for '{table_name}': {e}")
+            # Both SQLite and DuckDB support rowid as fallback
+            return "rowid"
+                
     def _extract_sql_from_parens(self):
         self._expect('LPAREN'); sql_token = self._expect('SQL_STRING'); self._expect('RPAREN'); return sql_token[1]
 
@@ -1502,16 +1562,8 @@ class Interpreter:
         mode = options.get('mode', 'insert').lower()
         pk_column = options.get('pk')
         if not pk_column and mode in ('upsert', 'update', 'merge'):
-            try:
-                if self.db_engine == 'duckdb':
-                    pk_sql = f"SELECT kcu.column_name FROM information_schema.table_constraints tc JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name WHERE tc.table_name = '{source_table_name}' AND tc.constraint_type = 'PRIMARY KEY'"
-                    pk_result = self._execute_sql(pk_sql, is_query=True)
-                    if pk_result: pk_column = pk_result[0][0]
-                else: # SQLite
-                    schema_info = self._execute_sql(f"PRAGMA table_info('{source_table_name}')", is_query=True)
-                    if schema_info:
-                        pk_column = next((col[1] for col in schema_info if col[5] == 1), None)
-            except Exception as e:
+            pk_column = self._get_primary_key(source_table_name)
+            if not pk_column:
                 self._error(f"Failed to auto-discover primary key for {source_table_name}: {e}")
                 
         # --- Value formatting helper ---
@@ -1578,7 +1630,7 @@ class Interpreter:
             # --- END of Vendor-Specific Logic ---
 
         elif mode == 'merge':
-            if not pk_column: self._error("mode='merge' requires the 'pk' option to be set.")
+            if not pk_column: self._error("mode=merge requires the 'pk' option to be set.")
             quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
             update_clauses = [f"T.{self._quote_identifier(h)} = S.{self._quote_identifier(h)}" for h in headers if h.lower() != pk_column.lower()]
             insert_s_cols = ', '.join([f"S.{self._quote_identifier(h)}" for h in headers])
@@ -5900,141 +5952,288 @@ class Interpreter:
         table_name = self._parse_expression()
 
         user_columns = None
-        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'FIELDS':
-            self._next_token() # Consume FIELDS
-            fields_str = self._parse_expression()
-            user_columns = [field.strip() for field in fields_str.split(',')]
+        where_clause = ""
+        order_clause = ""
+        
+        # Parse optional clauses
+        print(f"DEBUG GRIDEDIT: Starting to parse clauses...")
+        while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
+            token = self._current_token()
+            print(f"DEBUG GRIDEDIT: Processing token: {token}")
+            
+            if token[0] == 'ID' and token[1].upper() == 'FIELDS':
+                print(f"DEBUG GRIDEDIT: Found FIELDS clause")
+                self._next_token() # Consume FIELDS
+                fields_str = self._parse_expression()
+                user_columns = [field.strip() for field in fields_str.split(',')]
+                print(f"DEBUG GRIDEDIT: Parsed FIELDS: {user_columns}")
+                
+            elif token[0] == 'ID' and token[1].upper() == 'WHERE':
+                print(f"DEBUG GRIDEDIT: Found WHERE clause (as ID)")
+                self._next_token() # Consume WHERE
+                where_condition = self._parse_expression()
+                where_clause = f" WHERE {where_condition}"
+                print(f"DEBUG GRIDEDIT: Parsed WHERE: {where_clause}")
+                
+            elif token[0] == 'WHERE':
+                print(f"DEBUG GRIDEDIT: Found WHERE clause (as keyword)")
+                self._next_token() # Consume WHERE
+                where_condition = self._parse_expression()
+                where_clause = f" WHERE {where_condition}"
+                print(f"DEBUG GRIDEDIT: Parsed WHERE: {where_clause}")
+                
+            elif token[0] == 'ID' and token[1].upper() == 'ORDER':
+                print(f"DEBUG GRIDEDIT: Found ORDER clause")
+                self._next_token() # Consume ORDER
+                if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'BY':
+                    self._next_token() # Consume BY
+                    order_expression = self._parse_expression()
+                    order_clause = f" ORDER BY {order_expression}"
+                    print(f"DEBUG GRIDEDIT: Parsed ORDER BY: {order_clause}")
+                else:
+                    self._error("Expected BY after ORDER")
+            else:
+                # If we hit an unrecognized token, break out of the loop
+                print(f"DEBUG GRIDEDIT: Unrecognized token, breaking: {token}")
+                break
+        
+        print(f"DEBUG GRIDEDIT: Finished parsing clauses")
+        print(f"DEBUG GRIDEDIT: Final user_columns = {user_columns}")
+        print(f"DEBUG GRIDEDIT: Final where_clause = '{where_clause}'")
+        print(f"DEBUG GRIDEDIT: Final order_clause = '{order_clause}'")
+        
+        # Consume any remaining tokens until we hit a statement terminator
+        while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
+            remaining_token = self._current_token()
+            print(f"DEBUG GRIDEDIT: Consuming remaining token: {remaining_token}")
+            self._next_token()
 
         # Step 1: Inspect the table schema to get column names and the primary key.
         pk_column = None
-        all_column_names  = []
+        all_column_names = []
         try:
             if self.db_engine == 'duckdb':
                 cols_sql = f"SELECT column_name FROM information_schema.columns WHERE table_name = '{table_name}' ORDER BY ordinal_position"
-                all_column_names  = [row[0] for row in self._execute_sql(cols_sql, is_query=True)]
-                pk_sql = f"""
-                    SELECT kcu.column_name FROM information_schema.table_constraints AS tc
-                    JOIN information_schema.key_column_usage AS kcu ON tc.constraint_name = kcu.constraint_name
-                    WHERE tc.table_name = '{table_name}' AND tc.constraint_type = 'PRIMARY KEY'"""
-                pk_result = self._execute_sql(pk_sql, is_query=True)
-                if pk_result: 
-                    pk_column = pk_result[0][0]
-                else:
+                all_column_names = [row[0] for row in self._execute_sql(cols_sql, is_query=True)]
+                pk_column = self._get_primary_key(table_name)
+                if not pk_column:
                     pk_column = "rowid"
             else: # SQLite
                 schema_info = self._execute_sql(f"PRAGMA table_info('{table_name}')", is_query=True)
                 if not schema_info: self._error(f"Table '{table_name}' not found.")
                 
-                # First, try to find an explicit primary key.
-                pk_column = next((col[1] for col in schema_info if col[5] == 1), None)
-                
-                # If no explicit PK is found, check for the implicit 'rowid'.
+                pk_column = self._get_primary_key(table_name)
                 if not pk_column:
-                    table_sql_result = self._execute_sql(f"SELECT sql FROM sqlite_master WHERE type='table' AND name='{table_name}'", is_query=True)
-                    is_without_rowid = False
-                    if table_sql_result and table_sql_result[0][0]:
-                        is_without_rowid = "WITHOUT ROWID" in table_sql_result[0][0].upper()
-                    
-                    if not is_without_rowid:
-                        print(f"Notice: No explicit PRIMARY KEY found for '{table_name}'. Using the internal 'rowid' for editing.", file=sys.stderr)
-                        pk_column = "rowid"
-                all_column_names  = [col[1] for col in schema_info]
+                    pk_column = "rowid"
+                all_column_names = [col[1] for col in schema_info]
 
+            print(f"DEBUG GRIDEDIT: Detected pk_column = '{pk_column}'")
+            print(f"DEBUG GRIDEDIT: All column names = {all_column_names}")
+            
             if not pk_column: self._error(f"Table '{table_name}' must have a primary key for GRIDEDIT.")
-            if not all_column_names : self._error(f"Could not find columns for table '{table_name}'.")
+            if not all_column_names: self._error(f"Could not find columns for table '{table_name}'.")
         except Exception as e:
             self._error(f"Failed to inspect table schema: {e}")
 
         column_names = []
         if user_columns:
-            # If the user provided a list, use it.
-            column_names = user_columns
-            # Ensure the primary key is included for editing to work.
+            column_names = user_columns[:]
             if pk_column.lower() not in {col.lower() for col in column_names}:
-                column_names.insert(0, pk_column) # Add PK to the front if the user forgot it.
+                column_names.insert(0, pk_column)
         else:
-            # If no FIELDS clause, default to all columns.
-            column_names = all_column_names
-        
-        # Part 3: Dynamically build the SELECT statement) ---
-        quoted_columns = ', '.join([self._quote_identifier(col) for col in column_names])
-        source_query = f"SELECT {quoted_columns} FROM {self._quote_identifier(table_name)}"
+            column_names = all_column_names[:]
             
-        # Step 4: Auto-generate the list and entry form definitions.
+        # CRITICAL FIX: If pk_column is 'rowid' and it's not in our column list, add it
+        if pk_column.lower() == 'rowid' and pk_column not in column_names:
+            column_names.insert(0, pk_column)
+            
+        # Separate columns for query vs display
+        query_columns = column_names[:]  # All columns needed for functionality
+        display_columns = column_names[:]  # Columns to show in the UI
+        
+        # If user specified FIELDS, only show those columns in the UI
+        if user_columns:
+            display_columns = user_columns[:]
+        else:
+            # If no FIELDS specified and rowid was auto-added, don't show it in the UI
+            if pk_column.lower() == 'rowid' and pk_column in display_columns:
+                display_columns = [col for col in display_columns if col.lower() != 'rowid']
+        
+        print(f"DEBUG GRIDEDIT: Query columns = {query_columns}")
+        print(f"DEBUG GRIDEDIT: Display columns = {display_columns}")
+
+        # Build the SELECT statement with all necessary columns
+        quoted_columns_list = []
+        for col in query_columns:
+            if col.lower() == 'rowid':
+                quoted_columns_list.append('rowid')
+            else:
+                quoted_columns_list.append(self._quote_identifier(col))
+        
+        quoted_columns = ', '.join(quoted_columns_list)
+        
+        # Build the full query with WHERE and ORDER BY
+        base_query = f"SELECT {quoted_columns} FROM {self._quote_identifier(table_name)}"
+        full_query = base_query + where_clause
+        
+        if order_clause:
+            full_query += order_clause
+        else:
+            # Default order by first column (usually PK)
+            full_query += f" ORDER BY {quoted_columns_list[0]}"
+        
+        print(f"DEBUG GRIDEDIT: base_query = {base_query}")
+        print(f"DEBUG GRIDEDIT: where_clause = '{where_clause}'")
+        print(f"DEBUG GRIDEDIT: order_clause = '{order_clause}'")
+        print(f"DEBUG GRIDEDIT: full_query = {full_query}")
+            
+        # Step 4: Auto-generate the list and entry form definitions with display columns
         list_form_def = {
             "name": f"{table_name}_list", "title": f"Browsing: {table_name}", "display_rows": 15,
-            "source": {"type": "SQL", "query": f"{source_query} ORDER BY {self._quote_identifier(pk_column)}"},
+            "source": {"type": "SQL", "query": full_query},
             "elements": [{"type": "HEADING", "text": f"Browsing Table: {table_name}"}] + \
-                        [{"type": "FIELD", "name": col, "label": col.replace('_', ' ').title()} for col in column_names],
-            "buttons": [{"name": "Edit", "action": "EDIT"}, {"name": "Close", "action": "CLOSE"}]
+                        [{"type": "FIELD", "name": col, "label": col.replace('_', ' ').title()} for col in display_columns],
+            "buttons": [
+                {"name": "Edit", "action": "EDIT"}, 
+                {"name": "New", "action": "NEW"},
+                {"name": "Delete", "action": "DELETE"}, 
+                {"name": "Close", "action": "CLOSE"}
+            ]
         }
+        
+        # Entry form should show all user-visible columns (including for editing)
+        entry_display_columns = display_columns
+        if pk_column not in entry_display_columns and pk_column.lower() != 'rowid':
+            entry_display_columns = [pk_column] + entry_display_columns
+        
         entry_form_def = {
             "name": f"{table_name}_entry", "title": f"Editing: {table_name}", "display_rows": 1,
-            "source": {"type": "SQL", "query": source_query},
-            "elements": [{"type": "FIELD", "name": col, "label": f"{col.replace('_', ' ').title()}", "field_type": "TEXT", "readonly": (col.lower() == pk_column.lower())} for col in column_names],
+            "source": {"type": "SQL", "query": f"SELECT {quoted_columns} FROM {self._quote_identifier(table_name)}"},
+            "elements": [{"type": "FIELD", "name": col, "label": f"{col.replace('_', ' ').title()}", "field_type": "TEXT", "readonly": (col.lower() == pk_column.lower())} for col in entry_display_columns],
             "buttons": [{"name": "Save", "action": "UPDATE"}, {"name": "Cancel", "action": "CANCEL"}]
         }
 
-        # Step 3: Run the application loop.
+        # Step 3: Run the application loop with enhanced actions
         while True:
-            # Fetch the data for the grid view before creating the runner.
+            # Fetch the data for the grid view
             grid_query = list_form_def["source"]["query"]
             rows = self._execute_sql(grid_query, is_query=True)
             headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
             initial_grid_data = {"headers": headers, "rows": rows}
             
-            # Now, pass the fetched data to the FormRunner.
             list_runner = FormRunner(list_form_def, initial_data=initial_grid_data, view_mode='grid', pk_column_name=pk_column)
             list_results = list_runner.run()
-            # --- END OF FIX ---
 
             action = list_results.get("action")
             if action == "CLOSE" or not action:
                 break
 
-            if action == "EDIT":
+            elif action == "EDIT":
                 selected_id = list_results.get("selected_id")
-                if selected_id is None: continue
+                if selected_id is None: 
+                    print("DEBUG: No selected_id found in list_results")
+                    continue
 
-                # Fetch the single record's data for the entry form.
+                print(f"DEBUG: Editing record with ID: {selected_id}")
+                
+                # Fetch the single record's data for editing
                 self.variables['GRIDEDIT_ID'] = selected_id
-                single_query = f"SELECT * FROM {self._quote_identifier(table_name)} WHERE {self._quote_identifier(pk_column)} = :GRIDEDIT_ID"
+                single_query = f"SELECT {quoted_columns} FROM {self._quote_identifier(table_name)} WHERE {quoted_columns_list[0]} = :GRIDEDIT_ID"
+                
+                print(f"DEBUG: Executing query: {single_query}")
                 row_data_list = self._execute_sql(single_query, is_query=True)
                 
                 initial_entry_data = {}
                 if row_data_list and self.db_cursor.description:
                     entry_headers = [desc[0] for desc in self.db_cursor.description]
                     initial_entry_data = dict(zip(entry_headers, row_data_list[0]))
+                    print(f"DEBUG: Initial entry data: {initial_entry_data}")
+                else:
+                    print(f"DEBUG: No data found for record ID: {selected_id}")
+                    continue
 
                 entry_runner = FormRunner(entry_form_def, initial_data=initial_entry_data, view_mode='single', nav_info={}, pk_column_name=pk_column)
                 entry_results = entry_runner.run()
                 
                 if entry_results.get("action") == "UPDATE":
                     updated_data = entry_results.get("data")
-                    if not updated_data: continue
+                    if not updated_data: 
+                        continue
                     
-                    # Get the primary key value from the data dictionary using the correct name
-                    record_id = updated_data.get(pk_column)
-                    if record_id is None:
-                        record_id = entry_results.get("pk")
-                    if record_id is None: continue
+                    record_id = updated_data.get(pk_column) or entry_results.get("pk")
+                    if record_id is None: 
+                        continue
                     
-                    # Auto-generate and execute the UPDATE SQL statement.
+                    # Generate and execute UPDATE SQL
                     set_clauses = [f"{self._quote_identifier(k)} = ?" for k in updated_data if k.lower() != pk_column.lower()]
                     params = [v for k, v in updated_data.items() if k.lower() != pk_column.lower()]
                     params.append(record_id)
                     
-                    if not set_clauses: continue
+                    if set_clauses:
+                        update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {quoted_columns_list[0]} = ?"
+                        try:
+                            self._execute_sql(update_sql, False, params)
+                            if self.db_engine == 'sqlite': self.db_connection.commit()
+                            print("DEBUG: Update successful")
+                        except Exception as e:
+                            print(f"DEBUG: Update failed: {e}")
+                            self._error(f"GRIDEDIT update failed: {e}")
 
-                    update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
-                    # Use a temporary method to execute SQL with direct params, since _execute_sql uses bind variables.
-                    try:
-                        self._execute_sql(update_sql, False, params)
-                        #self.db_cursor.execute(update_sql, params)
-                        if self.db_engine == 'sqlite': self.db_connection.commit()
-                    except Exception as e:
-                        self._error(f"GRIDEDIT update failed: {e}")      
-        
+            elif action == "NEW":
+                print("DEBUG: Creating new record")
+                
+                # Create empty initial data for all columns except primary key
+                initial_entry_data = {}
+                for col in column_names:
+                    if col.lower() != pk_column.lower():
+                        initial_entry_data[col] = ""
+                
+                entry_runner = FormRunner(entry_form_def, initial_data=initial_entry_data, view_mode='single', nav_info={}, pk_column_name=pk_column)
+                entry_results = entry_runner.run()
+                
+                if entry_results.get("action") == "UPDATE":  # Reusing UPDATE action for INSERT
+                    new_data = entry_results.get("data")
+                    if not new_data:
+                        continue
+                    
+                    # Filter out primary key and empty values for INSERT
+                    insert_data = {k: v for k, v in new_data.items() 
+                                 if k.lower() != pk_column.lower() and str(v).strip()}
+                    
+                    if insert_data:
+                        columns = ', '.join([self._quote_identifier(k) for k in insert_data.keys()])
+                        placeholders = ', '.join(['?' for _ in insert_data])
+                        values = list(insert_data.values())
+                        
+                        insert_sql = f"INSERT INTO {self._quote_identifier(table_name)} ({columns}) VALUES ({placeholders})"
+                        try:
+                            self._execute_sql(insert_sql, False, values)
+                            if self.db_engine == 'sqlite': self.db_connection.commit()
+                            print("DEBUG: Insert successful")
+                        except Exception as e:
+                            print(f"DEBUG: Insert failed: {e}")
+                            self._error(f"GRIDEDIT insert failed: {e}")
+
+            elif action == "DELETE":
+                selected_id = list_results.get("selected_id")
+                if selected_id is None:
+                    print("DEBUG: No selected_id found for deletion")
+                    continue
+                
+                print(f"DEBUG: Deleting record with ID: {selected_id}")
+                
+                # TODO: Add confirmation dialog in the TUI
+                # For now, just delete directly
+                try:
+                    delete_sql = f"DELETE FROM {self._quote_identifier(table_name)} WHERE {quoted_columns_list[0]} = ?"
+                    self._execute_sql(delete_sql, False, [selected_id])
+                    if self.db_engine == 'sqlite': self.db_connection.commit()
+                    print("DEBUG: Delete successful")
+                except Exception as e:
+                    print(f"DEBUG: Delete failed: {e}")
+                    self._error(f"GRIDEDIT delete failed: {e}")
+                
+                
     def _parse_form_statement(self):
         self._expect('FORM')
         form_name = self._expect('ID')[1]
@@ -6802,7 +7001,9 @@ ORDER BY 1
             self._next_token()
         
         table_name = self._parse_expression()
-        
+        # Optional: consume semicolon if present
+        if self._current_token() and self._current_token()[0] == 'SEMICOLON':
+            self._next_token()
         try:
             if self.db_engine == 'duckdb':
                 # DuckDB approach
