@@ -91,7 +91,7 @@ class _EntryScreen(App):
         align: center middle;
         padding: 1;
         margin: 1 0;
-        background: $surface-lighten-1;
+        background: $surface-lighten-1;  /* Keep this neutral too */
         border: solid $accent;
     }
 
@@ -99,7 +99,7 @@ class _EntryScreen(App):
         align: center middle;
         padding: 1;
         margin: 1 0;
-        background: $warning;
+        background: $surface-lighten-1;  /* Changed from $warning to a neutral color */
         border: solid $accent;
         height: auto;
         min-height: 5;
@@ -146,27 +146,51 @@ class _EntryScreen(App):
         color: $text-muted;
     }
 
-    Button {
-        margin: 0 1;
-        height: 3;
-        min-width: 10;
-        border: solid $accent;
-        background: $primary;
-        color: $surface;
-        text-style: bold;
-        content-align: center middle;
-    }
+Button {
+    margin: 0 1;
+    height: 3;
+    min-width: 10;
+    border: solid $accent;
+    background: $primary;
+    color: $surface;
+    text-style: bold;
+    content-align: center middle;
+}
 
-    Button:hover {
-        background: $accent;
-        border: solid $primary;
-    }
+Button:hover {
+    background: $accent;
+    border: solid $primary;
+}
 
-    Button:disabled {
-        background: $surface-darken-1;
-        color: $text-muted;
-        border: solid $surface-lighten-1;
-    }
+Button:disabled {
+    background: $surface-darken-1;
+    color: $text-muted;
+    border: solid $surface-lighten-1;
+}
+
+/* Neutral buttons (Cancel, Close) */
+Button.-neutral {
+    background: $surface-lighten-2;
+    color: $text;
+    border: solid $surface-lighten-3;
+}
+
+Button.-neutral:hover {
+    background: $surface-lighten-3;
+    border: solid $accent;
+}
+
+/* Success buttons (Save, Update) */
+Button.-success {
+    background: $success;
+    color: $surface;
+    border: solid $success;
+}
+
+Button.-success:hover {
+    background: $success-lighten-1;
+    border: solid $success;
+}
 
     Rule {
         margin: 1 0;
@@ -276,10 +300,21 @@ class _EntryScreen(App):
                 yield Button("Last ►►", id="LAST_RECORD", disabled=not self.nav_info.get("has_next"))
 
         # Action buttons
+        contextual_buttons = self._get_contextual_buttons('single')
+
         with Horizontal(id="button-container"):
-            for button in self.form_def.get("buttons", []):
+            for button in contextual_buttons:
                 button_id = button["name"].lower().replace(" ", "_").replace('"', "")
-                yield Button(button["name"], id=button_id)
+                action = button.get("action", "").upper()
+                
+                # Assign CSS classes based on button action
+                css_classes = []
+                if action in ["CANCEL", "CLOSE", "VIEW_GRID", "BACK_TO_GRID"]:
+                    css_classes.append("-neutral")
+                elif action in ["SAVE", "UPDATE", "SUBMIT"]:
+                    css_classes.append("-success")
+                
+                yield Button(button["name"], id=button_id, classes=" ".join(css_classes))
         
         yield Footer()
 
@@ -387,7 +422,38 @@ class _EntryScreen(App):
             self.result_dict["pk"] = pk_value # Using "pk" as the key
         
         self.exit()
+    
+    def _get_contextual_buttons(self, current_view_mode):
+        """Filter buttons based on current view mode and button actions."""
+        buttons = self.form_def.get("buttons", [])
+        contextual_buttons = []
         
+        for button in buttons:
+            action = button.get("action", "").upper()
+            button_added = False
+            
+            # Universal buttons (always shown regardless of view)
+            if action in ['CLOSE', 'EXIT', 'HELP']:
+                contextual_buttons.append(button)
+                button_added = True
+            
+            # Only add context-specific buttons if not already added as universal
+            if not button_added:
+                if current_view_mode == 'grid':
+                    # In grid view, show buttons that make sense for lists
+                    if action in ['VIEW_SINGLE', 'EDIT', 'NEW', 'DELETE', 'REFRESH']:
+                        contextual_buttons.append(button)
+                    elif action == 'EDIT_DETAILS':  # Alternative name for VIEW_SINGLE
+                        contextual_buttons.append(button)
+                
+                elif current_view_mode == 'single':
+                    # In single view, show buttons that make sense for editing
+                    if action in ['VIEW_GRID', 'UPDATE', 'SAVE', 'CANCEL', 'DELETE']:
+                        contextual_buttons.append(button)
+                    elif action == 'BACK_TO_GRID':  # Alternative name for VIEW_GRID
+                        contextual_buttons.append(button)
+        
+        return contextual_buttons    
 
 class _ListScreen(App):
     """A TUI screen for displaying data grids."""
@@ -499,8 +565,12 @@ class _ListScreen(App):
         """Create the child widgets for the grid view."""
         yield Header()
         yield DataTable(id="data-table")
+        
+        # Use contextual buttons instead of all buttons
+        contextual_buttons = self._get_contextual_buttons('grid')
+        
         with Horizontal(id="button-container"):
-             for button in self.form_def.get("buttons", []):
+             for button in contextual_buttons:
                 button_id = button["name"].lower().replace(" ", "_").replace('"', "")
                 yield Button(button["name"], id=button_id)
         yield Footer()
@@ -510,7 +580,7 @@ class _ListScreen(App):
         table = self.query_one(DataTable)
         all_rows = self.initial_data.get("rows", [])
         
-        # This is the full list of columns from the SQL query (e.g., ['id', 'last_name', ...])
+        # This is the full list of columns from the SQL query (e.g., ['rowid', 'name', 'amount', 'remark'])
         source_headers = self.initial_data.get("headers", [])
         if not source_headers:
             return # Cannot proceed without knowing the source column names
@@ -521,10 +591,17 @@ class _ListScreen(App):
         field_names_from_source = []   # The actual column names to pull data from
         
         if has_defined_fields:
+            # IMPORTANT: Only use fields that actually exist in the SQL results
             for element in self.form_def.get("elements", []):
                 if element.get("type") == "FIELD":
-                    display_headers_for_ui.append(element.get("label", element["name"]))
-                    field_names_from_source.append(element["name"])
+                    field_name = element["name"]
+                    # Check if this field exists in the source headers (case-insensitive)
+                    source_header_map = {header.lower(): header for header in source_headers}
+                    if field_name.lower() in source_header_map:
+                        display_headers_for_ui.append(element.get("label", element["name"]))
+                        field_names_from_source.append(source_header_map[field_name.lower()])
+                    else:
+                        print(f"DEBUG ListScreen: Skipping field '{field_name}' - not in SQL results")
         else:
             # Fallback if no fields are defined (use all source headers)
             display_headers_for_ui = source_headers
@@ -533,12 +610,16 @@ class _ListScreen(App):
         if not display_headers_for_ui:
             return
 
-        # --- START OF FIX ---
-        # Create a mapping from the source column names to their index (e.g., {'id': 0, 'last_name': 1, ...})
+        print(f"DEBUG ListScreen: Source headers: {source_headers}")
+        print(f"DEBUG ListScreen: Display headers: {display_headers_for_ui}")
+        print(f"DEBUG ListScreen: Field names from source: {field_names_from_source}")
+
+        # Create a mapping from the source column names to their index
         try:
             source_header_map = {header_name.lower(): i for i, header_name in enumerate(source_headers)}
             # Find the correct index in the source data for each field we want to display
             display_indices = [source_header_map[field_name.lower()] for field_name in field_names_from_source]
+            print(f"DEBUG ListScreen: Display indices: {display_indices}")
         except KeyError as e:
             # This error happens if a FIELD name in the form doesn't exist in the SOURCE query
             self.exit(f"Form Error: FIELD '{e.args[0]}' not found in SOURCE query columns.")
@@ -549,7 +630,6 @@ class _ListScreen(App):
         for row in all_rows:
             display_row = [row[i] for i in display_indices]
             display_rows.append(display_row)
-        # --- END OF FIX ---
 
         table.add_columns(*display_headers_for_ui)
         if display_rows:
@@ -573,24 +653,93 @@ class _ListScreen(App):
             selected_row_index = table.cursor_row
 
             rows = self.initial_data.get("rows", [])
+            original_headers = self.initial_data.get("headers", [])
+            
+            #print(f"DEBUG ListScreen: selected_row_index = {selected_row_index}")
+            #print(f"DEBUG ListScreen: total rows = {len(rows)}")
+            #print(f"DEBUG ListScreen: pk_column_name = '{self.pk_column_name}'")
+            #print(f"DEBUG ListScreen: original_headers = {original_headers}")
             
             # Use the real-time cursor position for the selection.
             if rows and selected_row_index is not None and 0 <= selected_row_index < len(rows):
                 row_data = rows[selected_row_index]
-                original_headers = self.initial_data.get("headers", [])
+                print(f"DEBUG ListScreen: selected row_data = {row_data}")
                 
                 if original_headers and len(row_data) >= len(original_headers):
                     row_dict = dict(zip(original_headers, row_data))
+                    print(f"DEBUG ListScreen: row_dict = {row_dict}")
                     
                     pk_value = None
-                    for key, value in row_dict.items():
-                        if key.lower() == self.pk_column_name.lower():
-                            pk_value = value
-                            break
+                    
+                    # Try exact match first
+                    if self.pk_column_name in row_dict:
+                        pk_value = row_dict[self.pk_column_name]
+                        print(f"DEBUG ListScreen: Found PK by exact match: {pk_value}")
+                    else:
+                        # Try case-insensitive match
+                        for key, value in row_dict.items():
+                            if key.lower() == self.pk_column_name.lower():
+                                pk_value = value
+                                print(f"DEBUG ListScreen: Found PK by case-insensitive match: {pk_value}")
+                                break
+                    
+                    if pk_value is None:
+                        # Fallback: if pk_column_name is 'id', try to find any column containing 'id'
+                        if self.pk_column_name.lower() == 'id':
+                            for key, value in row_dict.items():
+                                if 'id' in key.lower():
+                                    pk_value = value
+                                    print(f"DEBUG ListScreen: Found PK by 'id' substring match in '{key}': {pk_value}")
+                                    break
+                    
+                    if pk_value is None:
+                        # Last resort: use the first column value (assuming it's the PK)
+                        if row_data:
+                            pk_value = row_data[0]
+                            print(f"DEBUG ListScreen: Using first column as PK: {pk_value}")
+                    
+                    print(f"DEBUG ListScreen: Final pk_value = {pk_value}")
                     self.result_dict["selected_id"] = pk_value
+                else:
+                    print(f"DEBUG ListScreen: Header/data mismatch - headers:{len(original_headers) if original_headers else 0}, data:{len(row_data) if row_data else 0}")
+            else:
+                print(f"DEBUG ListScreen: Invalid selection - rows exist: {bool(rows)}, valid index: {selected_row_index is not None and 0 <= selected_row_index < len(rows) if rows else False}")
 
             if action == "OPENFORM" and button_def.get("args"):
                 self.result_dict["target_form"] = button_def["args"][0]
         
+        print(f"DEBUG ListScreen: Final result_dict = {self.result_dict}")
         self.exit()
+
+    def _get_contextual_buttons(self, current_view_mode):
+        """Filter buttons based on current view mode and button actions."""
+        buttons = self.form_def.get("buttons", [])
+        contextual_buttons = []
+        
+        for button in buttons:
+            action = button.get("action", "").upper()
+            button_added = False
+            
+            # Universal buttons (always shown regardless of view)
+            if action in ['CLOSE', 'EXIT', 'HELP']:
+                contextual_buttons.append(button)
+                button_added = True
+            
+            # Only add context-specific buttons if not already added as universal
+            if not button_added:
+                if current_view_mode == 'grid':
+                    # In grid view, show buttons that make sense for lists
+                    if action in ['VIEW_SINGLE', 'EDIT', 'NEW', 'DELETE', 'REFRESH']:
+                        contextual_buttons.append(button)
+                    elif action == 'EDIT_DETAILS':  # Alternative name for VIEW_SINGLE
+                        contextual_buttons.append(button)
+                
+                elif current_view_mode == 'single':
+                    # In single view, show buttons that make sense for editing
+                    if action in ['VIEW_GRID', 'UPDATE', 'SAVE', 'CANCEL', 'DELETE']:
+                        contextual_buttons.append(button)
+                    elif action == 'BACK_TO_GRID':  # Alternative name for VIEW_GRID
+                        contextual_buttons.append(button)
+        
+        return contextual_buttons
         
