@@ -807,19 +807,57 @@ class Interpreter:
             return "rowid"
                 
     def _extract_sql_from_parens(self):
-        self._expect('LPAREN'); sql_token = self._expect('SQL_STRING'); self._expect('RPAREN'); return sql_token[1]
+        self._expect('LPAREN') 
+        sql_token = self._expect('SQL_STRING')
+        self._expect('RPAREN')
+        return sql_token[1]
 
     def _execute_sql(self, sql_string, is_query=False, params=None):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': "", 'SQL_ROWCOUNT': 0.0, 'SQL_FOUND': 0.0, 'SQL_NOTFOUND': -1.0})
+
+        # 1. Always find the bind variables from the SQL string first.
+        # This gives us the expected order and count.
         bind_vars = re.findall(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', sql_string)
-        if params is None: # Only parse for bind variables if no direct params are given
-            bind_vars = re.findall(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', sql_string)
-            params = [self.variables[var.upper()] for var in bind_vars if var.upper() in self.variables or self._error(f"Bind variable ':{var}' not found.")]
-            final_sql = re.sub(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', '?', sql_string)
+
+        # 2. Determine the final list of parameter values.
+        resolved_params = []
+        if params is None:
+            for var_from_sql in bind_vars:
+                found_var = False
+                # THE FIX: Perform a case-insensitive search for the variable
+                for key in self.variables:
+                    if key.upper() == var_from_sql.upper():
+                        resolved_params.append(self.variables[key])
+                        found_var = True
+                        break # Stop searching once found
+                
+                if not found_var:
+                    self._error(f"Bind variable ':{var_from_sql}' not found in internal state.")
+                    return # Stop execution if a variable is missing
         else:
-            final_sql = sql_string
+            resolved_params = params
+
+        # 3. Add a check for safety: ensure the number of variables matches the parameters.
+        if len(bind_vars) != len(resolved_params):
+            self._error(
+                f"Parameter mismatch: SQL expected {len(bind_vars)} variables "
+                f"({', '.join(':' + v for v in bind_vars)}), "
+                f"but {len(resolved_params)} were provided."
+            )
+            return # Stop execution
+
+        # 4. Finally, always substitute the named variables with '?' for the DB driver.
+        # This was the main bug, as this line was previously inside the `if` block.
+        final_sql = re.sub(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', '?', sql_string)
+
+        print(f"Executing SQL: {final_sql}")
+        print(f"With Parameters: {resolved_params}")
+
         try:
-            result = self.db_cursor.execute(final_sql, params)
+            if resolved_params:
+                self.db_cursor.execute(final_sql, resolved_params)
+            else:
+                self.db_cursor.execute(final_sql)
             if not is_query:
                 row_count = self.db_cursor.rowcount
                 self.variables['SQL_ROWCOUNT'] = float(row_count if row_count != -1 else 0)
@@ -6419,7 +6457,7 @@ class Interpreter:
         if form_name not in self.form_definitions:
             self._error(f"FORM '{form_name}' is not defined.")
         
-        form_def = self.form_definitions[form_name].copy() # Use a copy to avoid modifying the original
+        form_def = self.form_definitions[form_name].copy()
 
         # Inject choices for any CHOICE fields before running the form.
         for element in form_def.get("elements", []):
@@ -6437,68 +6475,86 @@ class Interpreter:
                 if not isinstance(choices_array, list):
                     self._error(f"SOURCE '{source_array_name}' for FIELD '{element['name']}' is not a valid ARRAY.")
                 
-                # Inject the actual array data into the form definition
                 element["choices"] = choices_array
-                
-        # --- 1. Parse optional USING clause to get the starting record ID ---
-        if form_name not in self.form_definitions:
-            self._error(f"FORM '{form_name}' is not defined.")
-        
-        form_def = self.form_definitions[form_name]
-        
+
         record_ids = []
         current_index = -1
-        # The view mode starts based on the form's DISPLAY attribute
+        pk_column_name = "id"  # Default fallback
         current_view_mode = 'grid' if form_def.get("display_rows", 1) > 1 else 'single'
 
-        # If the form is data-bound, fetch the list of all IDs for navigation
+        # If the form is data-bound, intelligently determine the primary key
         if form_def.get("source"):
-            grid_query = form_def["source"]["query"]
-            # To enable navigation, the source query must contain a unique 'id' column
-            nav_query = f"SELECT id FROM ({grid_query}) AS t"
+            source_query = form_def["source"]["query"]
+            
+            # Try to extract table name from the query for primary key detection
+            table_name = self._extract_table_from_select(source_query)
+            
+            if table_name:
+                print(f"DEBUG OPENFORM: Detected table '{table_name}' from query")
+                pk_column_name = self._get_primary_key(table_name)
+                print(f"DEBUG OPENFORM: Detected primary key '{pk_column_name}'")
+                
+                # Build navigation query using the detected primary key
+                if pk_column_name.lower() == 'rowid':
+                    # For rowid, we need to explicitly select it
+                    nav_query = f"SELECT rowid as id FROM ({source_query}) AS t"
+                else:
+                    # For regular primary keys, use the column directly
+                    nav_query = f"SELECT {self._quote_identifier(pk_column_name)} as id FROM ({source_query}) AS t"
+            else:
+                # Fallback: try the original approach but handle the error gracefully
+                nav_query = f"SELECT id FROM ({source_query}) AS t"
+            
+            print(f"DEBUG OPENFORM: Navigation query: {nav_query}")
+            
             try:
                 all_ids_result = self._execute_sql(nav_query, is_query=True)
                 record_ids = [row[0] for row in all_ids_result]
+                print(f"DEBUG OPENFORM: Found {len(record_ids)} records for navigation")
             except Exception as e:
-                self._error(f"Failed to get navigation IDs from form SOURCE. Ensure query has an 'id' column. Error: {e}")
+                print(f"DEBUG OPENFORM: Navigation query failed: {e}")
+                # If navigation fails, still allow the form to work but without navigation
+                record_ids = []
+                print("DEBUG OPENFORM: Continuing without navigation support")
 
             if record_id in record_ids:
                 current_index = record_ids.index(record_id)
             elif record_ids:
-                current_index = 0 # Default to the first record if no ID is specified
+                current_index = 0
 
-        # --- 3. The Main Controller Loop ---
-        # This loop runs the form, waits for an action, and then re-runs (for navigation) or exits.
+        # Main controller loop (rest of the method remains the same)
         while True:
             initial_data = {}
-            # Fetch data for the current record if we are in single view mode
+            
             if current_view_mode == 'single' and current_index != -1 and record_ids:
                 current_id = record_ids[current_index]
-                self.variables['ID'] = current_id # Set bind variable for the query
+                self.variables['ID'] = current_id
                 
-                # Wrap the grid query to create a filtered query for the single view.
                 grid_query = form_def["source"]["query"]
-                single_query = f"SELECT * FROM ({grid_query}) AS t WHERE id = :id"
+                
+                # Use the detected primary key for filtering
+                if pk_column_name.lower() == 'rowid':
+                    single_query = f"SELECT * FROM ({grid_query}) AS t WHERE rowid = :ID"
+                else:
+                    single_query = f"SELECT * FROM ({grid_query}) AS t WHERE {self._quote_identifier(pk_column_name)} = :ID"
+                    
                 row_data = self._execute_sql(single_query, is_query=True)
                 
                 if row_data and self.db_cursor.description:
                     headers = [desc[0] for desc in self.db_cursor.description]
                     initial_data = dict(zip(headers, row_data[0]))
-            # For grid view, fetch all data
             elif current_view_mode == 'grid' and form_def.get("source"):
                 rows = self._execute_sql(form_def["source"]["query"], is_query=True)
                 headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
                 initial_data = {"headers": headers, "rows": rows}
 
-            # Pass navigation and view info to the TUI
             nav_info = {
                 "has_prev": current_index > 0,
                 "has_next": current_index < len(record_ids) - 1
             }
 
-            # Run the TUI and wait for the user to perform an action
             try:
-                runner = FormRunner(form_def, initial_data, nav_info, view_mode=current_view_mode)
+                runner = FormRunner(form_def, initial_data, nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
                 results = runner.run()
                 action = results.get("action")
                 print(f"DEBUG: Form returned action='{action}', results={results}")
@@ -6507,22 +6563,17 @@ class Interpreter:
                 self.variables["FORM_RESULT$"] = "ERROR"
                 break
 
-            # --- 4. Handle the Action Returned from the TUI ---
-            # Always set all special variables from the results dictionary.
+            # Set result variables
             self.variables["FORM_RESULT$"] = str(action).upper() if action is not None else ""
-
             record_id = results.get("pk", results.get("selected_id"))
             self.variables["FORM_SELECTED_ID"] = float(record_id) if record_id is not None else 0.0
-
             form_data = results.get("data")
             if isinstance(form_data, dict):
-                # If the form returns data (e.g., from an UPDATE), convert it to a DbBasic hash.
                 self.variables["FORM_DATA"] = self._python_to_basic_data(form_data)
             else:
-                # Always ensure FORM_DATA is a hash, even if empty.
                 self.variables["FORM_DATA"] = {}
             
-            # Decide whether to re-loop (for internal navigation) or break (return to BASIC script)
+            # Handle actions
             if action == "VIEW_GRID":
                 current_view_mode = 'grid'
             elif action == "VIEW_SINGLE":
@@ -6542,8 +6593,8 @@ class Interpreter:
                 if record_ids:
                     current_index = len(record_ids) - 1
             else:
-                # Any other action (CLOSE, EDIT, UPDATE, CANCEL, custom actions, or None)
-                # should break this Python loop and return control to the BASIC script.
+                # For UPDATE, CLOSE, CANCEL, or any other action, exit the form
+                # and return control to the BASIC code
                 break
 
             
