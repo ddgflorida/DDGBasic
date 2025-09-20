@@ -4,33 +4,44 @@ from textual.containers import VerticalScroll, Vertical, Horizontal
 from textual.widgets import DataTable, Header, Footer, Button, Input, Label, Static, TextArea, Rule, Select
 
 class FormRunner:
-    def __init__(self, form_def, initial_data=None, nav_info=None, view_mode=None, pk_column_name='id'):
+    def __init__(self, form_def, initial_data=None, nav_info=None, view_mode=None, pk_column_name='id', search_config=None, current_search_term=""):
         self.form_def = form_def
         self.initial_data = initial_data or {}
         self.nav_info = nav_info or {}
-        self.view_mode = view_mode  # Add this parameter
+        self.view_mode = view_mode
         self.pk_column_name = pk_column_name
         self.results = {}
+        # Add these new attributes to store the search info
+        self.search_config = search_config or {'enabled': False}
+        self.current_search_term = current_search_term
 
     def run(self):
         """
         Checks the form definition and launches the appropriate screen (dispatcher logic).
         """
-        # Use the explicit view_mode if provided, otherwise fall back to form definition
         if self.view_mode == 'grid':
-            # Add self.pk_column_name to the call
-            app = _ListScreen(self.form_def, self.initial_data, self.results, self.pk_column_name)
+            # Pass the search arguments to the _ListScreen
+            app = _ListScreen(
+                self.form_def, self.initial_data, self.results, 
+                self.pk_column_name, self.search_config, self.current_search_term
+            )
         elif self.view_mode == 'single':
-            # Add self.pk_column_name to the call
-            app = _EntryScreen(self.form_def, self.initial_data, self.results, self.nav_info, self.pk_column_name)
+            app = _EntryScreen(
+                self.form_def, self.initial_data, self.results, 
+                self.nav_info, self.pk_column_name
+            )
         else:
             # Original logic as fallback
             if self.form_def.get("display_rows", 1) > 1:
-                # Add self.pk_column_name to the call
-                app = _ListScreen(self.form_def, self.initial_data, self.results, self.pk_column_name)
+                app = _ListScreen(
+                    self.form_def, self.initial_data, self.results, 
+                    self.pk_column_name, self.search_config, self.current_search_term
+                )
             else:
-                # Add self.pk_column_name to the call
-                app = _EntryScreen(self.form_def, self.initial_data, self.results, self.nav_info, self.pk_column_name)
+                app = _EntryScreen(
+                    self.form_def, self.initial_data, self.results, 
+                    self.nav_info, self.pk_column_name
+                )
         
         app.run()
         return self.results
@@ -91,7 +102,7 @@ class _EntryScreen(App):
         align: center middle;
         padding: 1;
         margin: 1 0;
-        background: $surface-lighten-1;  /* Keep this neutral too */
+        background: $surface-lighten-1;
         border: solid $accent;
     }
 
@@ -99,7 +110,7 @@ class _EntryScreen(App):
         align: center middle;
         padding: 1;
         margin: 1 0;
-        background: $surface-lighten-1;  /* Changed from $warning to a neutral color */
+        background: $surface-lighten-1;
         border: solid $accent;
         height: auto;
         min-height: 5;
@@ -146,51 +157,49 @@ class _EntryScreen(App):
         color: $text-muted;
     }
 
-Button {
-    margin: 0 1;
-    height: 3;
-    min-width: 10;
-    border: solid $accent;
-    background: $primary;
-    color: $surface;
-    text-style: bold;
-    content-align: center middle;
-}
+    Button {
+        margin: 0 1;
+        height: 3;
+        min-width: 10;
+        border: solid $accent;
+        background: $primary;
+        color: $surface;
+        text-style: bold;
+        content-align: center middle;
+    }
 
-Button:hover {
-    background: $accent;
-    border: solid $primary;
-}
+    Button:hover {
+        background: $accent;
+        border: solid $primary;
+    }
 
-Button:disabled {
-    background: $surface-darken-1;
-    color: $text-muted;
-    border: solid $surface-lighten-1;
-}
+    Button:disabled {
+        background: $surface-darken-1;
+        color: $text-muted;
+        border: solid $surface-lighten-1;
+    }
 
-/* Neutral buttons (Cancel, Close) */
-Button.-neutral {
-    background: $surface-lighten-2;
-    color: $text;
-    border: solid $surface-lighten-3;
-}
+    Button.-neutral {
+        background: $surface-lighten-2;
+        color: $text;
+        border: solid $surface-lighten-3;
+    }
 
-Button.-neutral:hover {
-    background: $surface-lighten-3;
-    border: solid $accent;
-}
+    Button.-neutral:hover {
+        background: $surface-lighten-3;
+        border: solid $accent;
+    }
 
-/* Success buttons (Save, Update) */
-Button.-success {
-    background: $success;
-    color: $surface;
-    border: solid $success;
-}
+    Button.-success {
+        background: $success;
+        color: $surface;
+        border: solid $success;
+    }
 
-Button.-success:hover {
-    background: $success-lighten-1;
-    border: solid $success;
-}
+    Button.-success:hover {
+        background: $success-lighten-1;
+        border: solid $success;
+    }
 
     Rule {
         margin: 1 0;
@@ -207,27 +216,17 @@ Button.-success:hover {
         self.pk_column_name = pk_column_name
         self.widget_map = {}
         
-        # This is the corrected title logic
-        form_title = self.form_def.get("name", "Data Entry")
-        heading_element = next((el for el in self.form_def.get("elements", []) if el.get("type") == "HEADING"), None)
         form_title = self.form_def.get("title", self.form_def.get("name", "Data Entry"))
         self.title = f"Entry View: {form_title}"
-        print(f"DEBUG: EntryScreen created with initial_data: {initial_data}")
-        print(f"DEBUG: EntryScreen nav_info: {nav_info}")
-        print(f"DEBUG: EntryScreen buttons: {form_def.get('buttons', [])}")
 
     def compose(self) -> ComposeResult:
         yield Header()
         yield Static(id="error-message")
 
         with VerticalScroll(id="form-container"):
-            #title = self.form_def.get("title", self.form_def["name"])
-            #yield Label(title, classes="heading")
-
             has_defined_fields = any(e.get("type") == "FIELD" for e in self.form_def.get("elements", []))
 
             if has_defined_fields:
-                # Render user-defined layout
                 for element in self.form_def.get("elements", []):
                     if element["type"] == "HEADING":
                         yield Label(element["text"], classes="heading")
@@ -244,54 +243,32 @@ Button.-success:hover {
                             yield Label(f"{element['label']}:", classes="field-label")
                             is_readonly = element.get("readonly", False)
                             
-                            if element["field_type"] == "CHOICE":
+                            if element.get("field_type") == "CHOICE":
                                 choices = element.get("choices", [])
                                 options = [(str(item), item) for item in choices]
                                 initial_value = self.initial_data.get(field_name)
 
-                                # Only pass the 'value' argument if we have an initial value
-                                # and that value is actually one of the valid options.
                                 if initial_value is not None and initial_value in choices:
-                                    yield Select(
-                                        options,
-                                        value=initial_value,
-                                        id=widget_id,
-                                        disabled=is_readonly
-                                    )
+                                    yield Select(options, value=initial_value, id=widget_id, disabled=is_readonly)
                                 else:
-                                    # Otherwise, let the Select widget use its own default.
-                                    yield Select(
-                                        options,
-                                        id=widget_id,
-                                        disabled=is_readonly
-                                    )
-                            elif element["field_type"] == "MEMO":
-                                yield TextArea(
-                                    text=str(self.initial_data.get(field_name, "")),
-                                    id=widget_id,
-                                    disabled=is_readonly
-                                )
+                                    yield Select(options, id=widget_id, disabled=is_readonly)
+                            elif element.get("field_type") == "MEMO":
+                                yield TextArea(text=str(self.initial_data.get(field_name, "")), id=widget_id, disabled=is_readonly)
                             else:
                                 yield Input(
                                     value=str(self.initial_data.get(field_name, "")),
                                     id=widget_id,
-                                    password=(element["field_type"] == "PASSWORD"),
+                                    password=(element.get("field_type") == "PASSWORD"),
                                     disabled=is_readonly
                                 )
             elif self.initial_data:
-                # Auto-generate layout with better formatting
                 for field_name, value in self.initial_data.items():
                     widget_id = f"field_{field_name}"
                     self.widget_map[field_name] = widget_id
                     with Vertical(classes="form-field"):
                         yield Label(f"{field_name.title()}:", classes="field-label")
-                        yield Input(
-                            value=str(value),
-                            id=widget_id,
-                            disabled=(field_name.lower() == 'id')
-                        )
+                        yield Input(value=str(value), id=widget_id, disabled=(field_name.lower() == 'id'))
 
-        # Navigation section
         if any(self.nav_info.get(key) for key in ["has_prev", "has_next"]):
             with Horizontal(id="nav-container"):
                 yield Button("◄◄ First", id="FIRST_RECORD", disabled=not self.nav_info.get("has_prev"))
@@ -299,7 +276,6 @@ Button.-success:hover {
                 yield Button("Next ►", id="NEXT_RECORD", disabled=not self.nav_info.get("has_next"))
                 yield Button("Last ►►", id="LAST_RECORD", disabled=not self.nav_info.get("has_next"))
 
-        # Action buttons
         contextual_buttons = self._get_contextual_buttons('single')
 
         with Horizontal(id="button-container"):
@@ -307,7 +283,6 @@ Button.-success:hover {
                 button_id = button["name"].lower().replace(" ", "_").replace('"', "")
                 action = button.get("action", "").upper()
                 
-                # Assign CSS classes based on button action
                 css_classes = []
                 if action in ["CANCEL", "CLOSE", "VIEW_GRID", "BACK_TO_GRID"]:
                     css_classes.append("-neutral")
@@ -319,7 +294,6 @@ Button.-success:hover {
         yield Footer()
 
     def _validate_form(self) -> bool:
-        """Runs all validation rules and returns True if the form is valid."""
         error_widget = self.query_one("#error-message")
         field_elements = [e for e in self.form_def.get("elements", []) if e.get("type") == "FIELD"]
 
@@ -327,55 +301,32 @@ Button.-success:hover {
             field_name = element["name"]
             widget = self.query_one(f"#{self.widget_map[field_name]}")
             value = ""
-            if isinstance(widget, Select):
-                value = widget.value
-            elif isinstance(widget, TextArea):
-                value = widget.text
-            else: # Input
-                value = widget.value
+            if isinstance(widget, Select): value = widget.value
+            elif isinstance(widget, TextArea): value = widget.text
+            else: value = widget.value
             validations = element.get("validations", {})
 
             if "required" in validations and not value.strip():
-                error_widget.update(validations["required"]["message"])
-                error_widget.styles.display = "block"
-                return False
-
+                error_widget.update(validations["required"]["message"]); error_widget.styles.display = "block"; return False
             if not value: continue
-
             if "minlength" in validations and len(value) < validations["minlength"]["value"]:
-                error_widget.update(validations["minlength"]["message"])
-                error_widget.styles.display = "block"
-                return False
-
+                error_widget.update(validations["minlength"]["message"]); error_widget.styles.display = "block"; return False
             if "maxlength" in validations and len(value) > validations["maxlength"]["value"]:
-                error_widget.update(validations["maxlength"]["message"])
-                error_widget.styles.display = "block"
-                return False
-
+                error_widget.update(validations["maxlength"]["message"]); error_widget.styles.display = "block"; return False
             if "minvalue" in validations:
                 try:
                     if float(value) < validations["minvalue"]["value"]:
-                        error_widget.update(validations["minvalue"]["message"])
-                        error_widget.styles.display = "block"
-                        return False
+                        error_widget.update(validations["minvalue"]["message"]); error_widget.styles.display = "block"; return False
                 except (ValueError, TypeError):
-                    error_widget.update(f"{element['label']} must be a number.")
-                    error_widget.styles.display = "block"
-                    return False
-
+                    error_widget.update(f"{element['label']} must be a number."); error_widget.styles.display = "block"; return False
             if "pattern" in validations and not re.match(validations["pattern"]["value"], value):
-                error_widget.update(validations["pattern"]["message"])
-                error_widget.styles.display = "block"
-                return False
-
+                error_widget.update(validations["pattern"]["message"]); error_widget.styles.display = "block"; return False
             if "matches" in validations:
                 other_field_name = validations["matches"]["value"]
                 other_widget = self.query_one(f"#{self.widget_map[other_field_name]}")
                 other_value = other_widget.value if isinstance(other_widget, Input) else other_widget.text
                 if value != other_value:
-                    error_widget.update(validations["matches"]["message"])
-                    error_widget.styles.display = "block"
-                    return False
+                    error_widget.update(validations["matches"]["message"]); error_widget.styles.display = "block"; return False
         
         error_widget.styles.display = "none"
         return True
@@ -383,192 +334,94 @@ Button.-success:hover {
     def on_button_pressed(self, event: Button.Pressed) -> None:
         button_id = event.button.id
 
-        # Part 1: Handle the special navigation buttons first.
         if button_id in ["FIRST_RECORD", "PREV_RECORD", "NEXT_RECORD", "LAST_RECORD"]:
             self.result_dict["action"] = button_id
             self.exit()
             return
 
-        # Part 2: Handle the action buttons defined in the FORM.
-        button_def = next((
-            b for b in self.form_def["buttons"]
-            if re.sub(r'[^a-zA-Z0-9_]', '', b["name"].lower().replace(" ", "_")) == button_id
-        ), None)
+        button_def = next((b for b in self.form_def.get("buttons", []) if re.sub(r'[^a-zA-Z0-9_]', '', b["name"].lower().replace(" ", "_")) == button_id), None)
         
         if button_def:
             action = button_def.get("action")
             if action in ["SUBMIT", "INSERT", "UPDATE"]:
-                if not self._validate_form():
-                    return
+                if not self._validate_form(): return
 
             self.result_dict["action"] = action
-            
             data = {}
             for field_name, widget_id in self.widget_map.items():
                 widget = self.query_one(f"#{widget_id}")
-                if isinstance(widget, Select):
-                    data[field_name] = widget.value
-                elif isinstance(widget, TextArea):
-                    data[field_name] = widget.text
-                else: # This handles Input widgets
-                    data[field_name] = widget.value
+                if isinstance(widget, Select): data[field_name] = widget.value
+                elif isinstance(widget, TextArea): data[field_name] = widget.text
+                else: data[field_name] = widget.value
             self.result_dict["data"] = data
             
             pk_value = None
             for key, value in self.initial_data.items():
-                if key.lower() == self.pk_column_name.lower():
-                    pk_value = value
-                    break
-            self.result_dict["pk"] = pk_value # Using "pk" as the key
+                if key.lower() == self.pk_column_name.lower(): pk_value = value; break
+            self.result_dict["pk"] = pk_value
         
         self.exit()
     
     def _get_contextual_buttons(self, current_view_mode):
-        """Filter buttons based on current view mode and button actions."""
         buttons = self.form_def.get("buttons", [])
         contextual_buttons = []
-        
         for button in buttons:
             action = button.get("action", "").upper()
             button_added = False
-            
-            # Universal buttons (always shown regardless of view)
             if action in ['CLOSE', 'EXIT', 'HELP']:
-                contextual_buttons.append(button)
-                button_added = True
-            
-            # Only add context-specific buttons if not already added as universal
+                contextual_buttons.append(button); button_added = True
             if not button_added:
                 if current_view_mode == 'grid':
-                    # In grid view, show buttons that make sense for lists
-                    if action in ['VIEW_SINGLE', 'EDIT', 'NEW', 'DELETE', 'REFRESH']:
+                    if action in ['VIEW_SINGLE', 'EDIT', 'NEW', 'DELETE', 'REFRESH', 'EDIT_DETAILS']:
                         contextual_buttons.append(button)
-                    elif action == 'EDIT_DETAILS':  # Alternative name for VIEW_SINGLE
-                        contextual_buttons.append(button)
-                
                 elif current_view_mode == 'single':
-                    # In single view, show buttons that make sense for editing
-                    if action in ['VIEW_GRID', 'UPDATE', 'SAVE', 'CANCEL', 'DELETE']:
+                    if action in ['VIEW_GRID', 'UPDATE', 'SAVE', 'CANCEL', 'DELETE', 'BACK_TO_GRID']:
                         contextual_buttons.append(button)
-                    elif action == 'BACK_TO_GRID':  # Alternative name for VIEW_GRID
-                        contextual_buttons.append(button)
-        
         return contextual_buttons    
 
 class _ListScreen(App):
     """A TUI screen for displaying data grids."""
-    
     CSS = """
-        Screen {
-            background: $surface;
-        }
-        
-        .header-info {
-            height: 1;
-            margin: 0;
-            padding: 0 1;
-            background: $primary;
-            color: $text;
-            border: solid $accent;
-        }
-        
-        .controls {
-            height: 6;
-            margin: 0;
-            padding: 1;
-            background: $surface-lighten-1;
-            border: solid $accent;
-            align: center middle;
-        }
-        
-        .prompt-text {
-            text-style: bold;
-            color: $accent;
-            margin: 0 1 0 0;
-            width: auto;
-        }
-        
-        .help-text {
-            color: $text-muted;
-            text-style: italic;
-            margin-bottom: 0;
-        }
-        
-        #file-input {
-            width: 50;
-            height: 4;
-            border: solid $accent;
-        }
-        
-        DataTable {
-            margin: 0;
-            border: solid $accent;
-            height: 1fr;
-        }
-        
-        Input {
-            margin: 0 1;
-            height: 4;
-            border: solid $accent;
-            background: $surface;
-        }
-        
-        Input:focus {
-            border: solid $primary;
-            background: $surface-lighten-1;
-        }
-        
-        Button {
-            margin: 0 1;
-            height: 3;
-            min-width: 10;
-            color: auto !important;
-            text-style: bold;
-        }
-        
-        Button.-primary {
-            background: $primary;
-        }
-        
-        Button.-success {
-            background: $success;
-        }
-        
-        Button.-warning {
-            background: $warning;
-        }
-        
-        Button:hover {
-            text-style: bold reverse;
-        }
-        """
-    
+        Screen { background: $surface; }
+        .header-info { height: 1; margin: 0; padding: 0 1; background: $primary; color: $text; border: solid $accent; }
+        .controls { height: auto; min-height: 5; margin: 0; padding: 1; background: $surface-lighten-1; border: solid $accent; align: center middle; }
+        .prompt-text { text-style: bold; color: $accent; margin: 0 1 0 0; width: auto; }
+        #search-input { width: 1fr; }
+        DataTable { margin: 0; border: solid $accent; height: 1fr; }
+        Input { margin: 0 1; height: 3; border: solid $accent; background: $surface; }
+        Input:focus { border: solid $primary; background: $surface-lighten-1; }
+        Button { margin: 0 1; height: 3; min-width: 10; color: auto !important; text-style: bold; }
+        Button:hover { text-style: bold reverse; }
+        #button-container { align: center middle; padding: 1; margin: 1 0; background: $surface-lighten-1; border: solid $accent; height: auto; min-height: 5; }
+    """
 
-    def __init__(self, form_def, initial_data, result_dict, pk_column_name):
+    def __init__(self, form_def, initial_data, result_dict, pk_column_name, search_config, current_search_term):
         super().__init__()
         self.form_def = form_def
         self.initial_data = initial_data
         self.result_dict = result_dict
         self.pk_column_name = pk_column_name
+        # Add these new attributes
+        self.search_config = search_config
+        self.current_search_term = current_search_term
 
-        # --- START OF NEW LOGIC ---
-        # Find the HEADING text from the form's elements to use as the title.
-        form_title = self.form_def.get("name", "Data Grid") # Fallback title
-        
+        form_title = self.form_def.get("name", "Data Grid")
         heading_element = next((el for el in self.form_def.get("elements", []) if el.get("type") == "HEADING"), None)
-        if heading_element:
-            form_title = heading_element.get("text", form_title)
-
-        self.title = f"List View: {form_title}"
+        if heading_element: form_title = heading_element.get("text", form_title)
+        record_count = len(self.initial_data.get("rows", []))
+        self.title = f"List View: {form_title} ({record_count} records)"
 
     def compose(self) -> ComposeResult:
-        """Create the child widgets for the grid view."""
         yield Header()
+        
+        if self.search_config.get('enabled'):
+            with Horizontal(classes="controls"):
+                yield Label("Search:", classes="prompt-text")
+                yield Input(id="search-input", value=self.current_search_term, placeholder="Type and press Enter...")
+        
         yield DataTable(id="data-table")
         
-        # Use contextual buttons instead of all buttons
         contextual_buttons = self._get_contextual_buttons('grid')
-        
         with Horizontal(id="button-container"):
              for button in contextual_buttons:
                 button_id = button["name"].lower().replace(" ", "_").replace('"', "")
@@ -576,170 +429,90 @@ class _ListScreen(App):
         yield Footer()
 
     def on_mount(self) -> None:
-        """Called when the app is first mounted to populate the table."""
         table = self.query_one(DataTable)
         all_rows = self.initial_data.get("rows", [])
-        
-        # This is the full list of columns from the SQL query (e.g., ['rowid', 'name', 'amount', 'remark'])
         source_headers = self.initial_data.get("headers", [])
-        if not source_headers:
-            return # Cannot proceed without knowing the source column names
-            
-        has_defined_fields = any(e.get("type") == "FIELD" for e in self.form_def.get("elements", []))
+        if not source_headers: return
 
-        display_headers_for_ui = []    # The user-friendly labels for the UI
-        field_names_from_source = []   # The actual column names to pull data from
+        has_defined_fields = any(e.get("type") == "FIELD" for e in self.form_def.get("elements", []))
+        display_headers_for_ui, field_names_from_source = [], []
         
         if has_defined_fields:
-            # IMPORTANT: Only use fields that actually exist in the SQL results
+            source_header_map = {header.lower(): header for header in source_headers}
             for element in self.form_def.get("elements", []):
                 if element.get("type") == "FIELD":
                     field_name = element["name"]
-                    # Check if this field exists in the source headers (case-insensitive)
-                    source_header_map = {header.lower(): header for header in source_headers}
                     if field_name.lower() in source_header_map:
                         display_headers_for_ui.append(element.get("label", element["name"]))
                         field_names_from_source.append(source_header_map[field_name.lower()])
-                    else:
-                        print(f"DEBUG ListScreen: Skipping field '{field_name}' - not in SQL results")
         else:
-            # Fallback if no fields are defined (use all source headers)
-            display_headers_for_ui = source_headers
-            field_names_from_source = source_headers
-            
-        if not display_headers_for_ui:
-            return
+            display_headers_for_ui = [h for h in source_headers if h.lower() != 'rowid']
+            field_names_from_source = [h for h in source_headers if h.lower() != 'rowid']
 
-        print(f"DEBUG ListScreen: Source headers: {source_headers}")
-        print(f"DEBUG ListScreen: Display headers: {display_headers_for_ui}")
-        print(f"DEBUG ListScreen: Field names from source: {field_names_from_source}")
+        if not display_headers_for_ui: return
 
-        # Create a mapping from the source column names to their index
         try:
             source_header_map = {header_name.lower(): i for i, header_name in enumerate(source_headers)}
-            # Find the correct index in the source data for each field we want to display
             display_indices = [source_header_map[field_name.lower()] for field_name in field_names_from_source]
-            print(f"DEBUG ListScreen: Display indices: {display_indices}")
         except KeyError as e:
-            # This error happens if a FIELD name in the form doesn't exist in the SOURCE query
             self.exit(f"Form Error: FIELD '{e.args[0]}' not found in SOURCE query columns.")
             return
 
-        # Build the rows for display using only the data from the correctly mapped indices
-        display_rows = []
-        for row in all_rows:
-            display_row = [row[i] for i in display_indices]
-            display_rows.append(display_row)
-
+        display_rows = [[row[i] for i in display_indices] for row in all_rows]
         table.add_columns(*display_headers_for_ui)
-        if display_rows:
-            table.add_rows(display_rows)
+        if display_rows: table.add_rows(display_rows)
+        if self.search_config.get('enabled'):
+            self.query_one("#search-input").focus()
+        else:
+            table.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Handle the user pressing Enter in the search input."""
+        if event.input.id == "search-input":
+            self.result_dict["action"] = "SEARCH"
+            self.result_dict["search_term"] = event.value
+            self.exit()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """Handle button press events."""
-        button_id = event.button.id
+        if self.search_config.get('enabled'):
+            self.result_dict["search_term"] = self.query_one("#search-input").value
         
-        button_def = next((
-            b for b in self.form_def["buttons"] 
-            if re.sub(r'[^a-zA-Z0-9_]', '', b["name"].lower().replace(" ", "_")) == button_id
-        ), None)
+        button_id = event.button.id
+        button_def = next((b for b in self.form_def["buttons"] if re.sub(r'[^a-zA-Z0-9_]', '', b["name"].lower().replace(" ", "_")) == button_id), None)
 
         if button_def:
-            action = button_def.get("action")
-            self.result_dict["action"] = action
-            
-            # Get the table widget and its current cursor position directly.
+            self.result_dict["action"] = button_def.get("action")
             table = self.query_one(DataTable)
             selected_row_index = table.cursor_row
-
             rows = self.initial_data.get("rows", [])
             original_headers = self.initial_data.get("headers", [])
             
-            #print(f"DEBUG ListScreen: selected_row_index = {selected_row_index}")
-            #print(f"DEBUG ListScreen: total rows = {len(rows)}")
-            #print(f"DEBUG ListScreen: pk_column_name = '{self.pk_column_name}'")
-            #print(f"DEBUG ListScreen: original_headers = {original_headers}")
-            
-            # Use the real-time cursor position for the selection.
             if rows and selected_row_index is not None and 0 <= selected_row_index < len(rows):
                 row_data = rows[selected_row_index]
-                print(f"DEBUG ListScreen: selected row_data = {row_data}")
-                
-                if original_headers and len(row_data) >= len(original_headers):
+                if original_headers:
                     row_dict = dict(zip(original_headers, row_data))
-                    print(f"DEBUG ListScreen: row_dict = {row_dict}")
-                    
                     pk_value = None
-                    
-                    # Try exact match first
-                    if self.pk_column_name in row_dict:
-                        pk_value = row_dict[self.pk_column_name]
-                        print(f"DEBUG ListScreen: Found PK by exact match: {pk_value}")
-                    else:
-                        # Try case-insensitive match
-                        for key, value in row_dict.items():
-                            if key.lower() == self.pk_column_name.lower():
-                                pk_value = value
-                                print(f"DEBUG ListScreen: Found PK by case-insensitive match: {pk_value}")
-                                break
-                    
-                    if pk_value is None:
-                        # Fallback: if pk_column_name is 'id', try to find any column containing 'id'
-                        if self.pk_column_name.lower() == 'id':
-                            for key, value in row_dict.items():
-                                if 'id' in key.lower():
-                                    pk_value = value
-                                    print(f"DEBUG ListScreen: Found PK by 'id' substring match in '{key}': {pk_value}")
-                                    break
-                    
-                    if pk_value is None:
-                        # Last resort: use the first column value (assuming it's the PK)
-                        if row_data:
-                            pk_value = row_data[0]
-                            print(f"DEBUG ListScreen: Using first column as PK: {pk_value}")
-                    
-                    print(f"DEBUG ListScreen: Final pk_value = {pk_value}")
+                    for key, value in row_dict.items():
+                        if key.lower() == self.pk_column_name.lower():
+                            pk_value = value
+                            break
+                    if pk_value is None: pk_value = row_data[0] # Fallback to first column
                     self.result_dict["selected_id"] = pk_value
-                else:
-                    print(f"DEBUG ListScreen: Header/data mismatch - headers:{len(original_headers) if original_headers else 0}, data:{len(row_data) if row_data else 0}")
-            else:
-                print(f"DEBUG ListScreen: Invalid selection - rows exist: {bool(rows)}, valid index: {selected_row_index is not None and 0 <= selected_row_index < len(rows) if rows else False}")
-
-            if action == "OPENFORM" and button_def.get("args"):
-                self.result_dict["target_form"] = button_def["args"][0]
-        
-        print(f"DEBUG ListScreen: Final result_dict = {self.result_dict}")
         self.exit()
 
     def _get_contextual_buttons(self, current_view_mode):
-        """Filter buttons based on current view mode and button actions."""
         buttons = self.form_def.get("buttons", [])
         contextual_buttons = []
-        
         for button in buttons:
             action = button.get("action", "").upper()
             button_added = False
-            
-            # Universal buttons (always shown regardless of view)
             if action in ['CLOSE', 'EXIT', 'HELP']:
-                contextual_buttons.append(button)
-                button_added = True
-            
-            # Only add context-specific buttons if not already added as universal
+                contextual_buttons.append(button); button_added = True
             if not button_added:
                 if current_view_mode == 'grid':
-                    # In grid view, show buttons that make sense for lists
-                    if action in ['VIEW_SINGLE', 'EDIT', 'NEW', 'DELETE', 'REFRESH']:
+                    if action in ['VIEW_SINGLE', 'EDIT', 'NEW', 'DELETE', 'REFRESH', 'EDIT_DETAILS']:
                         contextual_buttons.append(button)
-                    elif action == 'EDIT_DETAILS':  # Alternative name for VIEW_SINGLE
-                        contextual_buttons.append(button)
-                
                 elif current_view_mode == 'single':
-                    # In single view, show buttons that make sense for editing
-                    if action in ['VIEW_GRID', 'UPDATE', 'SAVE', 'CANCEL', 'DELETE']:
+                    if action in ['VIEW_GRID', 'UPDATE', 'SAVE', 'CANCEL', 'DELETE', 'BACK_TO_GRID']:
                         contextual_buttons.append(button)
-                    elif action == 'BACK_TO_GRID':  # Alternative name for VIEW_GRID
-                        contextual_buttons.append(button)
-        
         return contextual_buttons
-        
