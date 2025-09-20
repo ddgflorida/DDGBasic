@@ -500,8 +500,7 @@ class Interpreter:
         self.variables = {}
         lines = self.lexer.raw_source_code.splitlines()
         numbered = [f"{i+1}: {line}" for i, line in enumerate(lines)]
-        # Pre-define the PROGRAM$ system variable with the raw source code.
-        #self.variables['PROGRAM$'] = "\n".join(numbered)
+
         self.file_handles = {}
         self.command_args = cmd_args if cmd_args is not None else []
         self.gosub_stack = []
@@ -855,6 +854,108 @@ class Interpreter:
             # Re-raise as a more specific error
             self._error(f"Failed to get metadata for table '{table_name}': {e}")
 
+    def _find_variable_key(self, var_name):
+        """Finds the actual stored key for a variable.
+        
+        Tries an exact match first, then a case-insensitive match.
+        Returns the key if found, otherwise None.
+        """
+        # 1. Exact match first
+        if var_name in self.variables:
+            return var_name
+        
+        # 2. If not found, try a case-insensitive search
+        var_name_upper = var_name.upper()
+        for key in self.variables:
+            if key.upper() == var_name_upper:
+                return key
+                
+        return None
+
+    def _get_variable_value(self, var_path, auto_create=True):
+        """
+        Get variable value supporting dot notation.
+        
+        First, it tries an exact match on the variable name. If not found,
+        it performs a case-insensitive search. Hash keys are handled similarly.
+        """
+        # --- 1. Parse Input ---
+        if '.' in var_path:
+            var_name, hash_key = var_path.split('.', 1)
+        else:
+            var_name, hash_key = var_path, None
+
+        # --- 2. Find the Variable ---
+        actual_var_key = self._find_variable_key(var_name)
+        
+        if actual_var_key is None:
+            # Variable does not exist in any form
+            if not auto_create:
+                return None
+            
+            # Auto-create with the exact case provided
+            actual_var_key = var_name 
+            if hash_key:
+                self.variables[actual_var_key] = {}
+            else:
+                self.variables[actual_var_key] = "" if var_name.endswith('$') else 0.0
+
+        variable = self.variables[actual_var_key]
+
+        # --- 3. Handle Hash Access if Needed ---
+        if hash_key is None:
+            return variable
+
+        if not isinstance(variable, dict):
+            # Promote a simple variable to a hash if needed
+            if not auto_create:
+                return None
+            variable = self.variables[actual_var_key] = {}
+
+        # Hash key lookup: exact match first, then case-insensitive
+        if hash_key in variable:
+            return variable[hash_key]
+            
+        hash_key_upper = hash_key.upper()
+        for existing_key in variable:
+            if existing_key.upper() == hash_key_upper:
+                return variable[existing_key]
+        
+        # --- 4. Auto-create Hash Key if Needed ---
+        if auto_create:
+            default_value = "" if hash_key.endswith('$') else 0.0
+            variable[hash_key] = default_value # Store with exact case
+            return default_value
+            
+        return None
+
+    def _set_variable_value(self, var_name, value, hash_key=None):
+        """
+        Set variable value, preserving the original case of the variable
+        and hash key.
+        """
+        # Find the key to use: prefer an existing case-insensitive match
+        key_to_use = self._find_variable_key(var_name) or var_name
+        
+        if hash_key is None:
+            # Simple variable assignment
+            self.variables[key_to_use] = value
+        else:
+            # Hash assignment
+            if key_to_use not in self.variables or not isinstance(self.variables[key_to_use], dict):
+                self.variables[key_to_use] = {}
+            
+            # Find existing hash key to overwrite, preserving its case
+            actual_hash_key = hash_key
+            hash_key_upper = hash_key.upper()
+            for existing_key in self.variables[key_to_use]:
+                if existing_key.upper() == hash_key_upper:
+                    actual_hash_key = existing_key
+                    break
+            
+            # Store hash value with the appropriate (new or existing) case-sensitive key
+            self.variables[key_to_use][actual_hash_key] = value
+
                 
     def _extract_sql_from_parens(self):
         self._expect('LPAREN') 
@@ -886,47 +987,43 @@ class Interpreter:
                 
         # 1. Always find the bind variables from the SQL string first.
         # This gives us the expected order and count.
-        bind_vars = re.findall(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', sql_string)
+        bind_vars = re.findall(r':([a-zA-Z_][a-zA-Z0-9_]*\$?(?:\.[a-zA-Z_][a-zA-Z0-9_]*\$?)*)', sql_string)
 
         # 2. Determine the final list of parameter values.
         resolved_params = []
         if params is None:
             for var_from_sql in bind_vars:
-                found_var = False
-                # THE FIX: Perform a case-insensitive search for the variable
-                for key in self.variables:
-                    if key.upper() == var_from_sql.upper():
-                        resolved_params.append(self.variables[key])
-                        found_var = True
-                        break # Stop searching once found
-                
-                if not found_var:
+                # Use the new variable lookup method with auto_create=False for SQL binding
+                #print("DEBUG: var_from_sql=", var_from_sql)
+                var_value = self._get_variable_value(var_from_sql, auto_create=False)
+                if var_value is None:
                     self._error(f"Bind variable ':{var_from_sql}' not found in internal state.")
                     return # Stop execution if a variable is missing
+                resolved_params.append(var_value)
         else:
             resolved_params = params
 
-        # 3. Add a check for safety: ensure the number of variables matches the parameters.
-        if len(bind_vars) != len(resolved_params):
-            self._error(
-                f"Parameter mismatch: SQL expected {len(bind_vars)} variables "
-                f"({', '.join(':' + v for v in bind_vars)}), "
-                f"but {len(resolved_params)} were provided."
-            )
-            return # Stop execution
+            # 3. Add a check for safety: ensure the number of variables matches the parameters.
+            if len(bind_vars) != len(resolved_params):
+                self._error(
+                    f"Parameter mismatch: SQL expected {len(bind_vars)} variables "
+                    f"({', '.join(':' + v for v in bind_vars)}), "
+                    f"but {len(resolved_params)} were provided."
+                )
+                return # Stop execution
 
         # 4. Finally, always substitute the named variables with '?' for the DB driver.
-        # This was the main bug, as this line was previously inside the `if` block.
-        final_sql = re.sub(r':([a-zA-Z][a-zA-Z0-9_]*\$?)', '?', sql_string)
+        final_sql = re.sub(r':([a-zA-Z_][a-zA-Z0-9_]*\$?(?:\.[a-zA-Z_][a-zA-Z0-9_]*\$?)*)', '?', sql_string)
 
-        print(f"Executing SQL: {final_sql}")
-        print(f"With Parameters: {resolved_params}")
+        #print(f"Executing SQL: {final_sql}")
+        #print(f"With Parameters: {resolved_params}")
 
         try:
             if resolved_params:
-                self.db_cursor.execute(final_sql, resolved_params)
+                result = self.db_cursor.execute(final_sql, resolved_params)
             else:
-                self.db_cursor.execute(final_sql)
+                result = self.db_cursor.execute(final_sql)
+            
             if not is_query:
                 row_count = self.db_cursor.rowcount
                 self.variables['SQL_ROWCOUNT'] = float(row_count if row_count != -1 else 0)
@@ -2380,18 +2477,22 @@ class Interpreter:
             return results[0][0]
         elif token[0] == 'ID':
             var_name = token[1]
-            
+            #print(f"DEBUG _parse_factor: Looking up '{var_name}', variables: {list(self.variables.keys())}")
             # Handle case-insensitive BASIC variable lookup
             actual_var_name = var_name
             if var_name not in self.variables:
                 # Try to find existing variable with different case
+                #print("DEBUG: var_name not in self.variables")
+                found = False
                 for existing_var in self.variables:
                     if existing_var.upper() == var_name.upper():
                         actual_var_name = existing_var
+                        found = True
                         break
-                else:
+                if not found:
+                    #print("DEBUG: var_name not found so creating new one")
                     # Variable doesn't exist, create with uppercase name
-                    actual_var_name = var_name.upper()
+                    actual_var_name = var_name
                     if not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                         self.variables[actual_var_name] = "" if var_name.endswith('$') else 0.0
             
@@ -2401,15 +2502,10 @@ class Interpreter:
                 self._next_token(); 
                 return self._execute_function(var_name, [])
             
-            self._next_token()
-            
-            # Additional case-insensitive lookup for variables that might exist with different case
-            if var_name not in self.variables:
-                upper_var_name = var_name.upper()
-                if upper_var_name in self.variables:
-                    var_name = upper_var_name
-            
-            current_value = self.variables.get(var_name)
+            self._next_token()    
+            #print("DEBUG: getting current_value, var_name=", var_name)            
+            current_value = self._get_variable_value(var_name, auto_create=True)
+            #print("DEBUG: current_value=", current_value)
             
             while self._current_token():
                 token = self._current_token()
@@ -2439,6 +2535,7 @@ class Interpreter:
                         current_value = current_value.get(normalized_key, default_val)
                     continue
                 elif token[0] == 'DOT':
+                    #print("DEBUG:", self.variables)
                     if not isinstance(current_value, dict): self._error("Dot notation only for HASH.")
                     self._next_token()
                     key_token = self._current_token()
@@ -4061,7 +4158,7 @@ class Interpreter:
                 if options['fields']:
                     if not options['header']: self._error("FIELDS option requires header=true.")
                     field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
-                    print("DEBUG:","INSIDE CHECK OF FIELDS")
+                    #print("DEBUG:","INSIDE CHECK OF FIELDS")
                     if field_specs[0].strip() == '*':
                         excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
                         final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
@@ -5613,7 +5710,7 @@ class Interpreter:
                 if not key_token or key_token[0] in self.INVALID_KEY_TOKENS:
                     self._error(f"Invalid token '{key_token[1]}' used as a key name.")
                 self._next_token() # Consume the key token
-                current_key = self._normalize_hash_key(key_token[1].rstrip('$'))
+                current_key = self._normalize_hash_key(key_token[1])
                 # Step 3: Check what token comes AFTER the key we just consumed.
                 if self._current_token() and self._current_token()[0] == 'DOT':
                     # If another dot follows, this key must lead to another hash.
@@ -5649,7 +5746,9 @@ class Interpreter:
         self._expect('ANALYZE CSV')
         filename = self._parse_expression()
         
+        # --- 1. PARSE OPTIONS ---
         options = {'header': 'auto', 'delimiter': 'auto', 'constraints': '', 'limit': None}
+        temp_options = {}
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
             options_str = self._parse_expression()
@@ -5658,14 +5757,17 @@ class Interpreter:
                 key = match.group(1).lower()
                 start_pos = match.end()
                 end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip('"')
-                
+                value = options_str[start_pos:end_pos].strip().strip(',').strip()
+                if value.startswith('"') and value.endswith('"'): value = value[1:-1]
+                temp_options[key] = value
+
+            for key, value in temp_options.items():
                 if key == 'header':
                     if value.lower() in ['true', '1', 'y']: options['header'] = True
                     elif value.lower() in ['false', '0', 'n']: options['header'] = False
-                elif key == 'delimiter': options['delimiter'] = value
                 elif key == 'constraints': options['constraints'] = value
-                elif key == 'limit': options['limit'] = int(value) 
+                elif key == 'limit': options['limit'] = int(value)
+                else: options[key] = value
 
         into_hash_name = None
         if self._current_token() and self._current_token()[0] == 'INTO':
@@ -5674,24 +5776,53 @@ class Interpreter:
             if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
                  self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
 
-        report = {}
-        try:
-            # --- Start of new analysis logic ---
-            date_formats_to_try = ["%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y%m%d", "%Y-%m-%dT%H:%M:%S"]
-            logical_trues = {'true', 't', 'y', 'yes', '1'}
-            logical_falses = {'false', 'f', 'n', 'no', '0'}
-
-            with open(filename, 'r', newline='', encoding='utf-8', errors='replace') as infile:
-                sample = infile.read(8192)
-                infile.seek(0)
+        # --- 2. PARSE CONSTRAINTS ---
+        parsed_constraints = {}
+        if options['constraints']:
+            rules = options['constraints'].split(';')
+            for rule in rules:
+                if ':' not in rule: continue
+                col_spec, constraint_def = rule.split(':', 1)
+                col_name = col_spec.strip('[]')
                 
+                match = re.match(r'(\w+)(?:\((.*)\))?', constraint_def.strip())
+                if not match: continue
+                
+                constraint_type, value = match.groups()
+                constraint_type = constraint_type.upper()
+                
+                constraint_obj = {'type': constraint_type, 'def': constraint_def}
+                
+                if constraint_type in ['MINLENGTH', 'MAXLENGTH']:
+                    try:
+                        constraint_obj['value'] = int(value)
+                    except (ValueError, TypeError):
+                        self._error(f"Invalid integer value for {constraint_type}: {value}")
+                elif constraint_type == 'REGEX':
+                    constraint_obj['value'] = value
+                elif constraint_type == 'IN':
+                    constraint_obj['value'] = {item.strip() for item in value.split(',')}
+                elif constraint_type == 'ISDATE':
+                    # Convert BASIC date format to Python's strptime format
+                    py_format = value.replace('MM', '%m').replace('DD', '%d').replace('YYYY', '%Y')
+                    constraint_obj['value'] = py_format
+                if col_name not in parsed_constraints:
+                    parsed_constraints[col_name] = []
+                parsed_constraints[col_name].append(constraint_obj)
+
+        report = {}
+        constraint_failures = []
+        try:
+            with open(filename, 'r', newline='', encoding='utf-8', errors='replace') as infile:
+                # --- FILE PRE-ANALYSIS ---
+                sample = infile.read(8192); infile.seek(0)
                 sniffer = csv.Sniffer()
+
                 if options['delimiter'] == 'auto':
                     try: report['DELIMITER'] = sniffer.sniff(sample).delimiter
                     except csv.Error: report['DELIMITER'] = ','
-                else:
-                    report['DELIMITER'] = options['delimiter']
-
+                else: report['DELIMITER'] = options['delimiter']
+                
                 has_header = options['header']
                 if has_header == 'auto':
                     try: has_header = sniffer.has_header(sample)
@@ -5699,15 +5830,62 @@ class Interpreter:
                 report['HEADER_ROW'] = -1.0 if has_header else 0.0
                 
                 reader = csv.reader(infile, delimiter=report['DELIMITER'])
-                
                 headers = []
+                line_num = 0
                 if has_header:
-                    try: headers = next(reader) 
+                    try: headers = next(reader); line_num += 1
                     except StopIteration: pass
+                
+                # --- 3. APPLY CONSTRAINTS (IF ANY) ---
+                if parsed_constraints:
+                    limit = options.get('limit')
+                    for row in reader:
+                        line_num += 1
+                        if limit is not None and (line_num - (1 if has_header else 0)) > limit: break
+                        if not headers: headers = [f"Field_{j+1}" for j in range(len(row))]
+
+                        for i, field_val in enumerate(row):
+                            if i >= len(headers): continue
+                            col_name = headers[i]
+                            if col_name in parsed_constraints:
+                                for const in parsed_constraints[col_name]:
+                                    is_valid = True
+                                    if const['type'] == 'ISDIGITS' and not field_val.isdigit(): is_valid = False
+                                    elif const['type'] == 'MINLENGTH' and len(field_val) < const['value']: is_valid = False
+                                    elif const['type'] == 'MAXLENGTH' and len(field_val) > const['value']: is_valid = False
+                                    elif const['type'] == 'REGEX' and not re.match(const['value'], field_val): is_valid = False
+                                    elif rule_type == 'IN' and field_val not in const['value']: is_valid = False
+                                    elif rule_type == 'ISDATE':
+                                        try: datetime.strptime(field_val, const['value'])
+                                        except ValueError: is_valid = False
+                                if not is_valid:
+                                    constraint_failures.append({
+                                        'LINE': line_num, 'COLUMN': col_name,
+                                        'VALUE': field_val, 'FAILED_RULE': const['def']
+                                    })
+                
+                # --- 4. REPORTING LOGIC ---
+                if constraint_failures:
+                    if into_hash_name:
+                        self.variables[into_hash_name] = self._python_to_basic_data({'CONSTRAINT_FAILURES': constraint_failures})
+                    else:
+                        print(f"Constraint Violations found in '{filename}':")
+                        for failure in constraint_failures:
+                            print(f"  - Line {failure['LINE']}, Column '{failure['COLUMN']}': Value '{failure['VALUE']}' failed rule '{failure['FAILED_RULE']}'")
+                    return # Stop after reporting failures
+
+                # --- 5. STATISTICAL ANALYSIS (IF NO CONSTRAINT FAILURES) ---
+                infile.seek(0) # Rewind file to read from the start
+                reader = csv.reader(infile, delimiter=report['DELIMITER'])
+                if has_header:
+                    headers = next(reader)
                 
                 record_count = 0
                 field_counts = {}
                 col_stats = {}
+                date_formats_to_try = ["%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y%m%d", "%Y-%m-%dT%H:%M:%S"]
+                logical_trues = {'true', 't', 'y', 'yes', '1'}
+                logical_falses = {'false', 'f', 'n', 'no', '0'}
 
                 limit = options.get('limit')
                 for i, row in enumerate(reader):
@@ -5716,50 +5894,34 @@ class Interpreter:
                     num_fields = len(row)
                     field_counts[num_fields] = field_counts.get(num_fields, 0) + 1
 
-                    if not headers and row:
-                        headers = [f"Field_{j+1}" for j in range(num_fields)]
+                    if not headers and row: headers = [f"Field_{j+1}" for j in range(num_fields)]
                     
                     for j, field in enumerate(row):
                         if j >= len(headers): continue
                         h = headers[j]
                         if h not in col_stats:
-                            col_stats[h] = {
-                                'MIN_LEN': None, 'MAX_LEN': 0, 'EMPTY_COUNT': 0,  # Changed to uppercase
-                                'INTEGER_COUNT': 0, 'FLOAT_COUNT': 0, 'DATE_COUNT': 0,  # Changed to uppercase
-                                'LOGICAL_COUNT': 0, 'STRING_COUNT': 0, 'MAX_DECIMALS': 0,  # Changed to uppercase
-                                'MIN_VALUE': None, 'MAX_VALUE': None 
-                            }
+                            col_stats[h] = {'MIN_LEN': None, 'MAX_LEN': 0, 'EMPTY_COUNT': 0, 'INTEGER_COUNT': 0, 'FLOAT_COUNT': 0, 'DATE_COUNT': 0, 'LOGICAL_COUNT': 0, 'STRING_COUNT': 0, 'MAX_DECIMALS': 0, 'MIN_VALUE': None, 'MAX_VALUE': None}
 
                         field_len = len(field)
                         if col_stats[h]['MIN_LEN'] is None or field_len < col_stats[h]['MIN_LEN']: col_stats[h]['MIN_LEN'] = field_len
                         if field_len > col_stats[h]['MAX_LEN']: col_stats[h]['MAX_LEN'] = field_len
-
-                        # Trim whitespace first
+                        
                         field = field.strip()
-
                         if not field:
-                            col_stats[h]['EMPTY_COUNT'] += 1
-                            continue
-
-                        # --- NEW: Data Cleaning for Type Analysis ---
+                            col_stats[h]['EMPTY_COUNT'] += 1; continue
+                        
                         cleaned_field = field.replace('$', '').replace(',', '')
-                        
-                        # If cleaning results in an empty string (e.g., field was just "$"), count as empty
                         if not cleaned_field:
-                            col_stats[h]['EMPTY_COUNT'] += 1
-                            continue
-                        
-                        # --- End of New Logic ---
+                            col_stats[h]['EMPTY_COUNT'] += 1; continue
 
-
-                        # Type checking logic (now uses cleaned_field)
                         try:
                             int_val = int(cleaned_field)
                             col_stats[h]['INTEGER_COUNT'] += 1
-                            if col_stats[h]['MIN_VALUE'] is None or int_val < col_stats[h]['MIN_VALUE']: 
-                                col_stats[h]['MIN_VALUE'] = int_val
-                            if col_stats[h]['MAX_VALUE'] is None or int_val > col_stats[h]['MAX_VALUE']: 
-                                col_stats[h]['MAX_VALUE'] = int_val
+                            current_min, current_max = col_stats[h]['MIN_VALUE'], col_stats[h]['MAX_VALUE']
+                            if isinstance(current_min, (int, float, type(None))):
+                                if current_min is None or int_val < current_min: col_stats[h]['MIN_VALUE'] = int_val
+                            if isinstance(current_max, (int, float, type(None))):
+                                if current_max is None or int_val > current_max: col_stats[h]['MAX_VALUE'] = int_val
                             continue
                         except (ValueError, TypeError): pass
 
@@ -5769,97 +5931,83 @@ class Interpreter:
                             if '.' in cleaned_field:
                                 decimals = len(cleaned_field.split('.')[1])
                                 if decimals > col_stats[h]['MAX_DECIMALS']: col_stats[h]['MAX_DECIMALS'] = decimals
-                            if col_stats[h]['MIN_VALUE'] is None or float_val < col_stats[h]['MIN_VALUE']: 
-                                col_stats[h]['MIN_VALUE'] = float_val
-                            if col_stats[h]['MAX_VALUE'] is None or float_val > col_stats[h]['MAX_VALUE']: 
-                                col_stats[h]['MAX_VALUE'] = float_val
+                            current_min, current_max = col_stats[h]['MIN_VALUE'], col_stats[h]['MAX_VALUE']
+                            if isinstance(current_min, (int, float, type(None))):
+                                if current_min is None or float_val < current_min: col_stats[h]['MIN_VALUE'] = float_val
+                            if isinstance(current_max, (int, float, type(None))):
+                                if current_max is None or float_val > current_max: col_stats[h]['MAX_VALUE'] = float_val
                             continue
                         except (ValueError, TypeError): pass
 
                         lower_field = field.lower()
                         if lower_field in logical_trues or lower_field in logical_falses:
-                            col_stats[h]['LOGICAL_COUNT'] += 1
-                            continue
+                            col_stats[h]['LOGICAL_COUNT'] += 1; continue
                         
                         is_a_date = False
                         for fmt in date_formats_to_try:
                             try:
                                 date_val = datetime.strptime(field, fmt)
                                 col_stats[h]['DATE_COUNT'] += 1
-                                if col_stats[h]['MIN_VALUE'] is None or date_val < col_stats[h]['MIN_VALUE']: col_stats[h]['MIN_VALUE'] = date_val
-                                if col_stats[h]['MAX_VALUE'] is None or date_val > col_stats[h]['MAX_VALUE']: col_stats[h]['MAX_VALUE'] = date_val
-                                is_a_date = True
-                                break
+                                current_min, current_max = col_stats[h]['MIN_VALUE'], col_stats[h]['MAX_VALUE']
+                                if isinstance(current_min, (datetime, type(None))):
+                                    if current_min is None or date_val < current_min: col_stats[h]['MIN_VALUE'] = date_val
+                                if isinstance(current_max, (datetime, type(None))):
+                                    if current_max is None or date_val > current_max: col_stats[h]['MAX_VALUE'] = date_val
+                                is_a_date = True; break
                             except (ValueError, TypeError): pass
                         if is_a_date: continue
                         
                         col_stats[h]['STRING_COUNT'] += 1
-                        # Add min/max tracking for strings (alphabetical ordering)
-                        if col_stats[h]['MIN_VALUE'] is None or field < col_stats[h]['MIN_VALUE']: 
-                            col_stats[h]['MIN_VALUE'] = field
-                        if col_stats[h]['MAX_VALUE'] is None or field > col_stats[h]['MAX_VALUE']: 
-                            col_stats[h]['MAX_VALUE'] = field
-                        
+                        current_min, current_max = col_stats[h]['MIN_VALUE'], col_stats[h]['MAX_VALUE']
+                        if isinstance(current_min, (str, type(None))):
+                            if current_min is None or field < current_min: col_stats[h]['MIN_VALUE'] = field
+                        if isinstance(current_max, (str, type(None))):
+                            if current_max is None or field > current_max: col_stats[h]['MAX_VALUE'] = field
 
-                # Post-processing to suggest SQL types
                 for h, stats in col_stats.items():
-                    total_data_points = record_count - stats['EMPTY_COUNT']
-                    if total_data_points == 0:
-                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
-                    elif stats['STRING_COUNT'] > 0:
-                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
-                    elif stats['DATE_COUNT'] > 0 and stats['INTEGER_COUNT'] == 0 and stats['FLOAT_COUNT'] == 0:
-                        stats['SUGGESTED_DATA_TYPE'] = 'DATE' # Or TEXT for safety
-                    elif stats['FLOAT_COUNT'] > 0:
-                        stats['SUGGESTED_DATA_TYPE'] = 'REAL'
-                    elif stats['INTEGER_COUNT'] > 0 or stats['LOGICAL_COUNT'] > 0:
-                        stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
-                    else:
-                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
-                    # Convert datetimes to strings for the report
+                    if stats['STRING_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                    elif stats['DATE_COUNT'] > 0 and stats['INTEGER_COUNT'] == 0 and stats['FLOAT_COUNT'] == 0: stats['SUGGESTED_DATA_TYPE'] = 'DATE'
+                    elif stats['FLOAT_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'REAL'
+                    elif stats['INTEGER_COUNT'] > 0 or stats['LOGICAL_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
+                    else: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
                     if isinstance(stats['MIN_VALUE'], datetime): stats['MIN_VALUE'] = stats['MIN_VALUE'].isoformat()
                     if isinstance(stats['MAX_VALUE'], datetime): stats['MAX_VALUE'] = stats['MAX_VALUE'].isoformat()
-
 
                 report['HEADERS'] = headers 
                 report['DATA_RECORDS'] = record_count
                 report['FIELD_COUNT_DISTRIBUTION'] = self._python_to_basic_data(field_counts)
                 report['COLUMN_STATISTICS'] = self._python_to_basic_data(col_stats)
 
-            if into_hash_name:
-                self.variables[into_hash_name] = self._python_to_basic_data(report)
-            else:
-                print(f"--- CSV Analysis Report for: {filename} ---")
-                print(f"  Delimiter Detected : '{report.get('DELIMITER', 'N/A')}'")
-                print(f"  Header Row Detected: {'Yes' if report.get('HEADER_ROW') else 'No'}")
-                print(f"  Total Data Records : {report.get('DATA_RECORDS', 0)}")
-                print(f"  Headers (in order) : {', '.join(report.get('HEADERS', []))}")
-                
-                if 'FIELD_COUNT_DISTRIBUTION' in report and report['FIELD_COUNT_DISTRIBUTION']:
-                    print("  Field Count Distribution:")
-                    for count, num_rows in report['FIELD_COUNT_DISTRIBUTION'].items():
-                        print(f"    - {int(num_rows)} record(s) with {count} field(s)")
+                if into_hash_name:
+                    self.variables[into_hash_name] = self._python_to_basic_data(report)
+                else:
+                    print(f"--- CSV Analysis Report for: {filename} ---")
+                    if parsed_constraints: print("  (No constraint violations found)")
+                    print(f"  Delimiter Detected : '{report.get('DELIMITER', 'N/A')}'")
+                    print(f"  Header Row Detected: {'Yes' if report.get('HEADER_ROW') else 'No'}")
+                    print(f"  Total Data Records : {report.get('DATA_RECORDS', 0)}")
+                    if report.get('FIELD_COUNT_DISTRIBUTION'):
+                        print("  Field Count Distribution:")
+                        for count, num_rows in report['FIELD_COUNT_DISTRIBUTION'].items():
+                            print(f"    - {int(num_rows)} record(s) with {count} field(s)")
 
-                if 'COLUMN_STATISTICS' in report and report['COLUMN_STATISTICS']:
-                    print("\n  Column Statistics:")
-                    for col_name in headers:
-                        stats = report['COLUMN_STATISTICS'].get(col_name, {})
-                        print(f"    - [{col_name}] -> Suggested Type: {stats.get('SUGGESTED_DATA_TYPE', 'N/A')}")
-                        print(f"      Counts (Total: {record_count}):")
-                        type_counts = []
-                        if stats.get('INTEGER_COUNT', 0) > 0: type_counts.append(f"Int: {int(stats['INTEGER_COUNT'])}")
-                        if stats.get('FLOAT_COUNT', 0) > 0: type_counts.append(f"Float: {int(stats['FLOAT_COUNT'])}")
-                        if stats.get('DATE_COUNT', 0) > 0: type_counts.append(f"Date: {int(stats['DATE_COUNT'])}")
-                        if stats.get('LOGICAL_COUNT', 0) > 0: type_counts.append(f"Logical: {int(stats['LOGICAL_COUNT'])}")
-                        if stats.get('STRING_COUNT', 0) > 0: type_counts.append(f"String: {int(stats['STRING_COUNT'])}")
-                        if stats.get('EMPTY_COUNT', 0) > 0: type_counts.append(f"Empty: {int(stats['EMPTY_COUNT'])}")
-                        print(f"        {', '.join(type_counts)}")
-                        print(f"      Length (Min/Max) : {stats.get('MIN_LEN', 0)} / {stats.get('MAX_LEN', 0)}")
-                        if stats.get('FLOAT_COUNT', 0) > 0:
-                            print(f"      Max Decimals     : {int(stats.get('MAX_DECIMALS', 0))}")
-                        if stats.get('MIN_VALUE') is not None:
-                             print(f"      Value Range      : {stats.get('MIN_VALUE')} to {stats.get('MAX_VALUE')}")
-                        #print("DEBUG:",stats)
+                    if report.get('COLUMN_STATISTICS'):
+                        print("\n  Column Statistics:")
+                        for col_name in headers:
+                            stats = report['COLUMN_STATISTICS'].get(col_name, {})
+                            print(f"    - [{col_name}] -> Suggested Type: {stats.get('SUGGESTED_DATA_TYPE', 'N/A')}")
+                            print(f"      Counts (Total: {record_count}):")
+                            type_counts = []
+                            if stats.get('INTEGER_COUNT', 0) > 0: type_counts.append(f"Int: {int(stats['INTEGER_COUNT'])}")
+                            if stats.get('FLOAT_COUNT', 0) > 0: type_counts.append(f"Float: {int(stats['FLOAT_COUNT'])}")
+                            if stats.get('DATE_COUNT', 0) > 0: type_counts.append(f"Date: {int(stats['DATE_COUNT'])}")
+                            if stats.get('LOGICAL_COUNT', 0) > 0: type_counts.append(f"Logical: {int(stats['LOGICAL_COUNT'])}")
+                            if stats.get('STRING_COUNT', 0) > 0: type_counts.append(f"String: {int(stats['STRING_COUNT'])}")
+                            if stats.get('EMPTY_COUNT', 0) > 0: type_counts.append(f"Empty: {int(stats['EMPTY_COUNT'])}")
+                            print(f"        {', '.join(type_counts)}")
+                            print(f"      Length (Min/Max) : {stats.get('MIN_LEN', 0)} / {stats.get('MAX_LEN', 0)}")
+                            if stats.get('FLOAT_COUNT', 0) > 0: print(f"      Max Decimals     : {int(stats.get('MAX_DECIMALS', 0))}")
+                            if stats.get('MIN_VALUE') is not None: print(f"      Value Range      : {stats.get('MIN_VALUE')} to {stats.get('MAX_VALUE')}")
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -6212,29 +6360,29 @@ class Interpreter:
                     
                     if entry_results.get("action") == "RUN_LOOKUP":
                         lookup_field_name = entry_results.get("lookup_field")
-                        print(f"DEBUG: Lookup requested for field: {lookup_field_name}")
+                        #print(f"DEBUG: Lookup requested for field: {lookup_field_name}")
                         
                         field_def = next((e for e in entry_form_elements if e.get("name") == lookup_field_name), None)
-                        print(f"DEBUG: Found field definition: {field_def is not None}")
+                        #print(f"DEBUG: Found field definition: {field_def is not None}")
                         
                         if not field_def or not field_def.get("lookup"): 
-                            print(f"DEBUG: No lookup config found for {lookup_field_name}")
+                            #print(f"DEBUG: No lookup config found for {lookup_field_name}")
                             continue
 
                         lookup_config = field_def["lookup"]
-                        print(f"DEBUG: Executing lookup query: {lookup_config['query']}")
+                        #print(f"DEBUG: Executing lookup query: {lookup_config['query']}")
                         
                         try:
                             rows = self._execute_sql(lookup_config["query"], is_query=True)
-                            print(f"DEBUG: Query returned {len(rows) if rows else 0} rows")
+                            #print(f"DEBUG: Query returned {len(rows) if rows else 0} rows")
                             headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
-                            print(f"DEBUG: Headers: {headers}")
+                            #print(f"DEBUG: Headers: {headers}")
                             
                             # CRITICAL: Update initial_entry_data with ALL current form changes FIRST
                             form_data = entry_results.get("data", {})
-                            print(f"DEBUG: Form data before lookup: {form_data}")
+                            #print(f"DEBUG: Form data before lookup: {form_data}")
                             initial_entry_data.update(form_data)
-                            print(f"DEBUG: Updated initial_entry_data with form changes: {initial_entry_data}")
+                            #print(f"DEBUG: Updated initial_entry_data with form changes: {initial_entry_data}")
                             
                             lookup_runner = FormRunner(
                                 form_def={"buttons": [{"name": "Select", "action": "SELECT"}, {"name": "Cancel", "action": "CANCEL"}]},
@@ -6254,15 +6402,15 @@ class Interpreter:
                                     if return_col in header_map:
                                         new_value = selected_row[header_map[return_col]]
                                         initial_entry_data[lookup_field_name] = new_value
-                                        print(f"DEBUG: Set {lookup_field_name} = {new_value}")
+                                        #print(f"DEBUG: Set {lookup_field_name} = {new_value}")
                                     
                                     # Update the display field if different
                                     if display_col in header_map and display_col != return_col:
                                         display_value = selected_row[header_map[display_col]]
                                         initial_entry_data[display_col] = display_value
-                                        print(f"DEBUG: Set {display_col} = {display_value}")
+                                        #print(f"DEBUG: Set {display_col} = {display_value}")
                                     
-                                    print(f"DEBUG: Final initial_entry_data after lookup: {initial_entry_data}")
+                                    #print(f"DEBUG: Final initial_entry_data after lookup: {initial_entry_data}")
                             
                         except Exception as e:
                             print(f"DEBUG: Query failed: {e}")
@@ -6276,27 +6424,27 @@ class Interpreter:
                 # Process other actions (UPDATE, CANCEL, etc.)
                 if entry_results.get("action") == "UPDATE":
                     updated_data_from_form = entry_results.get("data", {})
-                    print(f"DEBUG UPDATE: Form data received: {updated_data_from_form}")
-                    print(f"DEBUG UPDATE: Original DB data: {original_db_data}")
-                    print(f"DEBUG UPDATE: Current working data: {initial_entry_data}")
-                    print(f"DEBUG UPDATE: All column names: {all_column_names}")
-                    print(f"DEBUG UPDATE: Primary key column: {pk_column}")
+                    #print(f"DEBUG UPDATE: Form data received: {updated_data_from_form}")
+                    #print(f"DEBUG UPDATE: Original DB data: {original_db_data}")
+                    #print(f"DEBUG UPDATE: Current working data: {initial_entry_data}")
+                    #print(f"DEBUG UPDATE: All column names: {all_column_names}")
+                    #print(f"DEBUG UPDATE: Primary key column: {pk_column}")
                     
                     changed_data = {}
                     for key, new_value in updated_data_from_form.items():
-                        print(f"DEBUG UPDATE: Processing field '{key}' = '{new_value}'")
+                        #print(f"DEBUG UPDATE: Processing field '{key}' = '{new_value}'")
                         
                         # Check if field should be skipped
                         if key not in all_column_names:
-                            print(f"DEBUG UPDATE: Skipping '{key}' - not in all_column_names")
+                            #print(f"DEBUG UPDATE: Skipping '{key}' - not in all_column_names")
                             continue
                         if key.lower() == pk_column.lower():
-                            print(f"DEBUG UPDATE: Skipping '{key}' - is primary key")
+                            #print(f"DEBUG UPDATE: Skipping '{key}' - is primary key")
                             continue
                             
                         # CRITICAL: Compare against original database values, not current working data
                         original_value = original_db_data.get(key)
-                        print(f"DEBUG UPDATE: Field '{key}': original_db='{original_value}' (type: {type(original_value)}), new='{new_value}' (type: {type(new_value)})")
+                        #print(f"DEBUG UPDATE: Field '{key}': original_db='{original_value}' (type: {type(original_value)}), new='{new_value}' (type: {type(new_value)})")
                         
                         # Improved change detection
                         original_str = str(original_value) if original_value is not None else ""
@@ -6315,11 +6463,12 @@ class Interpreter:
                                     if handling_rule == 'CONVERT_EMPTY_TO_NULL':
                                         final_value = None
                             changed_data[key] = final_value
-                            print(f"DEBUG UPDATE: Added to changed_data: '{key}' = '{final_value}'")
+                            #print(f"DEBUG UPDATE: Added to changed_data: '{key}' = '{final_value}'")
                         else:
-                            print(f"DEBUG UPDATE: No change detected for '{key}'")
+                            pass
+                            #print(f"DEBUG UPDATE: No change detected for '{key}'")
                             
-                    print(f"DEBUG UPDATE: Final changed_data: {changed_data}")
+                    #print(f"DEBUG UPDATE: Final changed_data: {changed_data}")
                     
                     if changed_data:
                         set_clauses = [f"{self._quote_identifier(k)} = ?" for k in changed_data.keys()]
@@ -6328,22 +6477,23 @@ class Interpreter:
                         update_params.append(pk_value)
                         update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
                         
-                        print(f"DEBUG UPDATE: Executing SQL: {update_sql}")
-                        print(f"DEBUG UPDATE: With parameters: {update_params}")
+                        #print(f"DEBUG UPDATE: Executing SQL: {update_sql}")
+                        #print(f"DEBUG UPDATE: With parameters: {update_params}")
                         
                         result = self._execute_sql(update_sql, False, update_params)
-                        print(f"DEBUG UPDATE: SQL execution result: {result}")
-                        print(f"DEBUG UPDATE: SQL_ROWCOUNT: {self.variables.get('SQL_ROWCOUNT', 'not set')}")
+                        #print(f"DEBUG UPDATE: SQL execution result: {result}")
+                        #print(f"DEBUG UPDATE: SQL_ROWCOUNT: {self.variables.get('SQL_ROWCOUNT', 'not set')}")
                         
                         if self.db_engine == 'sqlite': 
                             self.db_connection.commit()
-                            print("DEBUG UPDATE: Committed transaction")
+                            #print("DEBUG UPDATE: Committed transaction")
                             
                         # Update the original database data to reflect the changes
                         original_db_data.update(changed_data)
-                        print(f"DEBUG UPDATE: Updated original_db_data: {original_db_data}")
+                        #print(f"DEBUG UPDATE: Updated original_db_data: {original_db_data}")
                     else:
-                        print("DEBUG UPDATE: No changes detected - UPDATE skipped")
+                        pass
+                        #print("DEBUG UPDATE: No changes detected - UPDATE skipped")
 
             elif action == "NEW":
                 initial_entry_data = {col: "" for col in all_column_names if col.lower() != pk_column.lower()}
@@ -6620,9 +6770,6 @@ class Interpreter:
             self._error(f"FORM '{form_name}' is not defined.")
         
         form_def = self.form_definitions[form_name]
-        source_query = form_def.get("source", {}).get("query")
-        if not source_query:
-            self._error(f"FORM '{form_name}' is missing a SOURCE clause.")
 
         # Inject choices for CHOICE fields from variables
         for element in form_def.get("elements", []):
@@ -6631,35 +6778,36 @@ class Interpreter:
                 if source_array_name and isinstance(self.variables.get(source_array_name), list):
                     element["choices"] = self.variables[source_array_name]
 
-        table_name = self._extract_table_from_select(source_query)
-        pk_column_name = self._get_primary_key(table_name) if table_name else 'id'
-        
-        # Determine the initial view mode from the FORM definition
-        current_view_mode = 'grid' if form_def.get("display_rows", 1) > 1 else 'single'
+        # Safely get the source object to check if it exists
+        source_info = form_def.get("source")
 
-        # --- Setup Navigation ---
-        nav_query = f"SELECT {self._quote_identifier(pk_column_name)} FROM ({source_query}) AS t"
-        all_ids_result = self._execute_sql(nav_query, is_query=True)
-        record_ids = [row[0] for row in all_ids_result]
-        
-        current_index = -1
-        if record_id is not None and record_id in record_ids:
-            current_index = record_ids.index(record_id)
-            current_view_mode = 'single' # If USING is specified, always start in single view
-        elif record_ids and current_view_mode == 'single':
-             current_index = 0
+        # Case 1: Handle data-bound forms that have a SOURCE clause
+        if source_info and source_info.get("query"):
+            source_query = source_info.get("query")
+            table_name = self._extract_table_from_select(source_query)
+            pk_column_name = self._get_primary_key(table_name) if table_name else 'id'
+            
+            current_view_mode = 'grid' if form_def.get("display_rows", 1) > 1 else 'single'
 
-        current_data = {}
+            nav_query = f"SELECT {self._quote_identifier(pk_column_name)} FROM ({source_query}) AS t"
+            all_ids_result = self._execute_sql(nav_query, is_query=True)
+            record_ids = [row[0] for row in all_ids_result]
+            
+            current_index = -1
+            if record_id is not None and record_id in record_ids:
+                current_index = record_ids.index(record_id)
+                current_view_mode = 'single'
+            elif record_ids and current_view_mode == 'single':
+                current_index = 0
 
-        # --- Main Controller Loop ---
-        while True:
-            nav_info = {"has_prev": current_index > 0, "has_next": current_index < len(record_ids) - 1}
+            current_data = {}
 
-            # --- 1. Fetch data for the current view ---
-            if current_view_mode == 'single':
-                if current_index != -1:
-                    # Only fetch if current_data is empty, to preserve changes from lookups
-                    if not current_data:
+            # Main Controller Loop for data-bound forms
+            while True:
+                nav_info = {"has_prev": current_index > 0, "has_next": current_index < len(record_ids) - 1}
+
+                if current_view_mode == 'single':
+                    if current_index != -1 and not current_data:
                         current_id = record_ids[current_index]
                         self.variables['FORM_PK_ID'] = current_id
                         single_query = f"SELECT * FROM ({source_query}) AS t WHERE {self._quote_identifier(pk_column_name)} = :FORM_PK_ID"
@@ -6667,83 +6815,99 @@ class Interpreter:
                         if row_data and self.db_cursor.description:
                             headers = [desc[0] for desc in self.db_cursor.description]
                             current_data = dict(zip(headers, row_data[0]))
-            else: # Grid view
-                rows = self._execute_sql(source_query, is_query=True)
-                headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
-                current_data = {"headers": headers, "rows": rows}
+                else:
+                    rows = self._execute_sql(source_query, is_query=True)
+                    headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
+                    current_data = {"headers": headers, "rows": rows}
 
-            # --- 2. Launch the appropriate TUI screen ---
-            runner = FormRunner(form_def, current_data, nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
-            results = runner.run()
-            action = results.get("action")
-            
-            if current_view_mode == 'single':
-                current_data.update(results.get("data", {}))
-
-            # --- 3. Handle all possible actions ---
-            if action == "RUN_LOOKUP":
-                lookup_field_name = results.get("lookup_field")
-                field_def = next((e for e in form_def.get("elements", []) if e.get("name") == lookup_field_name), None)
-                if not field_def or not field_def.get("lookup"): continue
-
-                lookup_config = field_def["lookup"]
-                rows = self._execute_sql(lookup_config["query"], is_query=True)
-                headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
+                runner = FormRunner(form_def, current_data, nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
+                results = runner.run()
+                action = results.get("action")
                 
-                lookup_runner = FormRunner(
-                    form_def={"buttons": [{"name": "Select", "action": "SELECT"}, {"name": "Cancel", "action": "CANCEL"}]},
-                    initial_data={"headers": headers, "rows": rows},
-                    view_mode='grid', pk_column_name=headers[0] if headers else 'id'
-                )
-                lookup_results = lookup_runner.run()
+                if current_view_mode == 'single':
+                    current_data.update(results.get("data", {}))
 
-                if lookup_results.get("action") == "SELECT":
-                    selected_row_pk = lookup_results.get("selected_id")
-                    selected_row = next((r for r in rows if r[0] == selected_row_pk), None)
-                    if selected_row:
-                        header_map = {h: i for i, h in enumerate(headers)}
-                        return_col, display_col = lookup_config["returns"], lookup_config["display"]
-                        if return_col in header_map:
-                            current_data[lookup_field_name] = selected_row[header_map[return_col]]
-                        if display_col in header_map:
-                            current_data[display_col] = selected_row[header_map[display_col]]
-                continue
+                if action == "RUN_LOOKUP":
+                    lookup_field_name = results.get("lookup_field")
+                    field_def = next((e for e in form_def.get("elements", []) if e.get("name") == lookup_field_name), None)
+                    if not field_def or not field_def.get("lookup"): continue
 
-            elif action == "VIEW_GRID":
-                current_data = {}
-                current_view_mode = 'grid'
-                continue
+                    lookup_config = field_def["lookup"]
+                    rows = self._execute_sql(lookup_config["query"], is_query=True)
+                    headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
+                    
+                    lookup_runner = FormRunner(
+                        form_def={"buttons": [{"name": "Select", "action": "SELECT"}, {"name": "Cancel", "action": "CANCEL"}]},
+                        initial_data={"headers": headers, "rows": rows},
+                        view_mode='grid', pk_column_name=headers[0] if headers else 'id'
+                    )
+                    lookup_results = lookup_runner.run()
 
-            elif action == "VIEW_SINGLE":
-                selected_id = results.get("selected_id")
-                if selected_id in record_ids:
-                    current_index = record_ids.index(selected_id)
-                current_data = {}
-                current_view_mode = 'single'
-                continue
+                    if lookup_results.get("action") == "SELECT":
+                        selected_row_pk = lookup_results.get("selected_id")
+                        selected_row = next((r for r in rows if r[0] == selected_row_pk), None)
+                        if selected_row:
+                            header_map = {h: i for i, h in enumerate(headers)}
+                            return_col, display_col = lookup_config["returns"], lookup_config["display"]
+                            if return_col in header_map:
+                                current_data[lookup_field_name] = selected_row[header_map[return_col]]
+                            if display_col in header_map:
+                                current_data[display_col] = selected_row[header_map[display_col]]
+                    continue
 
-            elif action == "NEXT_RECORD":
-                if current_index < len(record_ids) - 1: current_index += 1
-                current_data = {} # Clear data to force reload
-                continue
-            elif action == "PREV_RECORD":
-                if current_index > 0: current_index -= 1
-                current_data = {}
-                continue
-            elif action == "FIRST_RECORD":
-                if record_ids: current_index = 0
-                current_data = {}
-                continue
-            elif action == "LAST_RECORD":
-                if record_ids: current_index = len(record_ids) - 1
-                current_data = {}
-                continue
-            
-            # --- 4. Finalize and Exit for any other action ---
+                elif action == "VIEW_GRID": current_data = {}; current_view_mode = 'grid'; continue
+                elif action == "VIEW_SINGLE":
+                    selected_id = results.get("selected_id")
+                    if selected_id in record_ids: current_index = record_ids.index(selected_id)
+                    current_data = {}; current_view_mode = 'single'; continue
+                elif action == "NEXT_RECORD":
+                    if current_index < len(record_ids) - 1: current_index += 1
+                    current_data = {}; continue
+                elif action == "PREV_RECORD":
+                    if current_index > 0: current_index -= 1
+                    current_data = {}; continue
+                elif action == "FIRST_RECORD":
+                    if record_ids: current_index = 0
+                    current_data = {}; continue
+                elif action == "LAST_RECORD":
+                    if record_ids: current_index = len(record_ids) - 1
+                    current_data = {}; continue
+                
+                self.variables["FORM_RESULT$"] = str(action).upper() if action is not None else ""
+                self.variables["FORM_SELECTED_ID"] = float(results.get("pk") or results.get("selected_id") or record_id or 0.0)
+                self.variables["FORM_DATA"] = self._python_to_basic_data(current_data)
+                break
+
+        # Case 2: Handle transient forms that have NO SOURCE clause
+        else:
+            # This is a simple data entry form, like the signup example.
+            if form_def.get("display_rows", 1) > 1:
+                self._error(f"FORM '{form_name}' with 'display_rows > 1' requires a SOURCE clause.")
+            if record_id is not None:
+                 self._error(f"USING clause is only valid for forms with a SOURCE clause.")
+
+            runner = FormRunner(
+                form_def,
+                initial_data={},      # Start with empty data
+                nav_info={},          # No navigation available
+                view_mode='single',
+                pk_column_name='id'   # A default is harmless
+            )
+            results = runner.run()
+
+            # After the form closes, set the system variables with the results
+            action = results.get("action")
+            data = results.get("data", {})
             self.variables["FORM_RESULT$"] = str(action).upper() if action is not None else ""
-            self.variables["FORM_SELECTED_ID"] = float(results.get("pk") or results.get("selected_id") or record_id or 0.0)
-            self.variables["FORM_DATA"] = self._python_to_basic_data(current_data)
-            break
+            self.variables["FORM_SELECTED_ID"] = 0.0 # No ID for new, transient records
+            self.variables["FORM_DATA"] = self._python_to_basic_data(data)
+
+            # Also, populate top-level variables from the form data
+            if isinstance(data, dict):
+                for key, value in data.items():
+                    # Create variable names with a '$' suffix if the value is a string
+                    var_name = f"{key}$" if isinstance(value, str) else key
+                    self._set_variable_value(var_name, value)
             
     def _format_bytes(self, size):
         """Helper function to format bytes into KB, MB, etc."""
