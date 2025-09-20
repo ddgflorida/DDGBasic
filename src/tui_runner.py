@@ -516,3 +516,4 @@ class _ListScreen(App):
                     if action in ['VIEW_GRID', 'UPDATE', 'SAVE', 'CANCEL', 'DELETE', 'BACK_TO_GRID']:
                         contextual_buttons.append(button)
         return contextual_buttons
+
