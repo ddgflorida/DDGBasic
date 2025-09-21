@@ -16,11 +16,8 @@ class FormRunner:
         self.current_search_term = current_search_term
 
     def run(self):
-        """
-        Checks the form definition and launches the appropriate screen (dispatcher logic).
-        """
+        app = None
         if self.view_mode == 'grid':
-            # Pass the search arguments to the _ListScreen
             app = _ListScreen(
                 self.form_def, self.initial_data, self.results, 
                 self.pk_column_name, self.search_config, self.current_search_term
@@ -31,7 +28,6 @@ class FormRunner:
                 self.nav_info, self.pk_column_name
             )
         else:
-            # Original logic as fallback
             if self.form_def.get("display_rows", 1) > 1:
                 app = _ListScreen(
                     self.form_def, self.initial_data, self.results, 
@@ -43,7 +39,16 @@ class FormRunner:
                     self.nav_info, self.pk_column_name
                 )
         
-        app.run()
+        try:
+            if app:
+                app.run()
+        except Exception as e:
+            print("\n--- TUI RUNTIME ERROR ---")
+            print(f"An error occurred while trying to launch the form screen: {e}")
+            import traceback
+            traceback.print_exc()
+            print("-------------------------\n")
+            
         return self.results
 
 # This is the original _FormScreen, renamed and updated for initial data
@@ -168,7 +173,8 @@ class _EntryScreen(App):
 
         with Horizontal(id="button-container"):
             for button in contextual_buttons:
-                button_id = button["name"].lower().replace(" ", "_").replace('"', "")
+                safe_name = re.sub(r'[^a-zA-Z0-9_ -]', '', button["name"])
+                button_id = safe_name.lower().replace(" ", "_")
                 action = button.get("action", "").upper()
                 css_classes = ["-success" if action in ["SAVE", "UPDATE", "SUBMIT"] else "-neutral" if action in ["CANCEL", "CLOSE", "VIEW_GRID"] else ""]
                 yield Button(button["name"], id=button_id, classes=" ".join(css_classes))
@@ -202,9 +208,37 @@ class _EntryScreen(App):
             self.result_dict["action"] = button_id
             self.exit()
             return
-
-        button_def = next((b for b in self.form_def.get("buttons", []) if re.sub(r'[^a-zA-Z0-9_]', '', b["name"].lower().replace(" ", "_")) == button_id), None)
         
+        print("\n--- TUI DEBUG: on_button_pressed in _EntryScreen ---")
+        print(f"Button ID from click event: '{button_id}'")
+
+        button_def = None
+        for b in self.form_def.get("buttons", []):
+            # This is the sanitizing logic from your version of the code
+            sanitized_name = re.sub(r'[^a-zA-Z0-9_]', '', b["name"].lower().replace(" ", "_"))
+            
+            print(f"Comparing with form button '{b['name']}', sanitized to '{sanitized_name}'")
+            
+            if sanitized_name == button_id:
+                button_def = b
+                print(f"MATCH FOUND! Action is '{button_def.get('action')}'")
+                break
+        
+        if not button_def:
+            print("MATCH NOT FOUND! The button's action will not be set.")
+        print("---------------------------------------------------\n")
+
+        button_def = None
+        for b in self.form_def.get("buttons", []):
+            # This is the sanitizing logic from your version of the code
+            sanitized_name = re.sub(r'[^a-zA-Z0-9_]', '', b["name"].lower().replace(" ", "_"))
+            
+            print(f"Comparing with form button '{b['name']}', sanitized to '{sanitized_name}'")
+            
+            if sanitized_name == button_id:
+                button_def = b
+                print(f"MATCH FOUND! Action is '{button_def.get('action')}'")
+                break
         if button_def:
             action = button_def.get("action")
             if action in ["SUBMIT", "INSERT", "UPDATE"]:
