@@ -2384,7 +2384,13 @@ class Interpreter:
         elif name == 'LTRIM$': return str(args[0]).lstrip()
         elif name == 'RTRIM$': return str(args[0]).rstrip()
         elif name == 'STR$': return self._format_output_value(args[0])
-        elif name == 'VAL': return float(args[0])
+        elif name == 'VAL': 
+            try:
+                # Attempt to convert the argument to a float
+                return float(args[0])
+            except (ValueError, TypeError):
+                # If conversion fails (e.g., for an empty or non-numeric string), return 0.0
+                return 0.0
         elif name == 'INT': return float(math.floor(args[0]))
         elif name == 'FIX': return float(math.trunc(args[0]))
         elif name == 'ATN': return math.atan(args[0])
@@ -5746,36 +5752,41 @@ class Interpreter:
         self._expect('ANALYZE CSV')
         filename = self._parse_expression()
         
-        # --- 1. PARSE OPTIONS ---
+        # --- FIX STARTS HERE: Restructured parsing logic ---
         options = {'header': 'auto', 'delimiter': 'auto', 'constraints': '', 'limit': None}
-        temp_options = {}
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token()
-            options_str = self._parse_expression()
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key = match.group(1).lower()
-                start_pos = match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',').strip()
-                if value.startswith('"') and value.endswith('"'): value = value[1:-1]
-                temp_options[key] = value
-
-            for key, value in temp_options.items():
-                if key == 'header':
-                    if value.lower() in ['true', '1', 'y']: options['header'] = True
-                    elif value.lower() in ['false', '0', 'n']: options['header'] = False
-                elif key == 'constraints': options['constraints'] = value
-                elif key == 'limit': options['limit'] = int(value)
-                else: options[key] = value
-
         into_hash_name = None
-        if self._current_token() and self._current_token()[0] == 'INTO':
-            self._next_token()
-            into_hash_name = self._expect('ID')[1]
-            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+        
+        # Use a loop to parse optional clauses in any order
+        while self._current_token() and self._current_token()[0] in ['INTO', 'OPTIONS']:
+            if self._current_token()[0] == 'INTO':
+                if into_hash_name is not None:
+                    self._error("INTO clause specified more than once.")
+                self._next_token()
+                into_hash_name = self._expect('ID')[1]
+                if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
+                    self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+            
+            elif self._current_token()[0] == 'OPTIONS':
+                self._next_token()
+                options_str = self._parse_expression()
+                temp_options = {}
+                key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+                for i, match in enumerate(key_matches):
+                    key = match.group(1).lower()
+                    start_pos = match.end()
+                    end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                    value = options_str[start_pos:end_pos].strip().strip(',').strip()
+                    if value.startswith('"') and value.endswith('"'): value = value[1:-1]
+                    temp_options[key] = value
 
+                for key, value in temp_options.items():
+                    if key == 'header':
+                        if value.lower() in ['true', '1', 'y']: options['header'] = True
+                        elif value.lower() in ['false', '0', 'n']: options['header'] = False
+                    elif key == 'constraints': options['constraints'] = value
+                    elif key == 'limit': options['limit'] = int(value)
+                    else: options[key] = value
+                    
         # --- 2. PARSE CONSTRAINTS ---
         parsed_constraints = {}
         if options['constraints']:
@@ -5850,19 +5861,24 @@ class Interpreter:
                             if col_name in parsed_constraints:
                                 for const in parsed_constraints[col_name]:
                                     is_valid = True
-                                    if const['type'] == 'ISDIGITS' and not field_val.isdigit(): is_valid = False
-                                    elif const['type'] == 'MINLENGTH' and len(field_val) < const['value']: is_valid = False
-                                    elif const['type'] == 'MAXLENGTH' and len(field_val) > const['value']: is_valid = False
-                                    elif const['type'] == 'REGEX' and not re.match(const['value'], field_val): is_valid = False
-                                    elif rule_type == 'IN' and field_val not in const['value']: is_valid = False
-                                    elif rule_type == 'ISDATE':
-                                        try: datetime.strptime(field_val, const['value'])
-                                        except ValueError: is_valid = False
-                                if not is_valid:
-                                    constraint_failures.append({
-                                        'LINE': line_num, 'COLUMN': col_name,
-                                        'VALUE': field_val, 'FAILED_RULE': const['def']
-                                    })
+                                    rule_type = const['type']
+                                    if rule_type == 'REQUIRED' and not field_val.strip():
+                                        is_valid = False
+                                    elif field_val.strip():
+                                        if rule_type == 'ISDIGITS' and not field_val.isdigit(): is_valid = False
+                                        elif rule_type == 'MINLENGTH' and len(field_val) < const['value']: is_valid = False
+                                        elif rule_type == 'MAXLENGTH' and len(field_val) > const['value']: is_valid = False
+                                        elif rule_type == 'REGEX' and not re.match(const['value'], field_val): is_valid = False
+                                        elif rule_type == 'IN' and field_val not in const['value']: is_valid = False
+                                        elif rule_type == 'ISDATE':
+                                            try: datetime.strptime(field_val, const['value'])
+                                            except ValueError: is_valid = False
+                                    
+                                    if not is_valid:
+                                        constraint_failures.append({
+                                            'LINE': line_num, 'COLUMN': col_name,
+                                            'VALUE': field_val, 'FAILED_RULE': const['def']
+                                        })
                 
                 # --- 4. REPORTING LOGIC ---
                 if constraint_failures:
@@ -6222,9 +6238,29 @@ class Interpreter:
 
     def _parse_gridedit_statement(self):
         self._expect('GRIDEDIT')
-        table_name = self._parse_expression()
 
-        # --- 1. Parse all optional clauses ---
+        table_name = ""
+        token = self._current_token()
+
+        if token[0] == 'STRING':
+            table_name = token[1][1:-1]
+            self._next_token()
+        elif token[0] == 'ID':
+            var_name = token[1]
+            if self._find_variable_key(var_name) is not None:
+                table_name_value = self._parse_expression()
+                if not isinstance(table_name_value, str) or not table_name_value.strip():
+                    self._error(f"GRIDEDIT table name variable '{var_name}' did not resolve to a non-empty string.")
+                table_name = table_name_value.strip()
+            else:
+                table_name = var_name
+                self._next_token()
+        else:
+            self._error("GRIDEDIT expects a table name (as a quoted string, variable, or unquoted literal).")
+        
+        if not table_name:
+             self._error("Could not determine table name for GRIDEDIT.")
+
         user_columns = None
         base_where_clause = ""
         order_clause = ""
@@ -6234,8 +6270,21 @@ class Interpreter:
         while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
             token = self._current_token()
             if token[0] == 'ID' and token[1].upper() == 'FIELDS':
-                self._next_token(); fields_str = self._parse_expression()
-                user_columns = [field.strip() for field in fields_str.split(',')]
+                self._next_token()
+                temp_columns = []
+                if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'SEARCH', 'WHERE', 'ORDER']:
+                    while True:
+                        field_name_expr = self._parse_expression()
+                        temp_columns.append(str(field_name_expr))
+                        if not (self._current_token() and self._current_token()[0] == 'COMMA'):
+                            break
+                        self._next_token()
+                if not temp_columns: self._error("FIELDS clause requires at least one column name.")
+                if len(temp_columns) == 1 and ',' in temp_columns[0]:
+                    user_columns = [field.strip() for field in temp_columns[0].split(',')]
+                else:
+                    # Otherwise, the list was parsed correctly.
+                    user_columns = temp_columns
             elif token[0] == 'WHERE' or (token[0] == 'ID' and token[1].upper() == 'WHERE'):
                 self._next_token(); where_condition = self._parse_expression()
                 base_where_clause = f" WHERE {where_condition}"
@@ -6248,19 +6297,33 @@ class Interpreter:
             elif token[0] == 'SEARCH':
                 self._next_token(); search_config['enabled'] = True
                 if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'ON':
-                    self._next_token(); search_fields_str = self._parse_expression()
-                    search_config['fields'] = [field.strip() for field in search_fields_str.split(',')]
+                    self._next_token()
+                    temp_search_cols = []
+                    if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'FIELDS', 'WHERE', 'ORDER']:
+                        while True:
+                            col_name_expr = self._parse_expression()
+                            temp_search_cols.append(str(col_name_expr))
+                            if not (self._current_token() and self._current_token()[0] == 'COMMA'):
+                                break
+                            self._next_token()
+                    if not temp_search_cols: self._error("SEARCH ON clause requires at least one column name.")
+                    search_config['fields'] = temp_search_cols
             elif token[0] == 'LOOKUP':
-                self._next_token(); lookup_field = self._expect('ID')[1]
-                query = self._extract_sql_from_parens(); self._expect('RETURNS')
-                returns_col = self._parse_expression(); display_col = returns_col
+                self._next_token()
+                lookup_field = self._expect('ID')[1]
+                query = self._extract_sql_from_parens()
+                self._expect('RETURNS')
+                # This now correctly handles an ID or a STRING
+                returns_col = self._parse_table_name()
+                display_col = returns_col
                 if self._current_token() and self._current_token()[0] == 'DISPLAY':
-                    self._next_token(); display_col = self._parse_expression()
-                lookup_definitions[lookup_field] = {"query": query, "returns": returns_col, "display": display_col}
+                    self._next_token()
+                    # This also correctly handles an ID or a STRING
+                    display_col = self._parse_table_name()
+                lookup_definitions[lookup_field] = {"query": query, "returns": returns_col, "display": display_col} 
             else:
                 break
 
-        # --- 2. Get table metadata ---
         metadata = self._get_table_metadata(table_name)
         pk_column = metadata['pk']
         all_column_names = metadata['columns']
@@ -6270,7 +6333,12 @@ class Interpreter:
         # --- 3. Build the definitive list of columns to SELECT ---
         display_columns = user_columns if user_columns else [col for col in all_column_names if col.lower() != 'rowid']
         
-        base_select_list = set(all_column_names) # Always start with all columns from the base table for editing
+        # --- THIS IS THE FIX ---
+        # Start the list of columns to select with the primary key to ensure it's always included in the query result.
+        base_select_list = {pk_column}
+        base_select_list.update(all_column_names)
+        # --- END FIX ---
+        
         if user_columns:
             base_select_list.update(user_columns)
         if search_config['fields']:
@@ -6284,28 +6352,16 @@ class Interpreter:
                 subquery = f'(SELECT {self._quote_identifier(display_col)} FROM {self._quote_identifier(lookup_table)} WHERE {self._quote_identifier(lookup_table)}.{self._quote_identifier(returns_col)} = {self._quote_identifier(table_name)}.{self._quote_identifier(field)})'
                 final_select_list.append(f'{subquery} AS {self._quote_identifier(display_col)}')
 
-        # --- 4. Define the entry form ---
         entry_form_elements = []
         for col in all_column_names:
-            field_def = {
-                "type": "FIELD", 
-                "name": col, 
-                "label": f"{col.replace('_', ' ').title()}", 
-                "readonly": (col.lower() == pk_column.lower())
-            }
-            # Properly attach lookup configuration
+            field_def = { "type": "FIELD", "name": col, "label": f"{col.replace('_', ' ').title()}", "readonly": (col.lower() == pk_column.lower()) }
             if col in lookup_definitions: 
                 field_def["lookup"] = lookup_definitions[col]
             entry_form_elements.append(field_def)
             
         entry_form_def = {
-            "name": f"{table_name}_entry", 
-            "title": f"Editing: {table_name}", 
-            "elements": entry_form_elements, 
-            "buttons": [
-                {"name": "Save", "action": "UPDATE"}, 
-                {"name": "Cancel", "action": "CANCEL"}
-            ]
+            "name": f"{table_name}_entry", "title": f"Editing: {table_name}", "elements": entry_form_elements, 
+            "buttons": [{"name": "Save", "action": "UPDATE"}, {"name": "Cancel", "action": "CANCEL"}]
         }
 
         # --- 5. Main Application Loop ---
@@ -6335,7 +6391,7 @@ class Interpreter:
             list_results = list_runner.run()
             
             action, current_search_term, selected_id = list_results.get("action"), list_results.get("search_term", ""), list_results.get("selected_id")
-
+            
             if action == "SEARCH": continue
             if action == "CLOSE" or not action: break
 
@@ -6350,203 +6406,95 @@ class Interpreter:
                 current_headers = [desc[0] for desc in self.db_cursor.description]
                 initial_entry_data = dict(zip(current_headers, row_data_list[0]))
                 
-                # CRITICAL: Preserve the original database values for change detection
                 original_db_data = initial_entry_data.copy()
                 
-                # Main entry form loop to handle lookups
                 while True:
                     entry_runner = FormRunner(entry_form_def, initial_data=initial_entry_data, view_mode='single', pk_column_name=pk_column)
                     entry_results = entry_runner.run()
                     
                     if entry_results.get("action") == "RUN_LOOKUP":
                         lookup_field_name = entry_results.get("lookup_field")
-                        #print(f"DEBUG: Lookup requested for field: {lookup_field_name}")
-                        
                         field_def = next((e for e in entry_form_elements if e.get("name") == lookup_field_name), None)
-                        #print(f"DEBUG: Found field definition: {field_def is not None}")
-                        
-                        if not field_def or not field_def.get("lookup"): 
-                            #print(f"DEBUG: No lookup config found for {lookup_field_name}")
-                            continue
-
+                        if not field_def or not field_def.get("lookup"): continue
                         lookup_config = field_def["lookup"]
-                        #print(f"DEBUG: Executing lookup query: {lookup_config['query']}")
-                        
                         try:
                             rows = self._execute_sql(lookup_config["query"], is_query=True)
-                            #print(f"DEBUG: Query returned {len(rows) if rows else 0} rows")
                             headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
-                            #print(f"DEBUG: Headers: {headers}")
-                            
-                            # CRITICAL: Update initial_entry_data with ALL current form changes FIRST
                             form_data = entry_results.get("data", {})
-                            #print(f"DEBUG: Form data before lookup: {form_data}")
                             initial_entry_data.update(form_data)
-                            #print(f"DEBUG: Updated initial_entry_data with form changes: {initial_entry_data}")
-                            
-                            lookup_runner = FormRunner(
-                                form_def={"buttons": [{"name": "Select", "action": "SELECT"}, {"name": "Cancel", "action": "CANCEL"}]},
-                                initial_data={"headers": headers, "rows": rows},
-                                view_mode='grid', pk_column_name=headers[0] if headers else 'id'
-                            )
+                            lookup_runner = FormRunner(form_def={"buttons": [{"name": "Select", "action": "SELECT"}, {"name": "Cancel", "action": "CANCEL"}]}, initial_data={"headers": headers, "rows": rows}, view_mode='grid', pk_column_name=headers[0] if headers else 'id')
                             lookup_results = lookup_runner.run()
-
                             if lookup_results.get("action") == "SELECT":
                                 selected_row_pk = lookup_results.get("selected_id")
                                 selected_row = next((r for r in rows if r[0] == selected_row_pk), None)
                                 if selected_row:
                                     header_map = {h: i for i, h in enumerate(headers)}
                                     return_col, display_col = lookup_config["returns"], lookup_config["display"]
-                                    
-                                    # Update the lookup field value
-                                    if return_col in header_map:
-                                        new_value = selected_row[header_map[return_col]]
-                                        initial_entry_data[lookup_field_name] = new_value
-                                        #print(f"DEBUG: Set {lookup_field_name} = {new_value}")
-                                    
-                                    # Update the display field if different
-                                    if display_col in header_map and display_col != return_col:
-                                        display_value = selected_row[header_map[display_col]]
-                                        initial_entry_data[display_col] = display_value
-                                        #print(f"DEBUG: Set {display_col} = {display_value}")
-                                    
-                                    #print(f"DEBUG: Final initial_entry_data after lookup: {initial_entry_data}")
-                            
+                                    if return_col in header_map: initial_entry_data[lookup_field_name] = selected_row[header_map[return_col]]
+                                    if display_col in header_map and display_col != return_col: initial_entry_data[display_col] = selected_row[header_map[display_col]]
                         except Exception as e:
                             print(f"DEBUG: Query failed: {e}")
-                        
-                        # Continue the loop to redisplay the form with updated values
                         continue
-                    
-                    # If not a lookup action, break out of the lookup loop
                     break
                 
-                # Process other actions (UPDATE, CANCEL, etc.)
                 if entry_results.get("action") == "UPDATE":
                     updated_data_from_form = entry_results.get("data", {})
-                    #print(f"DEBUG UPDATE: Form data received: {updated_data_from_form}")
-                    #print(f"DEBUG UPDATE: Original DB data: {original_db_data}")
-                    #print(f"DEBUG UPDATE: Current working data: {initial_entry_data}")
-                    #print(f"DEBUG UPDATE: All column names: {all_column_names}")
-                    #print(f"DEBUG UPDATE: Primary key column: {pk_column}")
-                    
                     changed_data = {}
                     for key, new_value in updated_data_from_form.items():
-                        #print(f"DEBUG UPDATE: Processing field '{key}' = '{new_value}'")
-                        
-                        # Check if field should be skipped
-                        if key not in all_column_names:
-                            #print(f"DEBUG UPDATE: Skipping '{key}' - not in all_column_names")
-                            continue
-                        if key.lower() == pk_column.lower():
-                            #print(f"DEBUG UPDATE: Skipping '{key}' - is primary key")
-                            continue
-                            
-                        # CRITICAL: Compare against original database values, not current working data
+                        if key not in all_column_names or key.lower() == pk_column.lower(): continue
                         original_value = original_db_data.get(key)
-                        #print(f"DEBUG UPDATE: Field '{key}': original_db='{original_value}' (type: {type(original_value)}), new='{new_value}' (type: {type(new_value)})")
-                        
-                        # Improved change detection
                         original_str = str(original_value) if original_value is not None else ""
                         new_str = str(new_value) if new_value is not None else ""
-                        
                         if original_str != new_str:
-                            print(f"DEBUG UPDATE: Change detected for '{key}': '{original_str}' -> '{new_str}'")
                             final_value = new_value
                             col_type = column_types.get(key.upper(), 'TEXT')
                             if new_value == "":
-                                if any(num_type in col_type for num_type in numeric_types):
-                                    final_value = None
+                                if any(num_type in col_type for num_type in numeric_types): final_value = None
                                 else:
                                     setting_key = f"{table_name}.{key}".upper()
                                     handling_rule = g_null_handling_settings.get(setting_key, g_null_handling_default)
-                                    if handling_rule == 'CONVERT_EMPTY_TO_NULL':
-                                        final_value = None
+                                    if handling_rule == 'CONVERT_EMPTY_TO_NULL': final_value = None
                             changed_data[key] = final_value
-                            #print(f"DEBUG UPDATE: Added to changed_data: '{key}' = '{final_value}'")
-                        else:
-                            pass
-                            #print(f"DEBUG UPDATE: No change detected for '{key}'")
-                            
-                    #print(f"DEBUG UPDATE: Final changed_data: {changed_data}")
-                    
                     if changed_data:
                         set_clauses = [f"{self._quote_identifier(k)} = ?" for k in changed_data.keys()]
                         update_params = list(changed_data.values())
-                        pk_value = original_db_data.get(pk_column)  # Use original PK value
+                        pk_value = original_db_data.get(pk_column)
                         update_params.append(pk_value)
                         update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
-                        
-                        #print(f"DEBUG UPDATE: Executing SQL: {update_sql}")
-                        #print(f"DEBUG UPDATE: With parameters: {update_params}")
-                        
                         result = self._execute_sql(update_sql, False, update_params)
-                        #print(f"DEBUG UPDATE: SQL execution result: {result}")
-                        #print(f"DEBUG UPDATE: SQL_ROWCOUNT: {self.variables.get('SQL_ROWCOUNT', 'not set')}")
-                        
-                        if self.db_engine == 'sqlite': 
-                            self.db_connection.commit()
-                            #print("DEBUG UPDATE: Committed transaction")
-                            
-                        # Update the original database data to reflect the changes
+                        if self.db_engine == 'sqlite': self.db_connection.commit()
                         original_db_data.update(changed_data)
-                        #print(f"DEBUG UPDATE: Updated original_db_data: {original_db_data}")
-                    else:
-                        pass
-                        #print("DEBUG UPDATE: No changes detected - UPDATE skipped")
 
             elif action == "NEW":
                 initial_entry_data = {col: "" for col in all_column_names if col.lower() != pk_column.lower()}
-                
-                # Main entry form loop for NEW record to handle lookups
                 while True:
                     entry_runner = FormRunner(entry_form_def, initial_data=initial_entry_data, view_mode='single', pk_column_name=pk_column)
                     entry_results = entry_runner.run()
-                    
                     if entry_results.get("action") == "RUN_LOOKUP":
                         lookup_field_name = entry_results.get("lookup_field")
                         field_def = next((e for e in entry_form_elements if e.get("name") == lookup_field_name), None)
-                        
                         if field_def and field_def.get("lookup"):
                             lookup_config = field_def["lookup"]
-                            
                             try:
                                 rows = self._execute_sql(lookup_config["query"], is_query=True)
                                 headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
-                                
-                                # Update initial_entry_data with any changes from the form
                                 form_data = entry_results.get("data", {})
                                 initial_entry_data.update(form_data)
-                                
-                                lookup_runner = FormRunner(
-                                    form_def={"buttons": [{"name": "Select", "action": "SELECT"}, {"name": "Cancel", "action": "CANCEL"}]},
-                                    initial_data={"headers": headers, "rows": rows},
-                                    view_mode='grid', pk_column_name=headers[0] if headers else 'id'
-                                )
+                                lookup_runner = FormRunner(form_def={"buttons": [{"name": "Select", "action": "SELECT"}, {"name": "Cancel", "action": "CANCEL"}]}, initial_data={"headers": headers, "rows": rows}, view_mode='grid', pk_column_name=headers[0] if headers else 'id')
                                 lookup_results = lookup_runner.run()
-
                                 if lookup_results.get("action") == "SELECT":
                                     selected_row_pk = lookup_results.get("selected_id")
                                     selected_row = next((r for r in rows if r[0] == selected_row_pk), None)
                                     if selected_row:
                                         header_map = {h: i for i, h in enumerate(headers)}
                                         return_col, display_col = lookup_config["returns"], lookup_config["display"]
-                                        if return_col in header_map:
-                                            initial_entry_data[lookup_field_name] = selected_row[header_map[return_col]]
-                                        if display_col in header_map and display_col != return_col:
-                                            initial_entry_data[display_col] = selected_row[header_map[display_col]]
-                                
+                                        if return_col in header_map: initial_entry_data[lookup_field_name] = selected_row[header_map[return_col]]
+                                        if display_col in header_map and display_col != return_col: initial_entry_data[display_col] = selected_row[header_map[display_col]]
                             except Exception as e:
-                                print(f"DEBUG: Lookup query failed: {e}")
-                        
-                        # Continue the loop to redisplay the form with updated values
+                                print(f"DEBUG: Query failed: {e}")
                         continue
-                    
-                    # If not a lookup action, break out of the lookup loop
                     break
-                
-                # Process INSERT action
-                if entry_results.get("action") == "UPDATE":  # In NEW mode, UPDATE becomes INSERT
+                if entry_results.get("action") == "UPDATE":
                     new_data = entry_results.get("data", {})
                     insert_columns = [col for col in all_column_names if col.lower() != pk_column.lower() and col in new_data]
                     if insert_columns:
