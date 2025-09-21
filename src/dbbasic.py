@@ -252,7 +252,8 @@ class Lexer:
             ('LOOKUP', r'\bLOOKUP\b(?!\$)'),   
             ('RETURNS', r'\bRETURNS\b(?!\$)'), 
             # ---------------------------
-            ('STRING', r'"([^"]|"")*"'), ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?'),
+            ('STRING', r'"([^"]|"")*"'), ('SINGLE_Q_STRING', r"'[^']*'"),
+            ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?'),
             ('REM', r'REM[^\n]*'), ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
             ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZETEXT', r'\bANALYZETEXT\b'),
             ('LINEINPUT', r'\bLINEINPUT\b(?!\$)'), ('TOFILE', r'\bTOFILE\b(?!\$)'), ('READFILE', r'\bREADFILE\b(?!\$)'),
@@ -298,25 +299,28 @@ class Lexer:
             ('OP', r"[+\*/-]"),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), 
             ('LBRACKET', r'\['), ('RBRACKET', r'\]'),('COMMA', r','),
-            ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('COMMENT', r"'[^\n]*"), ('NEWLINE', r'\n'),
+            ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('NEWLINE', r'\n'),
             ('SKIP', r'[ \t\u00A0]+'), ('MISMATCH', r'.'),
         ]
         tok_regex = '|'.join('(?P<%s>%s)' % pair for pair in token_specification)
         raw_tokens, tokens, is_start_of_line = [], [], True
         for mo in re.finditer(tok_regex, code, re.IGNORECASE):
             kind, value, pos = mo.lastgroup, mo.group(), mo.start()
-            if kind in ['SKIP', 'REM', 'COMMENT']: continue
+            if kind in ['SKIP', 'REM']: continue
             if kind == 'MISMATCH':
                 line, col = self.get_line_col(pos); raise RuntimeError(f"Unexpected character '{value}' at line {line}, col {col}")
             raw_tokens.append((kind, value, pos))
         i = 0
         while i < len(raw_tokens):
             kind, value, pos = raw_tokens[i]
+
             if kind == 'NEWLINE': 
                 is_start_of_line = True 
                 tokens.append((kind, value, pos))
                 i += 1
                 continue
+
+            # Handle line-level SQL (e.g., SELECT * FROM mytable;)
             if is_start_of_line and kind in Interpreter.SQL_KEYWORDS:
                 semicolon_pos = self.modified_source_code.find(';', pos)
                 if semicolon_pos != -1:
@@ -324,61 +328,61 @@ class Lexer:
                     sql_text = self.modified_source_code[pos:sql_end_pos].strip()
                     tokens.append(('SQL_STRING', sql_text, pos))
                     while i < len(raw_tokens) and raw_tokens[i][2] < sql_end_pos: i += 1
-                    is_start_of_line = False; continue
-            # General rule: If we see `( SELECT ... )`, bundle it as a subquery.
-            if kind == 'LPAREN' and i + 1 < len(raw_tokens) and raw_tokens[i+1][0] in Interpreter.SQL_KEYWORDS:
-                lp_pos = pos
-                nesting, search_pos, end_paren_pos, in_string = 1, lp_pos + 1, -1, False
-                
-                # Scan the raw source code to find the matching closing parenthesis
-                while search_pos < len(self.modified_source_code):
-                    char = self.modified_source_code[search_pos]
-                    if char == "'": in_string = not in_string
-                    elif not in_string and char == '(': nesting += 1
-                    elif not in_string and char == ')':
-                        nesting -= 1
-                        if nesting == 0:
-                            end_paren_pos = search_pos; break
-                    search_pos += 1
-                
-                if nesting != 0: self._error("Unmatched parenthesis in SQL subquery.")
-                
-                # Create the new token sequence: ( SQL_STRING )
-                sql_text = self.modified_source_code[lp_pos + 1 : end_paren_pos]
-                tokens.append(('LPAREN', '(', lp_pos))
-                tokens.append(('SQL_STRING', sql_text.strip(), lp_pos + 1))
-                tokens.append(('RPAREN', ')', end_paren_pos))
-                
-                # Advance the main loop past all the tokens we just consumed.
-                while i < len(raw_tokens) and raw_tokens[i][2] <= end_paren_pos:
-                    i += 1
-                is_start_of_line = False
-                continue
-            if (kind in ('IN', 'EXISTS', 'ASSIGN')) and i + 1 < len(raw_tokens) and raw_tokens[i+1][0] == 'LPAREN':
-                if i + 2 < len(raw_tokens) and raw_tokens[i+2][0] in Interpreter.SQL_KEYWORDS:
-                    tokens.append((kind, value, pos)); lp_pos = raw_tokens[i+1][2]; nesting, search_pos, end_paren_pos, in_string = 1, lp_pos + 1, -1, False
-                    while search_pos < len(self.modified_source_code):
-                        char = self.modified_source_code[search_pos]
-                        if char == "'": in_string = not in_string
-                        elif not in_string and char == '(': nesting += 1
-                        elif not in_string and char == ')': nesting -= 1
-                        if nesting == 0: end_paren_pos = search_pos; break
-                        search_pos += 1
-                    if nesting != 0: raise RuntimeError("Unmatched parens in SQL expression")
-                    sql_text = self.modified_source_code[lp_pos + 1 : end_paren_pos]
-                    tokens.extend([('LPAREN', '(', lp_pos), ('SQL_STRING', sql_text.strip(), lp_pos + 1), ('RPAREN', ')', end_paren_pos)])
-                    while i < len(raw_tokens) and raw_tokens[i][2] <= end_paren_pos: i += 1
                     is_start_of_line = False
-                    if kind == 'EXISTS':
-                        text_after_paren = self.modified_source_code[end_paren_pos + 1:].lstrip()
-                        next_token_is_then = (i < len(raw_tokens) and raw_tokens[i][0] == 'THEN')
-                        if text_after_paren.upper().startswith('THEN') and not next_token_is_then:
-                            tokens.append(('THEN', 'THEN', end_paren_pos + 1))
                     continue
+
+            # Handle IN (SELECT...), EXISTS (SELECT...), or scalar (SELECT...) subqueries
+            potential_subquery = (kind in ('IN', 'EXISTS', 'LPAREN', 'ASSIGN'))
+            if potential_subquery:
+                
+                # Determine the start of the subquery content
+                lparen_index = i
+                if kind != 'LPAREN':
+                    lparen_index = i + 1
+                #print("DEBUG:","We may have a subquery, lparen_index=", lparen_index, "tokens=",tokens)
+                #print("DEBUG raw:",raw_tokens)
+                if lparen_index < len(raw_tokens) and raw_tokens[lparen_index][0] == 'LPAREN':
+                    sql_keyword_index = lparen_index + 1
+                    if sql_keyword_index < len(raw_tokens) and raw_tokens[sql_keyword_index][0] in Interpreter.SQL_KEYWORDS:
+                        
+                        # Add the token that came before the subquery, if any (e.g., IN, EXISTS, =)
+                        if kind != 'LPAREN':
+                            tokens.append(raw_tokens[i])
+
+                        # Scan the raw source to find the matching closing parenthesis
+                        lp_pos = raw_tokens[lparen_index][2]
+                        nesting, search_pos, end_paren_pos, in_string = 1, lp_pos + 1, -1, False
+                        while search_pos < len(self.modified_source_code):
+                            char = self.modified_source_code[search_pos]
+                            if char == "'": in_string = not in_string
+                            elif not in_string and char == '(': nesting += 1
+                            elif not in_string and char == ')':
+                                nesting -= 1
+                                if nesting == 0:
+                                    end_paren_pos = search_pos
+                                    break
+                            search_pos += 1
+
+                        if nesting != 0: self._error("Unmatched parenthesis in SQL subquery.")
+                        
+                        # Create and add the subquery tokens
+                        sql_text = self.modified_source_code[lp_pos + 1 : end_paren_pos]
+                        tokens.append(('LPAREN', '(', lp_pos))
+                        tokens.append(('SQL_STRING', sql_text.strip(), lp_pos + 1))
+                        tokens.append(('RPAREN', ')', end_paren_pos))
+                        
+                        # Correctly advance the raw_token index past the entire subquery
+                        i = lparen_index
+                        while i < len(raw_tokens) and raw_tokens[i][2] <= end_paren_pos:
+                            i += 1
+                        
+                        is_start_of_line = False
+                        #print("DEBUG:","SQL_STRING, end_paren_pos=", end_paren_pos, "tokens=",tokens)
+                        continue
             u_value = value.upper()
             #if kind != 'STRING': value = u_value
             if kind == 'BACKTICK_STRING': kind = 'STRING'
-            if u_value == 'ENDIF': kind, value = 'END IF', 'END IF'
+            elif u_value == 'ENDIF': kind, value = 'END IF', 'END IF'
             elif u_value == 'LINEINPUT': kind, value = 'LINE INPUT', 'LINE INPUT'
             elif u_value == 'READFILE': kind, value = 'READ FILE', 'READ FILE' 
             elif u_value == 'TOFILE': kind, value = 'TO FILE', 'TO FILE'
@@ -397,6 +401,7 @@ class Lexer:
             elif u_value == 'WITHDETAILS': kind, value = 'WITH DETAILS', 'WITH DETAILS'
             elif u_value == 'WITHFOLDERSONLY': kind, value = 'WITH FOLDERSONLY', 'WITH FOLDERSONLY'
             elif u_value == 'WITHFILESONLY': kind, value = 'WITH FILESONLY', 'WITH FILESONLY' 
+            
             tokens.append((kind, value, pos)); is_start_of_line = False; i += 1
         return tokens
         
@@ -417,9 +422,11 @@ class Formatter:
                 else: output += char; fmt_idx += 1
             else: output += char; fmt_idx += 1
         return output
+    
     @staticmethod
     def _format_value(value, mask):
         return Formatter._format_numeric(value, mask) if isinstance(value, (int, float)) else Formatter._format_string(str(value), mask)
+    
     @staticmethod
     def _format_scientific(value, mask, is_negative):
         caret_pos = mask.find('^^^^')
@@ -433,6 +440,7 @@ class Formatter:
             if ' ' in result: return result.replace(' ', '-', 1)
             else: return '-' + result
         return result
+        
     @staticmethod
     def _format_numeric(value, mask, force_positive=False):
         is_negative = value < 0 and not force_positive
@@ -467,6 +475,7 @@ class Formatter:
             elif '*' in result: return result.replace('*', '-', 1)
             else: return '-' + result
         return result
+        
     @staticmethod
     def _format_string(value, mask):
         backslash_match = re.match(r'([<>^]?)\\(\s*)\\', mask)
@@ -1269,10 +1278,10 @@ class Interpreter:
             self._parse_while_statement()
         elif token[0] == 'OPEN':                                  # open file
             self._parse_open_statement()
-        elif token[0] == 'CLOSE':                                 # close file
-            self._parse_close_statement()
         elif token[0] == 'READ FILE':                             # read file into variable
             self._parse_read_file_statement()
+        elif token[0] == 'CLOSE':                                 # close file
+            self._parse_close_statement()
         elif token[0] == 'LINE INPUT':                            # read a line from file
             self._parse_line_input_statement()
         elif token[0] == 'INPUT':                                 # read input from stdin
@@ -1438,6 +1447,7 @@ class Interpreter:
 
     def _parse_comparison(self):
         token = self._current_token()
+
         if self._current_token() and self._current_token()[0] == 'NOT':
             self._next_token(); result = self._parse_comparison(); return -1.0 if result == 0 else 0.0
         if self._current_token() and self._current_token()[0] == 'EXISTS':
@@ -1448,6 +1458,32 @@ class Interpreter:
             return -1.0 if results else 0.0
         left = self._parse_expression()
         token = self._current_token()
+        if token and token[0] == 'IN':
+            self._next_token()  # Consume 'IN'
+            self._expect('LPAREN')
+
+            # Case 1: Subquery, e.g., IN (SELECT ...)
+            if self._current_token() and self._current_token()[0] == 'SQL_STRING':
+                sql_query = self._expect('SQL_STRING')[1]
+                self._expect('RPAREN')
+                results = self._execute_sql(sql_query, is_query=True)
+                # Flatten list of tuples into a set for efficient lookup
+                value_set = {row[0] for row in results}
+                is_member = left in value_set
+                return -1.0 if is_member else 0.0
+            
+            # Case 2: Static list, e.g., IN ("a", "b", 123)
+            else:
+                value_list = []
+                if self._current_token()[0] != 'RPAREN':
+                    while True:
+                        value_list.append(self._parse_expression())
+                        if self._current_token()[0] == 'RPAREN':
+                            break
+                        self._expect('COMMA')
+                self._expect('RPAREN')
+                is_member = left in value_list
+                return -1.0 if is_member else 0.0
         if token and token[0] in ['RELOP', 'ASSIGN']:
             op_token = token; self._next_token(); op = op_token[1]; right = self._parse_expression()
             if op == '=': return -1.0 if left == right else 0.0
@@ -2737,7 +2773,7 @@ class Interpreter:
         var_name = self._expect('ID')[1]
         line = self.file_handles[file_num]['handle'].readline()
         self.variables[var_name] = line.rstrip('\n\r')
-        
+            
     def _parse_open_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('OPEN')
@@ -4119,7 +4155,7 @@ class Interpreter:
             else: self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
         else: self._error("Expected CREATE TABLE, INTO TABLE clause.")
 
-        options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 
+        options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 'trimall': False,
                    'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 'fields': ''}
         temp_options = {}
         add_line_num = False
@@ -4147,7 +4183,11 @@ class Interpreter:
                     col_name, func_name = parts
                     # Store as lowercase for case-insensitive matching
                     transform_rules[col_name.lower()] = func_name.lower()
-        #print("DEBUG:", options)
+                elif len(parts) == 1:
+                    transform_rules[parts[0]] = True    # i.e. trimall
+                        
+        #print("DEBUG1:", options)
+        #print("DEBUG2:", transform_rules)
         #print("DEBUG destination_mode:", destination_mode)
         try:
             with open(csv_filename, 'r', newline='', encoding=options['encoding']) as infile:
@@ -4160,7 +4200,7 @@ class Interpreter:
                     except StopIteration: return
 
                 final_headers, column_map = original_headers, list(range(len(original_headers))) if original_headers else None
-                print("DEBUG:","BEFORE CHECK OF FIELDS")
+                #print("DEBUG:","BEFORE CHECK OF FIELDS")
                 if options['fields']:
                     if not options['header']: self._error("FIELDS option requires header=true.")
                     field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
@@ -4199,7 +4239,7 @@ class Interpreter:
                         cols_def = ', '.join([f"[{h}] {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in final_headers])
                         #print("DEBUG DROP:",f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                         cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
-                        print("DEBUG CREATE:",f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
+                        #print("DEBUG CREATE:",f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
                         cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
                     if db_mode == 'REPLACE': 
                         cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
@@ -4226,6 +4266,15 @@ class Interpreter:
                                             processed_row[i] = original_value.title()
                                         elif rule == 'trim':
                                             processed_row[i] = original_value.strip()
+                                # Check global options
+                                if transform_rules.get('trimall'):
+                                    processed_row = [str(field).strip() for field in processed_row]
+                                if transform_rules.get('upperall'):
+                                    processed_row = [str(field).upper() for field in processed_row]
+                                if transform_rules.get('lowerall'):
+                                    processed_row = [str(field).lower() for field in processed_row] 
+                                if transform_rules.get('properall'):
+                                    processed_row = [str(field).title() for field in processed_row]                                    
                             if insert_sql is None:
                                 num_cols = len(final_headers)
                                 if num_cols == 0: continue
@@ -5646,22 +5695,41 @@ class Interpreter:
             if 'RECNO' in self.variables:
                 del self.variables['RECNO']
                 
+    # In dbbasic.py, replace the existing _parse_dim_statement method
+
     def _parse_dim_statement(self):
-        self._expect('DIM'); var_name = self._expect('ID')[1]
-        if self._current_token() and self._current_token()[0] == 'AS':
-            self._next_token(); type_token = self._current_token()
-            if not type_token or type_token[0] not in ['HASH', 'ARRAY']: self._error(f"Expected HASH or ARRAY after AS")
+        self._expect('DIM')
+        var_name = self._expect('ID')[1]
+        token = self._current_token()
+
+        if token and token[0] == 'AS':
             self._next_token()
-            if type_token[0] == 'HASH': self.variables[var_name] = {}
-            elif type_token[0] == 'ARRAY': self.variables[var_name] = []
-        elif self._current_token() and self._current_token()[0] == 'LPAREN':
+            type_token = self._current_token()
+            if not type_token or type_token[0] not in ['HASH', 'ARRAY']:
+                self._error(f"Expected HASH or ARRAY after AS")
+            self._next_token()
+            if type_token[0] == 'HASH':
+                self.variables[var_name] = {}
+            elif type_token[0] == 'ARRAY':
+                self.variables[var_name] = []
+        elif token and token[0] == 'LPAREN':
             self._expect('LPAREN')
-            if self._current_token() and self._current_token()[0] == 'RPAREN': self._expect('RPAREN'); self.variables[var_name] = []
+            if self._current_token() and self._current_token()[0] == 'RPAREN':
+                self._expect('RPAREN')
+                self.variables[var_name] = []
             else:
-                size = int(self._parse_expression()); self._expect('RPAREN')
+                size = int(self._parse_expression())
+                self._expect('RPAREN')
                 default_value = "" if var_name.endswith('$') else 0.0
                 self.variables[var_name] = [default_value] * (size + 1)
-        else: self._error(f"Invalid DIM statement for '{var_name}'.")
+        elif not token or token[0] in ['NEWLINE', 'COLON', 'END']:
+            # This is the new logic for scalar variables like "DIM myvar$"
+            if var_name.endswith('$'):
+                self.variables[var_name] = ""
+            else:
+                self.variables[var_name] = 0.0
+        else:
+            self._error(f"Invalid DIM statement for '{var_name}'.")
             
     def _parse_json_statement(self):
         self._expect('PARSE'); self._expect('JSON')
