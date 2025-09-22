@@ -4499,8 +4499,19 @@ class Interpreter:
             for key, value in temp_options.items():
                 if key == 'header': options['header'] = value.lower() in ['true', '1', 'y']
                 elif key in ['sheetindex', 'batchsize', 'limit']: options[key] = int(value)
+                elif key == 'transform':
+                    options['transform'] = value
                 else: options[key] = value
 
+            transform_rules = {}
+            if options.get('transform'):
+                for rule in options['transform'].split(','):
+                    parts = rule.strip().split(':')
+                    if len(parts) == 2:
+                        col_name, func_name = parts
+                        transform_rules[col_name.lower()] = func_name.lower()
+                    elif len(parts) == 1:
+                        transform_rules[parts[0].lower()] = True
         try:
             workbook = xlrd3.open_workbook(excel_filename)
             sheet = None
@@ -4518,6 +4529,33 @@ class Interpreter:
             
             final_headers, column_map = original_headers, list(range(len(original_headers)))
             
+            if options['fields']:
+                if not options['header']: self._error("FIELDS option requires header=true.")
+                field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
+                
+                if field_specs[0].strip() == '*':
+                    excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
+                    final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
+                    column_map = [i for i, h in enumerate(original_headers) if h.lower() not in excluded_fields]
+                else:
+                    header_lookup = {h.lower(): i for i, h in enumerate(original_headers)}
+                    new_headers, new_map = [], []
+                    for spec in field_specs:
+                        match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
+                        if not match: self._error(f"Invalid FIELDS specification: {spec}")
+                        
+                        original_name, new_name = match.groups()
+                        if original_name.lower() not in header_lookup:
+                            self._error(f"Field '{original_name}' not found in Excel header.")
+                        
+                        new_map.append(header_lookup[original_name.lower()])
+                        if self.hash_keys_mode == 'IGNORE_CASE':
+                            final_field_name = (new_name or original_name).upper()
+                        else:
+                            final_field_name = new_name or original_name
+                        new_headers.append(final_field_name)
+                    final_headers, column_map = new_headers, new_map
+
             if destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
                 cursor = self.db_cursor
                 if destination_mode == 'CREATE_TABLE':
@@ -4538,6 +4576,25 @@ class Interpreter:
                     for row_idx in range(start_row, sheet.nrows):
                         if limit is not None and total_rows_processed >= limit: break
                         raw_row = [sheet.cell_value(row_idx, col_idx) for col_idx in column_map]
+                        processed_row = raw_row
+                        if transform_rules.get('trimall'):
+                            processed_row = [str(field).strip() for field in processed_row]
+                        if transform_rules.get('upperall'):
+                            processed_row = [str(field).upper() for field in processed_row]
+                        if transform_rules.get('lowerall'):
+                            processed_row = [str(field).lower() for field in processed_row]
+                        if transform_rules.get('properall'):
+                            processed_row = [str(field).title() for field in processed_row]
+
+                        for i, header_name in enumerate(final_headers):
+                            rule = transform_rules.get(header_name.lower())
+                            if rule and isinstance(rule, str) and i < len(processed_row):
+                                original_value = str(processed_row[i])
+                                if rule == 'upper': processed_row[i] = original_value.upper()
+                                elif rule == 'lower': processed_row[i] = original_value.lower()
+                                elif rule == 'proper': processed_row[i] = original_value.title()
+                                elif rule == 'trim': processed_row[i] = original_value.strip()
+
                         batch.append(raw_row)
                         total_rows_processed += 1
                         if len(batch) >= options['batchsize']:
@@ -4657,10 +4714,7 @@ class Interpreter:
 
         # --- 1. PARSE CLAUSES ---
         json_filename = self._parse_expression()
-        
-        destination_mode = None
-        destination_target = None
-        db_mode = None
+        destination_mode, destination_target, db_mode = None, None, None
 
         if self._current_token() and self._current_token()[0] == 'CREATE':
             destination_mode = 'CREATE_TABLE'
@@ -4677,7 +4731,6 @@ class Interpreter:
                 self._next_token()
             else:
                 self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-                # Check for NORMALIZE keyword (no table specified)
         else:
             self._error("Expected CREATE TABLE or INTO TABLE clause.")
 
@@ -4685,48 +4738,89 @@ class Interpreter:
             self._next_token()
             return self._parse_load_json_normalize(json_filename, destination_target)
             
-        options = {'batchsize': 10000}
+        options = {'batchsize': 10000, 'fields': '', 'transform': ''}
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
             options_str = self._parse_expression()
-            if 'batchsize=' in options_str:
-                options['batchsize'] = int(options_str.split('=')[1])
+            temp_options = {}
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key = match.group(1).lower()
+                start_pos = match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip().strip(',').strip()
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                temp_options[key] = value
+            options.update(temp_options)
 
         # --- 2. READ AND PROCESS DATA ---
         try:
             with open(json_filename, 'r', encoding='utf-8') as infile:
                 data = json.load(infile)
 
-            if isinstance(data, dict): data = [data] # Allow a single object as well as an array
+            if isinstance(data, dict): data = [data]
             if not isinstance(data, list): self._error("JSON file must contain an array or a single object."); return
             if not data: print("0 records loaded (JSON is empty)."); return
             
             # --- Schema Inference ---
-            headers, seen_keys, col_types = [], set(), {}
+            inferred_headers, seen_keys, col_types = [], set(), {}
             for record in data:
                 if not isinstance(record, dict): self._error("Elements of the JSON array must be objects.")
                 for key, value in record.items():
                     if key not in seen_keys:
-                        seen_keys.add(key); headers.append(key); col_types[key] = 'INTEGER'
+                        seen_keys.add(key); inferred_headers.append(key); col_types[key] = 'INTEGER'
                     
                     current_type = col_types[key]
                     if value is None or current_type == 'TEXT': continue
                     if isinstance(value, str): col_types[key] = 'TEXT'
                     elif isinstance(value, float): col_types[key] = 'REAL'
-                    elif not isinstance(value, int): col_types[key] = 'TEXT' # bool, list, dict -> TEXT
+                    elif not isinstance(value, int): col_types[key] = 'TEXT'
+
+            # --- Process Fields and Transforms ---
+            original_headers = inferred_headers
+            final_headers = original_headers
+            header_key_map = {h: h for h in original_headers}
+
+            if options['fields']:
+                field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
+                header_lookup = {h.lower(): h for h in original_headers}
+                new_headers, new_key_map = [], {}
+                for spec in field_specs:
+                    match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
+                    if not match: self._error(f"Invalid FIELDS specification: {spec}")
+                    original_name, new_name = match.groups()
+                    if original_name.lower() not in header_lookup:
+                        self._error(f"Field '{original_name}' not found in JSON keys.")
+                    original_key_cased = header_lookup[original_name.lower()]
+                    final_field_name = new_name or original_key_cased
+                    new_headers.append(final_field_name)
+                    new_key_map[final_field_name] = original_key_cased
+                final_headers = new_headers
+                header_key_map = new_key_map
+            
+            transform_rules = {}
+            if options.get('transform'):
+                for rule in options['transform'].split(','):
+                    parts = rule.strip().split(':')
+                    if len(parts) == 2:
+                        col_name, func_name = parts
+                        transform_rules[col_name.lower()] = func_name.lower()
+                    elif len(parts) == 1:
+                        transform_rules[parts[0].lower()] = True
             
             # --- Database Operations ---
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
-                cols_def = ', '.join([f'[{h}] {col_types[h]}' for h in headers])
+                cols_def = ', '.join([f'[{h}] {col_types.get(header_key_map.get(h, h), "TEXT")}' for h in final_headers])
                 cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
             if db_mode == 'REPLACE':
                 cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
-            placeholders = ', '.join(['?'] * len(headers))
-            quoted_headers = ', '.join([f'[{h}]' for h in headers])
+            placeholders = ', '.join(['?'] * len(final_headers))
+            quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
             insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
             
             batch_size = options['batchsize']
@@ -4736,9 +4830,29 @@ class Interpreter:
             try:
                 batch = []
                 for record in data:
-                    # Convert dict/list values to JSON strings for storage
-                    row = [json.dumps(record.get(h)) if isinstance(record.get(h), (dict, list)) else record.get(h) for h in headers]
-                    batch.append(row)
+                    processed_row = []
+                    for h in final_headers:
+                        original_key = header_key_map[h]
+                        value = record.get(original_key)
+                        if isinstance(value, (dict, list)):
+                            value = json.dumps(value)
+                        processed_row.append(value)
+                    
+                    if transform_rules.get('trimall'): processed_row = [str(field).strip() if field is not None else None for field in processed_row]
+                    if transform_rules.get('upperall'): processed_row = [str(field).upper() if field is not None else None for field in processed_row]
+                    if transform_rules.get('lowerall'): processed_row = [str(field).lower() if field is not None else None for field in processed_row]
+                    if transform_rules.get('properall'): processed_row = [str(field).title() if field is not None else None for field in processed_row]
+                    
+                    for i, header_name in enumerate(final_headers):
+                        rule = transform_rules.get(header_name.lower())
+                        if rule and isinstance(rule, str) and i < len(processed_row) and processed_row[i] is not None:
+                            original_value = str(processed_row[i])
+                            if rule == 'upper': processed_row[i] = original_value.upper()
+                            elif rule == 'lower': processed_row[i] = original_value.lower()
+                            elif rule == 'proper': processed_row[i] = original_value.title()
+                            elif rule == 'trim': processed_row[i] = original_value.strip()
+
+                    batch.append(processed_row)
                     total_rows_processed += 1
                     if len(batch) >= batch_size:
                         cursor.executemany(insert_sql, batch); batch = []
@@ -4787,7 +4901,7 @@ class Interpreter:
         else:
             self._error("Expected CREATE TABLE or INTO TABLE clause.")
 
-        options = {'batchsize': 10000, 'sample_size': 1000} 
+        options = {'batchsize': 10000, 'sample_size': 1000, 'fields': ''} 
         # --- NEW: Initialize a flag for the linenum feature ---
         add_line_num = False
         transform_rules = {}
@@ -4809,15 +4923,18 @@ class Interpreter:
             for key, value in temp_options.items():
                 if key in ['batchsize', 'sample_size']:
                     options[key] = int(value)
-                # --- NEW: Check for the linenum option ---
                 elif key == 'linenum':
                     add_line_num = value.lower() in ['true', 'y', '1']
+                elif key == 'fields':
+                    options['fields'] = value
                 elif key == 'transform':
                     for rule in value.split(','):
                         parts = rule.strip().split(':')
                         if len(parts) == 2:
                             col_name, func_name = parts
                             transform_rules[col_name.lower()] = func_name.lower()
+                        elif len(parts) == 1:
+                            transform_rules[parts[0].lower()] = True # e.g., trimall, upperall
 
 
         try:
@@ -4850,6 +4967,34 @@ class Interpreter:
                 print("0 records loaded (JSONL file is empty or contains no objects).")
                 return
 
+            original_headers = headers 
+            final_headers = original_headers
+            # This map links the final column name to the original JSON key
+            header_key_map = {h: h for h in original_headers}
+
+            if options['fields']:
+                field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
+                # A lookup for finding original keys case-insensitively
+                header_lookup = {h.lower(): h for h in original_headers}
+                new_headers = []
+                new_key_map = {}
+                for spec in field_specs:
+                    match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
+                    if not match: self._error(f"Invalid FIELDS specification: {spec}")
+                    
+                    original_name, new_name = match.groups()
+                    if original_name.lower() not in header_lookup:
+                        self._error(f"Field '{original_name}' not found in sampled JSONL keys.")
+                    
+                    original_key_cased = header_lookup[original_name.lower()]
+                    final_field_name = new_name or original_key_cased
+                    
+                    new_headers.append(final_field_name)
+                    new_key_map[final_field_name] = original_key_cased
+                
+                final_headers = new_headers
+                header_key_map = new_key_map
+                
             # --- NEW: Add the _linenum column to the schema if requested ---
             if add_line_num:
                 headers.append('_linenum')
@@ -4859,15 +5004,15 @@ class Interpreter:
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
                 # This DDL generation now automatically includes the _linenum column
-                cols_def = ', '.join([f'[{h}] {col_types.get(h, "TEXT")}' for h in headers])
+                cols_def = ', '.join([f'[{h}] {col_types.get(h, "TEXT")}' for h in final_headers]) 
                 cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
             if db_mode == 'REPLACE':
                 cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
-            placeholders = ', '.join(['?'] * len(headers))
-            quoted_headers = ', '.join([f'[{h}]' for h in headers])
+            placeholders = ', '.join(['?'] * len(final_headers))
+            quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
             insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
             
             # --- Full File Processing (Streaming) ---
@@ -4887,9 +5032,24 @@ class Interpreter:
                         
                         record = json.loads(line)
                         # The original headers list (without _linenum) is used to extract data
-                        original_headers = [h for h in headers if h != '_linenum']
-                        row = [json.dumps(record.get(h)) if isinstance(record.get(h), (dict, list)) else record.get(h) for h in original_headers]
-
+                        row = []
+                        for h in final_headers:
+                            if h == '_linenum': continue
+                            original_key = header_key_map[h]
+                            value = record.get(original_key)
+                            if isinstance(value, (dict, list)):
+                                value = json.dumps(value)
+                            row.append(value)
+                            
+                        if transform_rules.get('trimall'):
+                            row = [str(field).strip() for field in row]
+                        if transform_rules.get('upperall'):
+                            row = [str(field).upper() for field in row]
+                        if transform_rules.get('lowerall'):
+                            row = [str(field).lower() for field in row]
+                        if transform_rules.get('properall'):
+                            row = [str(field).title() for field in row]
+                                
                         if transform_rules:
                             for i, header_name in enumerate(original_headers):
                                 rule = transform_rules.get(header_name.lower())
@@ -4899,6 +5059,7 @@ class Interpreter:
                                     elif rule == 'lower': row[i] = original_value.lower()
                                     elif rule == 'proper': row[i] = original_value.title()
                                     elif rule == 'trim': row[i] = original_value.strip()
+                                    
                         
                         # --- NEW: Append the line number to the row data ---
                         if add_line_num:
@@ -4945,40 +5106,65 @@ class Interpreter:
         else:
             self._error("Expected CREATE TABLE clause for LOAD TEXT.")
 
-        add_line_num = False
+        options = {
+            'linenum': False, 'trimall': False, 'upperall': False,
+            'lowerall': False, 'properall': False, 'skipblank': False
+        }
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
             options_str = self._parse_expression()
-            if 'linenum=true' in options_str.lower() or 'linenum=1' in options_str.lower():
-                add_line_num = True
+            temp_options = {}
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key = match.group(1).lower()
+                start_pos = match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip().strip(',').strip()
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                temp_options[key] = value
+            
+            for key, value in temp_options.items():
+                if key in options:
+                    options[key] = value.lower() in ['true', '1', 'y']
 
         try:
-            # --- 1. Define the complete table schema FIRST ---
             headers = ['line_text']
-            if add_line_num:
+            if options['linenum']:
                 headers.append('_linenum')
             
-            # --- 2. Create the table using the final schema ---
             cursor = self.db_cursor
             cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in headers])
             cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
             cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
             
-            # --- 3. Read the file and prepare the data rows ---
             with open(text_filename, 'r', encoding='utf-8', errors='replace') as infile:
                 batch = []
                 line_counter = 1
                 for line in infile:
                     line_content = line.rstrip('\n\r')
+
+                    if options['trimall']:
+                        line_content = line_content.strip()
                     
+                    if options['skipblank'] and not line_content:
+                        line_counter += 1
+                        continue
+
+                    if options['upperall']:
+                        line_content = line_content.upper()
+                    elif options['lowerall']:
+                        line_content = line_content.lower()
+                    elif options['properall']:
+                        line_content = line_content.title()
+
                     row_data = [line_content]
-                    if add_line_num:
+                    if options['linenum']:
                         row_data.append(line_counter)
                     
                     batch.append(row_data)
                     line_counter += 1
             
-            # --- 4. Insert the prepared data ---
             if batch:
                 placeholders = ', '.join(['?'] * len(headers))
                 quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
@@ -5132,8 +5318,7 @@ class Interpreter:
         except Exception as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during HTML load: {e}")
-
-            
+        
     def _parse_load_xml_statement(self):
         """Loads data from an XML file into a database table using a streaming parser."""
         from collections import Counter # Local import for this specific function
@@ -5163,76 +5348,108 @@ class Interpreter:
         else:
             self._error("Expected CREATE TABLE or INTO TABLE clause.")
 
-        # --- NEW: Check for the NORMALIZE keyword ---
         if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'NORMALIZE':
             self._next_token()
-            # Hand off to the new normalization function
             return self._parse_load_xml_normalize(xml_filename, destination_target)
 
-        
         # --- 2. Parse Options ---
-        options = {'record_tag': None, 'fields': None, 'batchsize': 10000}
+        options = {'record_tag': None, 'fields': None, 'batchsize': 10000, 'transform': ''}
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
             options_str = self._parse_expression()
-            for match in re.finditer(r'(\w+)\s*=\s*([^"\s]+|"[^"]*")', options_str):
-                key, value = match.groups()
-                options[key.lower()] = value.strip('"')
-
-        record_tag = options.get('record_tag')
-        field_list = options['fields'].split(',') if options['fields'] else None
-        is_single_record_mode = False
+            temp_options = {}
+            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+            for i, match in enumerate(key_matches):
+                key = match.group(1).lower()
+                start_pos = match.end()
+                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                value = options_str[start_pos:end_pos].strip().strip(',').strip()
+                if value.startswith('"') and value.endswith('"'):
+                    value = value[1:-1]
+                temp_options[key] = value
+            options.update(temp_options)
 
         try:
-            # --- 3. Infer record_tag and fields if not provided ---
-            if not record_tag or not field_list:
-                tree = ET.parse(xml_filename)
-                root = tree.getroot()
-                
-                if not record_tag:
-                    if len(root) == 0: self._error("Cannot infer 'record_tag': XML file has an empty root element.")
-                    child_tags = [child.tag for child in root]
-                    tag_counts = Counter(child_tags)
-                    all_tags_are_unique = all(count == 1 for count in tag_counts.values())
+            # --- 3. Infer Structure (Record Tag and All Available Fields) ---
+            record_tag = options.get('record_tag')
+            is_single_record_mode = False
+            
+            tree = ET.parse(xml_filename)
+            root = tree.getroot()
+            
+            if not record_tag:
+                if len(root) == 0: self._error("Cannot infer 'record_tag': XML file has an empty root element.")
+                child_tags = [child.tag for child in root]
+                tag_counts = Counter(child_tags)
+                all_tags_are_unique = all(count == 1 for count in tag_counts.values())
 
-                    if all_tags_are_unique and len(child_tags) > 1:
-                        record_tag = root.tag
-                        is_single_record_mode = True
-                        print(f"Notice: Detected single-record structure. Using root <{root.tag}> as the record.", file=sys.stderr)
-                    elif 'row' in child_tags:
-                        record_tag = 'row'
-                        print("Notice: 'record_tag' not specified. Inferred '<row>'.", file=sys.stderr)
-                    elif 'record' in child_tags:
-                        record_tag = 'record'
-                        print("Notice: 'record_tag' not specified. Inferred '<record>'.", file=sys.stderr)
-                    else:
-                        record_tag, _ = tag_counts.most_common(1)[0]
-                        print(f"Notice: 'record_tag' not specified. Inferred most frequent tag: '<{record_tag}>'.", file=sys.stderr)
+                if all_tags_are_unique and len(child_tags) > 1:
+                    record_tag = root.tag
+                    is_single_record_mode = True
+                elif 'row' in child_tags: record_tag = 'row'
+                elif 'record' in child_tags: record_tag = 'record'
+                else: record_tag, _ = tag_counts.most_common(1)[0]
+                print(f"Notice: 'record_tag' not specified. Inferred '<{record_tag}>'.", file=sys.stderr)
 
-                if not field_list:
-                    if is_single_record_mode:
-                        field_list = [child.tag for child in root]
-                    else:
-                        first_record_element = root.find(record_tag)
-                        if first_record_element is None: self._error(f"Could not find any elements with the tag '<{record_tag}>'.")
-                        field_list = [child.tag for child in first_record_element]
+            if is_single_record_mode:
+                inferred_fields = [child.tag for child in root]
+            else:
+                first_record_element = root.find(record_tag)
+                if first_record_element is None: self._error(f"Could not find any elements with the tag '<{record_tag}>'.")
+                inferred_fields = [child.tag for child in first_record_element]
+            
+            if not inferred_fields: self._error(f"Inferred record tag '<{record_tag}>' has no child elements to use as fields.")
+            if not options['fields']: print(f"Notice: 'fields' not specified, inferred columns: {', '.join(inferred_fields)}", file=sys.stderr)
+
+            # --- 4. Process Fields and Transforms ---
+            original_headers = inferred_fields
+            final_headers = original_headers
+            header_key_map = {h: h for h in original_headers}
+
+            if options['fields']:
+                field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
+                header_lookup = {h.lower(): h for h in original_headers}
+                new_headers, new_key_map = [], {}
+                for spec in field_specs:
+                    match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
+                    if not match: self._error(f"Invalid FIELDS specification: {spec}")
                     
-                    if not field_list: self._error(f"Inferred record tag '<{record_tag}>' has no child elements to use as fields.")
-                    print(f"Notice: 'fields' not specified, inferred columns: {', '.join(field_list)}", file=sys.stderr)
+                    original_name, new_name = match.groups()
+                    if original_name.lower() not in header_lookup:
+                        self._error(f"Field '{original_name}' not found in inferred XML tags.")
+                    
+                    original_key_cased = header_lookup[original_name.lower()]
+                    final_field_name = new_name or original_key_cased
+                    
+                    new_headers.append(final_field_name)
+                    new_key_map[final_field_name] = original_key_cased
+                
+                final_headers = new_headers
+                header_key_map = new_key_map
 
-            # --- 4. Database Setup ---
+            transform_rules = {}
+            if options.get('transform'):
+                for rule in options['transform'].split(','):
+                    parts = rule.strip().split(':')
+                    if len(parts) == 2:
+                        col_name, func_name = parts
+                        transform_rules[col_name.lower()] = func_name.lower()
+                    elif len(parts) == 1:
+                        transform_rules[parts[0].lower()] = True
+                        
+            # --- 5. Database Setup ---
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
-                cols_def = ', '.join([f'[{h}] TEXT' for h in field_list])
+                cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
                 cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
             if db_mode == 'REPLACE':
                 cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
-            # --- 5. Stream and Load Data ---
-            placeholders = ', '.join(['?'] * len(field_list))
-            quoted_headers = ', '.join([f'[{h}]' for h in field_list])
+            # --- 6. Stream and Load Data ---
+            placeholders = ', '.join(['?'] * len(final_headers))
+            quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
             insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
             
             self.db_connection.execute('BEGIN TRANSACTION;')
@@ -5242,8 +5459,26 @@ class Interpreter:
                 context = ET.iterparse(xml_filename, events=('end',))
                 for _, element in context:
                     if element.tag == record_tag:
-                        row_data = [element.findtext(field, default="") for field in field_list]
-                        batch.append(row_data)
+                        processed_row = []
+                        for h in final_headers:
+                            original_tag = header_key_map[h]
+                            value = element.findtext(original_tag, default="")
+                            processed_row.append(value)
+                        
+                        if transform_rules.get('trimall'):
+                            processed_row = [str(field).strip() for field in processed_row]
+                        # (Add other global transforms like upperall here if needed)
+                        
+                        for i, header_name in enumerate(final_headers):
+                            rule = transform_rules.get(header_name.lower())
+                            if rule and isinstance(rule, str) and i < len(processed_row):
+                                original_value = str(processed_row[i])
+                                if rule == 'upper': processed_row[i] = original_value.upper()
+                                elif rule == 'lower': processed_row[i] = original_value.lower()
+                                elif rule == 'proper': processed_row[i] = original_value.title()
+                                elif rule == 'trim': processed_row[i] = original_value.strip()
+
+                        batch.append(processed_row)
                         total_rows_processed += 1
 
                         if len(batch) >= options['batchsize']:
@@ -5257,8 +5492,7 @@ class Interpreter:
                 print(f"{total_rows_processed} records loaded into table {destination_target}")
 
             except Exception as e:
-                self.db_connection.execute('ROLLBACK;')
-                raise e
+                self.db_connection.execute('ROLLBACK;'); raise e
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -7458,6 +7692,11 @@ ORDER BY 1
         self.token_index = self.gosub_stack.pop()
 
 class JSONToSQLiteNormalizer:
+    SQL_RESERVED_WORDS = {
+            'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 'ATTACH', 'COPY',
+            'VIEW', 'INDEX', 'ORDER', 'GROUP', 'BY', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'SUMMARIZE', 'PRAGMA',
+            'OUTER', 'ON', 'AS', 'IN', 'IS', 'NULL', 'NOT', 'AND', 'OR', 'LIMIT', 'OFFSET'
+        }
     def __init__(
         self,
         db_path: str,
@@ -7473,6 +7712,33 @@ class JSONToSQLiteNormalizer:
         self.keep_arrays = keep_arrays
         self.root_table = root_table or 'main'
 
+    def _quote_identifier(self, identifier: str, quote_style: str = '"') -> str:
+            """
+            Wraps a SQL identifier in quotes only if it's a reserved
+            keyword or contains characters that require quoting.
+            Supports different quoting styles ('"' or '[').
+            """
+            identifier_str = str(identifier)
+            
+            # Determine the quote characters based on the chosen style
+            if quote_style == '[':
+                open_quote, close_quote = '[', ']'
+            else:
+                open_quote, close_quote = '"', '"'
+
+            # Rule 1: If it's a reserved keyword, it must be quoted.
+            if identifier_str.upper() in self.SQL_RESERVED_WORDS:
+                return f'{open_quote}{identifier_str}{close_quote}'
+            
+            # Rule 2: If it's a "simple" identifier, it doesn't need quotes.
+            if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', identifier_str):
+                return identifier_str
+                
+            # Rule 3: If it's not simple, it must be quoted.
+            # Before quoting, remove any characters that would conflict with the quotes.
+            safe_identifier = identifier_str.replace(open_quote, '').replace(close_quote, '')
+            return f'{open_quote}{safe_identifier}{close_quote}'
+    
     # --- HELPER: This was missing ---
     def _infer_sql_type(self, value):
         if isinstance(value, int): return 'INTEGER'
