@@ -275,7 +275,7 @@ class Lexer:
             ('SHELL', r'\bSHELL\b(?!\$)'), ('BROWSER', r'\bBROWSER\b(?!\$)'),('RUN', r'\bRUN\b(?!\$)'),
             ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),('CHAIN', r'\bCHAIN\b(?!\$)'),
             ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), 
-            ('TABLE', r'\bTABLE\b(?!\$)'), ('TEXT', r'\bTEXT\b(?!\$)'), 
+            ('TABLE', r'\bTABLE\b(?!\$)'), ('TEXT', r'\bTEXT\b(?!\$)'),('EVAL', r'\bEVAL\b(?!\$)'),
             ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('REPLACE', r'\bREPLACE\b(?!\$)'),
             ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
             ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
@@ -502,7 +502,7 @@ class Interpreter:
                     'OP', 'RELOP', 'DOT', 'SEMICOLON', 'COLON', 'NEWLINE', 'HASH_SYM'
                 }
     
-    def __init__(self, lexer, cmd_args=None, debug=False):
+    def __init__(self, lexer, cmd_args=None, debug=False, shared_db_connection=None):
         self.lexer = lexer
         self.tokens = self.lexer.tokens
         self.token_index = 0
@@ -516,7 +516,6 @@ class Interpreter:
         self.labels = {}
         self.form_definitions = {}
         self.db_engine = 'sqlite' # Set SQLite as the default engine
-        self.db_connection = None
         self.sql_fatal_errors = True
         self.trace_mode = False   # FOR TRON AND TROFF
         self.program_terminated = False # Termination flag
@@ -531,8 +530,17 @@ class Interpreter:
         
         self.debug_mode = debug # <-- And add this line
         self.jump_map = {}
+        self.db_connection = None
+        self._is_shared_connection = False # Flag to track ownership
+
+        if shared_db_connection:
+            self.db_connection = shared_db_connection
+            self.db_cursor = self.db_connection.cursor()
+            self._is_shared_connection = True
+        else:
+            self._init_db() # Only create a new DB if one wasn't passed in
+
         self._pre_scan_for_jumps()
-        self._init_db()
         self._scan_for_labels()
 
     def _pre_scan_for_jumps(self):
@@ -739,7 +747,9 @@ class Interpreter:
 
     def close(self):
         self._close_all_files()
-        if self.db_connection: self.db_connection.close(); self.db_connection = None
+        if self.db_connection and not self._is_shared_connection:
+            self.db_connection.close()
+            self.db_connection = None
 
     def __del__(self): self.close()
 
@@ -818,38 +828,66 @@ class Interpreter:
             # Both SQLite and DuckDB support rowid as fallback
             return None
             
-    def _get_table_metadata(self, table_name: str) -> dict:
+    def _get_table_metadata(self, table_name: str, include_indexes: bool = False) -> dict:
         """
         Fetches comprehensive metadata for a given table.
 
         Args:
             table_name: The name of the table to inspect.
+            include_indexes: Whether to include index information.
 
         Returns:
             A dictionary containing:
             {
                 'pk': 'primary_key_column_name',
                 'columns': ['col1', 'col2', ...],
-                'types': { 'COL1_UPPER': 'INTEGER', 'COL2_UPPER': 'TEXT', ... }
+                'types': { 'COL1_UPPER': 'INTEGER', 'COL2_UPPER': 'TEXT', ... },
+                'indexes': ['CREATE INDEX ...', ...] (if include_indexes=True)
             }
         """
         metadata = {'pk': None, 'columns': [], 'types': {}}
+        
         try:
             if self.db_engine == 'duckdb':
                 # DuckDB: Get all info from information_schema
                 cols_sql = f"SELECT column_name, data_type FROM information_schema.columns WHERE table_name = '{table_name}' ORDER BY ordinal_position"
                 schema_info = self._execute_sql(cols_sql, is_query=True)
-                if not schema_info: self._error(f"Table '{table_name}' not found or has no columns.")
+                if not schema_info: 
+                    self._error(f"Table '{table_name}' not found or has no columns.")
                 
                 for row in schema_info:
                     col_name, col_type = row[0], row[1].upper()
                     metadata['columns'].append(col_name)
                     metadata['types'][col_name.upper()] = col_type
                 metadata['pk'] = self._get_primary_key(table_name) or "rowid"
+                
+                # Get indexes if requested
+                if include_indexes:
+                    index_sql = f"""
+                    SELECT sql FROM duckdb_indexes() WHERE table_name = '{table_name}'
+                    UNION ALL
+                    -- Primary keys and unique constraints for this table
+                    SELECT 
+                        'ALTER TABLE "' || tc.table_name || '" ADD CONSTRAINT "' || tc.constraint_name || 
+                        '" ' || tc.constraint_type || ' (' || 
+                        string_agg('"' || kcu.column_name || '"', ', ' ORDER BY kcu.ordinal_position) || ');' AS sql
+                    FROM information_schema.table_constraints tc
+                    JOIN information_schema.key_column_usage kcu
+                        ON tc.constraint_name = kcu.constraint_name
+                        AND tc.table_name = kcu.table_name
+                    WHERE tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+                        AND tc.table_name = '{table_name}'
+                    GROUP BY tc.table_name, tc.constraint_name, tc.constraint_type
+                    ORDER BY 1
+                    """
+                    index_results = self._execute_sql(index_sql, is_query=True)
+                    metadata['indexes'] = [row[0] for row in index_results] if index_results else []
+                    
             else: 
                 # SQLite: Use PRAGMA
-                schema_info = self._execute_sql(f"PRAGMA table_info('{self._quote_identifier(table_name)}')", is_query=True)
-                if not schema_info: self._error(f"Table '{table_name}' not found.")
+                schema_info = self._execute_sql(f"PRAGMA table_info('{table_name}')", is_query=True)
+                if not schema_info: 
+                    self._error(f"Table '{table_name}' not found.")
                 
                 # schema_info format: (cid, name, type, notnull, dflt_value, pk)
                 for col in schema_info:
@@ -857,12 +895,130 @@ class Interpreter:
                     metadata['columns'].append(col_name)
                     metadata['types'][col_name.upper()] = col_type
                 metadata['pk'] = self._get_primary_key(table_name) or "rowid"
+                
+                # Get indexes if requested
+                if include_indexes:
+                    index_sql = f"""
+                    SELECT sql FROM sqlite_master 
+                    WHERE type = 'index' AND sql IS NOT NULL AND tbl_name = '{table_name}'
+
+                    UNION ALL
+
+                    SELECT 
+                        'ALTER TABLE "' || m.name || '" ADD CONSTRAINT "pk_' || m.name || 
+                        '" PRIMARY KEY (' || group_concat('"' || p.name || '"', ', ') || ');' AS sql
+                    FROM sqlite_master m
+                    JOIN pragma_table_info(m.name) p
+                        ON m.name = '{table_name}'
+                    WHERE p.pk > 0
+                    GROUP BY m.name
+                    HAVING COUNT(p.pk) > 0
+
+                    UNION ALL
+
+                    SELECT 
+                        'ALTER TABLE "' || m.name || '" ADD CONSTRAINT "unique_' || m.name || '_' || group_concat(p.name, '_') || 
+                        '" UNIQUE (' || group_concat('"' || p.name || '"', ', ') || ');' AS sql
+                    FROM sqlite_master m
+                    JOIN pragma_index_list(m.name) il ON m.name = '{table_name}'
+                    JOIN pragma_index_info(il.name) p ON il.name = p.name
+                    WHERE il.origin = 'u'
+                    GROUP BY m.name, il.name
+
+                    ORDER BY 1
+                    """
+                    index_results = self._execute_sql(index_sql, is_query=True)
+                    metadata['indexes'] = [row[0] for row in index_results] if index_results else []
             
             return metadata
+            
         except Exception as e:
             # Re-raise as a more specific error
             self._error(f"Failed to get metadata for table '{table_name}': {e}")
 
+    def _get_database_objects(self, object_type: str = 'tables') -> list:
+        """
+        Returns a list of database objects (tables or indexes) for both SQLite and DuckDB.
+        
+        Args:
+            object_type: 'tables' or 'indexes'
+        
+        Returns:
+            List of object names or SQL statements
+        """
+        if object_type.lower() == 'tables':
+            if self.db_engine == 'duckdb':
+                sql = "SHOW TABLES"
+            else:  # SQLite
+                sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        
+        elif object_type.lower() == 'indexes':
+            if self.db_engine == 'duckdb':
+                sql = """
+                SELECT sql FROM duckdb_indexes()
+                UNION ALL
+                -- Primary keys and unique constraints
+                SELECT 
+                    'ALTER TABLE "' || tc.table_name || '" ADD CONSTRAINT "' || tc.constraint_name || 
+                    '" ' || tc.constraint_type || ' (' || 
+                    string_agg('"' || kcu.column_name || '"', ', ' ORDER BY kcu.ordinal_position) || ');' AS sql
+                FROM information_schema.table_constraints tc
+                JOIN information_schema.key_column_usage kcu
+                    ON tc.constraint_name = kcu.constraint_name
+                    AND tc.table_name = kcu.table_name
+                WHERE tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
+                GROUP BY tc.table_name, tc.constraint_name, tc.constraint_type
+                ORDER BY 1
+                """
+            else:  # SQLite
+                sql = """
+                SELECT sql FROM sqlite_master 
+                WHERE type = 'index' AND sql IS NOT NULL
+
+                UNION ALL
+
+                SELECT 
+                    'ALTER TABLE "' || m.name || '" ADD CONSTRAINT "pk_' || m.name || 
+                    '" PRIMARY KEY (' || group_concat('"' || p.name || '"', ', ') || ');' AS sql
+                FROM sqlite_master m
+                JOIN pragma_table_info(m.name) p
+                    ON m.name IS NOT NULL
+                WHERE p.pk > 0
+                GROUP BY m.name
+                HAVING COUNT(p.pk) > 0
+
+                UNION ALL
+
+                SELECT 
+                    'ALTER TABLE "' || m.name || '" ADD CONSTRAINT "unique_' || m.name || '_' || group_concat(p.name, '_') || 
+                    '" UNIQUE (' || group_concat('"' || p.name || '"', ', ') || ');' AS sql
+                FROM sqlite_master m
+                JOIN pragma_index_list(m.name) il ON m.name IS NOT NULL
+                JOIN pragma_index_info(il.name) p ON il.name = p.name
+                WHERE il.origin = 'u'
+                GROUP BY m.name, il.name
+
+                ORDER BY 1
+                """
+        else:
+            raise ValueError(f"Unsupported object_type: {object_type}")
+        
+        results = self._execute_sql(sql, is_query=True)
+        return [row[0] for row in results] if results else []
+
+    def _get_table_list(self):
+        return self._get_database_objects('tables')
+        '''
+        """Returns a list of user-created table names for both SQLite and DuckDB."""
+        if self.db_engine == 'duckdb':
+            sql = "SHOW TABLES"
+        else:  # SQLite
+            sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        
+        results = self._execute_sql(sql, is_query=True)
+        return [row[0] for row in results] if results else []
+        '''
+    
     def _find_variable_key(self, var_name):
         """Finds the actual stored key for a variable.
         
@@ -1232,6 +1388,8 @@ class Interpreter:
             self._parse_chain_statement()
         elif token[0] == 'RUN':                                   # Run another script and come back
             self._parse_run_statement()
+        elif token[0] == 'EVAL':                                  # Run script in a string
+            self._parse_eval_statement()
         elif token[0] == 'ZIP':                                   # zip file to zip folder
             self._parse_zip_statement()
         elif token[0] == 'UNZIP':                                 # unzip zip folder
@@ -2395,7 +2553,13 @@ class Interpreter:
         elif name == 'ISDIGIT':
             if len(args) != 1: self._error("ISDIGIT requires 1 argument.")
             return -1.0 if str(args[0]).isdigit() else 0.0
-
+        elif name == 'ISNUMERIC':
+            if len(args) != 1: self._error("ISNUMERIC requires 1 argument.")
+            try:
+                float(args[0])
+                return -1.0 # True
+            except (ValueError, TypeError):
+                return 0.0 # False
         elif name == 'ISALNUM':
             if len(args) != 1: self._error("ISALNUM requires 1 argument.")
             return -1.0 if str(args[0]).isalnum() else 0.0
@@ -2645,6 +2809,23 @@ class Interpreter:
                 print(token)
             print("--------------------\n")            
 
+    def _dump_tokens(self):
+        print("=== TOKEN DUMP ===")
+        print(f"Current token index: {self.token_index}")
+        print(f"Total tokens: {len(self.tokens)}")
+        print()
+        
+        # Show tokens around current position
+        start = 0   #  max(0, self.token_index - 5)
+        end = len(self.tokens) # min(len(self.tokens), self.token_index + 10)
+        
+        for i in range(start, end):
+            marker = " -> " if i == self.token_index else "    "
+            if i < len(self.tokens):
+                token = self.tokens[i]
+                line, col = self.lexer.get_line_col(token[2])
+                print(f"{marker}[{i:3d}] {token[0]:15} '{token[1]}' (Line {line}, Col {col})")
+                    
     def _parse_dump_statement(self):
         """
         Parse and execute a DUMP statement for debugging.
@@ -2664,21 +2845,7 @@ class Interpreter:
         self._next_token()
         
         if target == 'TOKENS':
-            print("=== TOKEN DUMP ===")
-            print(f"Current token index: {self.token_index}")
-            print(f"Total tokens: {len(self.tokens)}")
-            print()
-            
-            # Show tokens around current position
-            start = 0   #  max(0, self.token_index - 5)
-            end = len(self.tokens) # min(len(self.tokens), self.token_index + 10)
-            
-            for i in range(start, end):
-                marker = " -> " if i == self.token_index else "    "
-                if i < len(self.tokens):
-                    token = self.tokens[i]
-                    line, col = self.lexer.get_line_col(token[2])
-                    print(f"{marker}[{i:3d}] {token[0]:15} '{token[1]}' (Line {line}, Col {col})")
+            self._dump_tokens()
                 
         elif target == 'VARIABLES':
             print("=== VARIABLE DUMP ===")
@@ -3744,7 +3911,38 @@ class Interpreter:
             if 'File not found' in str(e):
                 self.variables['ERR'] = 2.0
             self._error(f"CHAIN error: {e}")
+    # In the Interpreter class
 
+    def _parse_eval_statement(self):
+        """Parses and executes a string of DbBasic code dynamically."""
+        self._expect('EVAL')
+        code_string = self._parse_expression()
+        self._execute_basic_string(code_string)
+    
+    def _execute_basic_string(self, code_string):
+        """A reusable helper to execute a string of DbBasic code."""
+        if not isinstance(code_string, str):
+            self._error("Argument for dynamic execution must be a string.")
+        if not code_string.strip():
+            return
+
+        try:
+            processed_code = preprocess_continuations(code_string + '\n')
+            eval_lexer = Lexer(processed_code)
+            
+            eval_interpreter = Interpreter(eval_lexer,
+                                           self.command_args,
+                                           debug=self.debug_mode,
+                                           shared_db_connection=self.db_connection)
+
+            eval_interpreter.variables = self.variables
+            eval_interpreter.file_handles = self.file_handles
+
+            eval_interpreter.run()
+
+        except Exception as e:
+            self._error(f"Error during dynamic execution: {e}")
+            
     def _parse_zip_statement(self):
         """
         Parse and execute a ZIP statement to create an archive.
@@ -4156,11 +4354,14 @@ class Interpreter:
         else: self._error("Expected CREATE TABLE, INTO TABLE clause.")
 
         options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 'trimall': False,
-                   'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 'fields': ''}
+                   'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 
+                   'fields': '', 'process_by': None}
         temp_options = {}
         add_line_num = False
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token(); options_str = self._parse_expression()
+        process_script = None
+        if self._current_token() and self._current_token()[0].upper() == 'OPTIONS':
+            self._next_token()
+            options_str = self._parse_expression()
             key_matches = list(re.finditer(r'\b(\w+)=', options_str))
             for i, match in enumerate(key_matches):
                 key, start_pos = match.group(1).lower(), match.end()
@@ -4168,13 +4369,22 @@ class Interpreter:
                 value = options_str[start_pos:end_pos].strip().strip(',')
                 if value.startswith('"') and value.endswith('"'): value = value[1:-1]
                 temp_options[key] = value
+
             for key, value in temp_options.items():
-                if key == 'header': options['header'] = value.lower() in ['true', 'y', '1']
-                elif key in ['skip', 'limit', 'batchsize']: options[key] = int(value)
+                if key == 'header': 
+                    options['header'] = value is None or value.lower() in ['true', 'y', '1']
+                elif key in ['skip', 'limit', 'batchsize']: 
+                    options[key] = int(value)
                 elif 'linenum' in temp_options:
                     add_line_num = temp_options['linenum'].lower() in ['true', 'y', '1']
-                else: options[key] = value
-        
+                else: 
+                    options[key] = value
+
+            if options['process_by']:
+                script_var_name = options['process_by']
+                if script_var_name not in self.variables or not isinstance(self.variables.get(script_var_name), str):
+                    self._error(f"Script variable '{script_var_name}' for PROCESS_BY not found or not a string.")
+                process_script = self.variables[script_var_name] 
         transform_rules = {}
         if 'transform' in temp_options:
             for rule in temp_options['transform'].split(','):
@@ -4184,27 +4394,49 @@ class Interpreter:
                     # Store as lowercase for case-insensitive matching
                     transform_rules[col_name.lower()] = func_name.lower()
                 elif len(parts) == 1:
-                    transform_rules[parts[0]] = True    # i.e. trimall
-                        
-        #print("DEBUG1:", options)
-        #print("DEBUG2:", transform_rules)
+                    transform_rules[parts[0]] = True    # i.e. trimall       
+        #print("DEBUG11:", options)
+        #print("DEBUG22:", transform_rules)
         #print("DEBUG destination_mode:", destination_mode)
         try:
             with open(csv_filename, 'r', newline='', encoding=options['encoding']) as infile:
-                for _ in range(options['skip']): next(infile)
-                reader = csv.reader(infile, delimiter=options['delimiter'])
-                
                 original_headers = []
+                
+                # Apply skip option first
+                for _ in range(options['skip']): 
+                    try:
+                        next(infile)
+                    except StopIteration:
+                        break # File is smaller than skip count
+
                 if options['header']:
-                    try: original_headers = next(reader)
-                    except StopIteration: return
+                    try:
+                        # Read just the header row
+                        header_line = next(infile)
+                        original_headers = next(csv.reader([header_line], delimiter=options['delimiter']))
+                    except StopIteration:
+                        # File is empty or only contains skipped lines
+                        pass 
+                else:
+                    # No header: Peek at the first data row to get column count
+                    first_line = next(infile, None) # Read one line without crashing on empty file
+                    if first_line:
+                        num_columns = len(next(csv.reader([first_line], delimiter=options['delimiter'])))
+                        original_headers = [f"C{i + 1}" for i in range(num_columns)]
+                    
+                    # Rewind the file to the beginning to read all data rows in the main loop
+                    infile.seek(0)
+                    # Re-apply the skip to position the reader correctly for the main loop
+                    for _ in range(options['skip']): next(infile)
+
+                # --- The rest of the logic can now proceed ---
+                reader = csv.reader(infile, delimiter=options['delimiter'])
 
                 final_headers, column_map = original_headers, list(range(len(original_headers))) if original_headers else None
-                #print("DEBUG:","BEFORE CHECK OF FIELDS")
                 if options['fields']:
-                    if not options['header']: self._error("FIELDS option requires header=true.")
+                    #if not options['header']: self._error("FIELDS option requires header=true.")
                     field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
-                    #print("DEBUG:","INSIDE CHECK OF FIELDS")
+
                     if field_specs[0].strip() == '*':
                         excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
                         final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
@@ -4232,14 +4464,8 @@ class Interpreter:
                     if add_line_num:
                         final_headers.append('_linenum') 
                     if destination_mode == 'CREATE_TABLE':
-                        if not final_headers and not options['fields']:
-                            #print("DEBUG ERROR:","No header nor fields")
-                            self._error("CREATE TABLE requires header=true or a FIELDS option.")
-                        #cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
                         cols_def = ', '.join([f"[{h}] {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in final_headers])
-                        #print("DEBUG DROP:",f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                         cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
-                        #print("DEBUG CREATE:",f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
                         cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
                     if db_mode == 'REPLACE': 
                         cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
@@ -4252,7 +4478,25 @@ class Interpreter:
                             if column_map is None: column_map = list(range(len(row)))
                             if not row: continue
                             processed_row = [row[i] for i in column_map if i < len(row)]
-                            
+                            # --- Apply PROCESSING SCRIPT if it exists ---
+                            if process_script:
+                                # 1. Create a 'rec' hash for the current row
+                                rec_hash = dict(zip(final_headers, processed_row))
+                                self.variables['rec'] = rec_hash
+
+                                # 2. Execute the user's script
+                                self._execute_basic_string(process_script)
+
+                                # 3. Retrieve the modified 'rec' hash and check validation flag
+                                updated_rec = self.variables.get('rec', {})
+                                if updated_rec.get('is_valid', -1.0) == 0.0:
+                                    del self.variables['rec'] # Clean up global variable
+                                    continue # Skip this row
+
+                                # 4. Rebuild the ordered row from the (potentially modified) hash
+                                processed_row = [updated_rec.get(h) for h in final_headers]
+                                del self.variables['rec'] # Clean up global variable
+
                             if transform_rules:
                                 for i, header_name in enumerate(final_headers):
                                     rule = transform_rules.get(header_name.lower())
@@ -4463,6 +4707,7 @@ class Interpreter:
                 raise e
                 
     def _parse_load_excel_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('LOAD')
         self._expect('EXCEL')
 
@@ -4484,65 +4729,124 @@ class Interpreter:
                 self._next_token()
             else:
                 self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else: self._error("Expected CREATE TABLE, INTO TABLE clause.")
+        else: 
+            self._error("Expected CREATE TABLE or INTO TABLE clause.")
 
-        options = {'header': True, 'sheetname': None, 'sheetindex': 0, 'batchsize': 10000,
-                   'limit': None, 'fields': '', 'transform': '', 'format': 'CSV'}
+        # Enhanced options with full CSV feature parity
+        options = {
+            'header': True, 'sheetname': None, 'sheetindex': 0, 'batchsize': 10000,
+            'limit': None, 'skip': 0, 'fields': '', 'transform': '', 'encoding': 'utf-8',
+            'trimall': False, 'process_by': None
+        }
+        temp_options = {}
+        add_line_num = False
+        process_script = None
+
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token(); options_str = self._parse_expression(); temp_options = {}
+            self._next_token()
+            options_str = self._parse_expression()
+            
+            # Use the same robust OPTIONS parser as CSV
             key_matches = list(re.finditer(r'\b(\w+)=', options_str))
             for i, match in enumerate(key_matches):
-                key, start_pos = match.group(1).lower(), match.end()
+                key = match.group(1).lower()
+                start_pos = match.end()
                 end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip('"')
+                value = options_str[start_pos:end_pos].strip().strip(',').strip()
+                if value.startswith('"') and value.endswith('"'): 
+                    value = value[1:-1]
                 temp_options[key] = value
-            for key, value in temp_options.items():
-                if key == 'header': options['header'] = value.lower() in ['true', '1', 'y']
-                elif key in ['sheetindex', 'batchsize', 'limit']: options[key] = int(value)
-                elif key == 'transform':
-                    options['transform'] = value
-                else: options[key] = value
 
-            transform_rules = {}
-            if options.get('transform'):
-                for rule in options['transform'].split(','):
-                    parts = rule.strip().split(':')
-                    if len(parts) == 2:
-                        col_name, func_name = parts
-                        transform_rules[col_name.lower()] = func_name.lower()
-                    elif len(parts) == 1:
-                        transform_rules[parts[0].lower()] = True
+            # Process all options with full CSV compatibility
+            for key, value in temp_options.items():
+                if key == 'header': 
+                    options['header'] = value is None or value.lower() in ['true', '1', 'y']
+                elif key in ['sheetindex', 'batchsize', 'limit', 'skip']: 
+                    options[key] = int(value)
+                elif key == 'linenum':
+                    add_line_num = value is None or value.lower() in ['true', 'y', '1']
+                elif key in ('trimall', 'upperall', 'lowerall', 'properall'):
+                    options[key] = value is None or value.lower() in ['true', 'y', '1']
+                else: 
+                    options[key] = value
+
+            # Handle processing script like CSV
+            if options['process_by']:
+                script_var_name = options['process_by']
+                if script_var_name not in self.variables or not isinstance(self.variables.get(script_var_name), str):
+                    self._error(f"Script variable '{script_var_name}' for PROCESS_BY not found or not a string.")
+                process_script = self.variables[script_var_name]
+
+        # Parse transform rules like CSV
+        transform_rules = {}
+        if options.get('transform'):
+            for rule in options['transform'].split(','):
+                parts = rule.strip().split(':')
+                if len(parts) == 2:
+                    col_name, func_name = parts
+                    transform_rules[col_name.lower()] = func_name.lower()
+                elif len(parts) == 1:
+                    transform_rules[parts[0].lower()] = True
+
         try:
             workbook = xlrd3.open_workbook(excel_filename)
             sheet = None
+            
+            # Sheet selection logic
             if options['sheetname']:
                 target_sheet_name = options['sheetname'].lower()
                 sheet_names_lower = [name.lower() for name in workbook.sheet_names()]
                 if target_sheet_name in sheet_names_lower:
                     sheet = workbook.sheet_by_index(sheet_names_lower.index(target_sheet_name))
-                else: self._error(f"No sheet named '{options['sheetname']}'.")
-            else: sheet = workbook.sheet_by_index(options['sheetindex'])
+                else: 
+                    self._error(f"No sheet named '{options['sheetname']}'.")
+            else: 
+                sheet = workbook.sheet_by_index(options['sheetindex'])
 
-            start_row = 0
-            original_headers = [str(cell.value) for cell in sheet.row(0)] if options['header'] else [f"Field_{i+1}" for i in range(sheet.ncols)]
-            if options['header']: start_row = 1
+            # Apply skip option (similar to CSV)
+            start_row = options['skip']
             
+            # Header processing with robust column name generation
+            original_headers = []
+            if options['header'] and start_row < sheet.nrows:
+                # Read the header row
+                raw_headers = [str(sheet.cell_value(start_row, col)) for col in range(sheet.ncols)]
+                start_row += 1
+                
+                # Clean up header names and generate fallbacks for empty cells
+                for i, header in enumerate(raw_headers):
+                    cleaned_header = header.strip() if header and header != 'None' else ""
+                    if not cleaned_header:
+                        cleaned_header = f"C{i + 1}"
+                    original_headers.append(cleaned_header)
+            else:
+                # No header row - generate column names
+                if sheet.ncols > 0:
+                    original_headers = [f"C{i + 1}" for i in range(sheet.ncols)]
+
+            if not original_headers:
+                print("0 records loaded (Excel file is empty or has no data).")
+                return
+
+            # Field selection logic (same as CSV)
             final_headers, column_map = original_headers, list(range(len(original_headers)))
             
             if options['fields']:
-                if not options['header']: self._error("FIELDS option requires header=true.")
                 field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
-                
+
                 if field_specs[0].strip() == '*':
+                    # Exclude specified fields
                     excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
                     final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
                     column_map = [i for i, h in enumerate(original_headers) if h.lower() not in excluded_fields]
                 else:
+                    # Include only specified fields with optional renaming
                     header_lookup = {h.lower(): i for i, h in enumerate(original_headers)}
                     new_headers, new_map = [], []
                     for spec in field_specs:
                         match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
-                        if not match: self._error(f"Invalid FIELDS specification: {spec}")
+                        if not match: 
+                            self._error(f"Invalid FIELDS specification: {spec}")
                         
                         original_name, new_name = match.groups()
                         if original_name.lower() not in header_lookup:
@@ -4556,13 +4860,20 @@ class Interpreter:
                         new_headers.append(final_field_name)
                     final_headers, column_map = new_headers, new_map
 
+            # Add line number column if requested
+            if add_line_num:
+                final_headers.append('_linenum')
+
+            # Database setup
             if destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
                 cursor = self.db_cursor
                 if destination_mode == 'CREATE_TABLE':
-                    cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
+                    cols_def = ', '.join([f'[{h}] {"INTEGER" if h == "_linenum" else "TEXT"}' for h in final_headers])
                     cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                     cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
-                if db_mode == 'REPLACE': cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
+                
+                if db_mode == 'REPLACE': 
+                    cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
                 placeholders = ', '.join(['?'] * len(final_headers))
                 quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
@@ -4570,45 +4881,108 @@ class Interpreter:
                 
                 batch, total_rows_processed = [], 0
                 limit = options.get('limit')
+                line_counter = start_row + 1  # Track actual Excel row numbers
                 
                 self.db_connection.execute('BEGIN TRANSACTION;')
                 try:
                     for row_idx in range(start_row, sheet.nrows):
-                        if limit is not None and total_rows_processed >= limit: break
-                        raw_row = [sheet.cell_value(row_idx, col_idx) for col_idx in column_map]
-                        processed_row = raw_row
-                        if transform_rules.get('trimall'):
-                            processed_row = [str(field).strip() for field in processed_row]
-                        if transform_rules.get('upperall'):
-                            processed_row = [str(field).upper() for field in processed_row]
-                        if transform_rules.get('lowerall'):
-                            processed_row = [str(field).lower() for field in processed_row]
-                        if transform_rules.get('properall'):
-                            processed_row = [str(field).title() for field in processed_row]
+                        if limit is not None and total_rows_processed >= limit: 
+                            break
+                        
+                        # Extract raw row data using column mapping
+                        raw_row = []
+                        for col_idx in column_map:
+                            if col_idx < sheet.ncols:
+                                cell_value = sheet.cell_value(row_idx, col_idx)
+                                # Convert Excel numbers to appropriate Python types
+                                if isinstance(cell_value, float) and cell_value.is_integer():
+                                    cell_value = int(cell_value)
+                                raw_row.append(str(cell_value) if cell_value is not None else "")
+                            else:
+                                raw_row.append("")
+                        
+                        processed_row = raw_row[:]
 
-                        for i, header_name in enumerate(final_headers):
-                            rule = transform_rules.get(header_name.lower())
-                            if rule and isinstance(rule, str) and i < len(processed_row):
-                                original_value = str(processed_row[i])
-                                if rule == 'upper': processed_row[i] = original_value.upper()
-                                elif rule == 'lower': processed_row[i] = original_value.lower()
-                                elif rule == 'proper': processed_row[i] = original_value.title()
-                                elif rule == 'trim': processed_row[i] = original_value.strip()
+                        # Apply processing script if specified
+                        if process_script:
+                            # Create 'rec' hash for the current row (excluding _linenum)
+                            data_headers = [h for h in final_headers if h != '_linenum']
+                            rec_hash = dict(zip(data_headers, processed_row))
+                            self.variables['rec'] = rec_hash
 
-                        batch.append(raw_row)
+                            # Execute the user's script
+                            self._execute_basic_string(process_script)
+
+                            # Check validation and retrieve modified data
+                            updated_rec = self.variables.get('rec', {})
+                            if updated_rec.get('is_valid', -1.0) == 0.0:
+                                del self.variables['rec']
+                                line_counter += 1
+                                continue  # Skip this row
+
+                            # Rebuild row from modified hash
+                            processed_row = [updated_rec.get(h, "") for h in data_headers]
+                            del self.variables['rec']
+
+                        # Apply transform rules
+                        if transform_rules:
+                            data_headers = [h for h in final_headers if h != '_linenum']
+                            
+                            # Global transforms
+                            if transform_rules.get('trimall'):
+                                processed_row = [str(field).strip() for field in processed_row]
+                            if transform_rules.get('upperall'):
+                                processed_row = [str(field).upper() for field in processed_row]
+                            if transform_rules.get('lowerall'):
+                                processed_row = [str(field).lower() for field in processed_row]
+                            if transform_rules.get('properall'):
+                                processed_row = [str(field).title() for field in processed_row]
+
+                            # Field-specific transforms
+                            for i, header_name in enumerate(data_headers):
+                                if i < len(processed_row):
+                                    rule = transform_rules.get(header_name.lower())
+                                    if rule and isinstance(rule, str):
+                                        original_value = str(processed_row[i])
+                                        if rule == 'upper': 
+                                            processed_row[i] = original_value.upper()
+                                        elif rule == 'lower': 
+                                            processed_row[i] = original_value.lower()
+                                        elif rule == 'proper': 
+                                            processed_row[i] = original_value.title()
+                                        elif rule == 'trim': 
+                                            processed_row[i] = original_value.strip()
+
+                        # Add line number if requested
+                        if add_line_num:
+                            processed_row.append(line_counter)
+
+                        batch.append(processed_row)
                         total_rows_processed += 1
+                        line_counter += 1
+                        
                         if len(batch) >= options['batchsize']:
-                            cursor.executemany(insert_sql, batch); batch = []
+                            cursor.executemany(insert_sql, batch)
+                            batch = []
                     
-                    if batch: cursor.executemany(insert_sql, batch)
+                    if batch: 
+                        cursor.executemany(insert_sql, batch)
                     self.db_connection.execute('COMMIT;')
                     print(f"{total_rows_processed} records loaded into table {destination_target}")
+                    
                 except Exception as e:
-                    self.db_connection.execute('ROLLBACK;'); raise e
+                    self.db_connection.execute('ROLLBACK;')
+                    raise e
 
-        except FileNotFoundError: self._error(f"File not found: {excel_filename}")
-        except xlrd3.biffh.XLRDError as e: self._error(f"Excel file error: {e}")
-        except Exception as e: self._error(f"An error occurred during Excel load: {e}")
+        except FileNotFoundError: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, f"File not found: {excel_filename}"
+            self._error(f"File not found: {excel_filename}")
+        except xlrd3.biffh.XLRDError as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"Excel file error: {e}"
+            self._error(f"Excel file error: {e}")
+        except Exception as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during Excel load: {e}")
 
     def _parse_load_json_normalize(self, json_filename, root_table='main'):
         """Normalizes JSON data into multiple related tables."""
@@ -4641,13 +5015,13 @@ class Interpreter:
                 elif key == 'prefix':
                     options['prefix'] = value.strip('"\'')
                 elif key == 'drop_existing':
-                    options['drop_existing'] = value.lower() in ['true', '1', 'yes']
+                    options['drop_existing'] = value is None or value.lower() in ['true', '1', 'yes']
                 elif key == 'batchsize':
                     options['batchsize'] = int(value)
                 elif key == 'keep_objects':
-                    options['keep_objects'] = value.lower() in ['true', '1', 'yes']
+                    options['keep_objects'] = value is None or value.lower() in ['true', '1', 'yes']
                 elif key == 'keep_arrays':
-                    options['keep_arrays'] = value.lower() in ['true', '1', 'yes']
+                    options['keep_arrays'] = value is None or value.lower() in ['true', '1', 'yes']
 
         try:
             # Load JSON file
@@ -4686,10 +5060,8 @@ class Interpreter:
 
             # Report tables and row counts
             self.db_connection.commit()
-            self.db_cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-            tables = [row[0] for row in self.db_cursor.fetchall()]
+            
+            tables = self._get_table_list()
             print(f"  - Created {len(tables)} tables:")
             for table in tables:
                 self.db_cursor.execute(f"SELECT COUNT(*) FROM {table}")
@@ -4737,8 +5109,13 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'NORMALIZE':
             self._next_token()
             return self._parse_load_json_normalize(json_filename, destination_target)
-            
-        options = {'batchsize': 10000, 'fields': '', 'transform': ''}
+        
+        options = {
+            'batchsize': 10000, 'fields': '', 'transform': '', 'skip': 0, 
+            'limit': None, 'trimall': False,'upperall': False,'lowerall': False,'properall': False, 'process_by': None
+        }
+        add_line_num = False
+        process_script = None
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
             options_str = self._parse_expression()
@@ -4754,6 +5131,15 @@ class Interpreter:
                 temp_options[key] = value
             options.update(temp_options)
 
+            for key, value in temp_options.items():
+                if key in ['batchsize', 'skip', 'limit']:
+                    options[key] = int(value)
+                elif key == 'linenum':
+                    add_line_num = value is None or value.lower() in ['true', 'y', '1']
+                elif key in ('trimall', 'upperall', 'lowerall', 'properall'):
+                    options[key] = value is None or value.lower() in ['true', 'y', '1']
+                else:
+                    options[key] = value
         # --- 2. READ AND PROCESS DATA ---
         try:
             with open(json_filename, 'r', encoding='utf-8') as infile:
@@ -4799,6 +5185,12 @@ class Interpreter:
                 final_headers = new_headers
                 header_key_map = new_key_map
             
+            if options['process_by']:
+                script_var_name = options['process_by']
+                if script_var_name not in self.variables or not isinstance(self.variables.get(script_var_name), str):
+                    self._error(f"Script variable '{script_var_name}' for PROCESS_BY not found or not a string.")
+                process_script = self.variables[script_var_name]
+            
             transform_rules = {}
             if options.get('transform'):
                 for rule in options['transform'].split(','):
@@ -4812,7 +5204,7 @@ class Interpreter:
             # --- Database Operations ---
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
-                cols_def = ', '.join([f'[{h}] {col_types.get(header_key_map.get(h, h), "TEXT")}' for h in final_headers])
+                cols_def = ', '.join([f'{self._quote_identifier(h)} {col_types.get(header_key_map.get(h, h), "TEXT")}' for h in final_headers])
                 cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
@@ -4820,7 +5212,7 @@ class Interpreter:
                 cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
             placeholders = ', '.join(['?'] * len(final_headers))
-            quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
+            quoted_headers = ', '.join([f'{self._quote_identifier(h)}' for h in final_headers])
             insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
             
             batch_size = options['batchsize']
@@ -4838,10 +5230,34 @@ class Interpreter:
                             value = json.dumps(value)
                         processed_row.append(value)
                     
-                    if transform_rules.get('trimall'): processed_row = [str(field).strip() if field is not None else None for field in processed_row]
-                    if transform_rules.get('upperall'): processed_row = [str(field).upper() if field is not None else None for field in processed_row]
-                    if transform_rules.get('lowerall'): processed_row = [str(field).lower() if field is not None else None for field in processed_row]
-                    if transform_rules.get('properall'): processed_row = [str(field).title() if field is not None else None for field in processed_row]
+                    # Apply processing script if specified
+                    if process_script:
+                        # Create 'rec' hash for the current row
+                        rec_hash = dict(zip(data_headers, processed_row))
+                        self.variables['rec'] = rec_hash
+
+                        # Execute the user's script
+                        self._execute_basic_string(process_script)
+
+                        # Check validation and retrieve modified data
+                        updated_rec = self.variables.get('rec', {})
+                        if updated_rec.get('is_valid', -1.0) == 0.0:
+                            del self.variables['rec']
+                            line_counter += 1
+                            continue  # Skip this row
+
+                        # Rebuild row from modified hash
+                        processed_row = [updated_rec.get(h) for h in data_headers]
+                        del self.variables['rec']
+
+                    if transform_rules.get('trimall') or options.get('trimall'): 
+                        processed_row = [str(field).strip() if field is not None else None for field in processed_row]
+                    if transform_rules.get('upperall') or options.get('upperall'): 
+                        processed_row = [str(field).upper() if field is not None else None for field in processed_row]
+                    if transform_rules.get('lowerall') or options.get('lowerall'): 
+                        processed_row = [str(field).lower() if field is not None else None for field in processed_row]
+                    if transform_rules.get('properall') or options.get('properall'): 
+                        processed_row = [str(field).title() if field is not None else None for field in processed_row]
                     
                     for i, header_name in enumerate(final_headers):
                         rule = transform_rules.get(header_name.lower())
@@ -4924,7 +5340,7 @@ class Interpreter:
                 if key in ['batchsize', 'sample_size']:
                     options[key] = int(value)
                 elif key == 'linenum':
-                    add_line_num = value.lower() in ['true', 'y', '1']
+                    add_line_num = value is None or value.lower() in ['true', 'y', '1']
                 elif key == 'fields':
                     options['fields'] = value
                 elif key == 'transform':
@@ -5126,7 +5542,7 @@ class Interpreter:
             
             for key, value in temp_options.items():
                 if key in options:
-                    options[key] = value.lower() in ['true', '1', 'y']
+                    options[key] = value is None or value.lower() in ['true', '1', 'y']
 
         try:
             headers = ['line_text']
@@ -5225,11 +5641,11 @@ class Interpreter:
 
             for key, value in temp_options.items():
                 if key == 'header':
-                    options['header'] = value.lower() in ['true', 'y', '1']
+                    options['header'] = value is None or value.lower() in ['true', 'y', '1']
                 elif key == 'table_index':
                     options['table_index'] = int(value)
                 elif key == 'linenum':
-                    add_line_num = value.lower() in ['true', 'y', '1']
+                    add_line_num = value is None or value.lower() in ['true', 'y', '1']
                 elif key == 'source_url':
                     options['source_url'] = value
         
@@ -5467,7 +5883,12 @@ class Interpreter:
                         
                         if transform_rules.get('trimall'):
                             processed_row = [str(field).strip() for field in processed_row]
-                        # (Add other global transforms like upperall here if needed)
+                        if transform_rules.get('upperall'):
+                            processed_row = [str(field).upper() for field in processed_row]
+                        if transform_rules.get('lowerall'):
+                            processed_row = [str(field).lower() for field in processed_row] 
+                        if transform_rules.get('properall'):
+                            processed_row = [str(field).title() for field in processed_row] 
                         
                         for i, header_name in enumerate(final_headers):
                             rule = transform_rules.get(header_name.lower())
@@ -5587,10 +6008,8 @@ class Interpreter:
             print(f"XML normalization complete:")
             print(f"  - Processed {len(list_of_records)} root records")
             self.db_connection.commit()
-            self.db_cursor.execute(
-                "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'"
-            )
-            tables = [row[0] for row in self.db_cursor.fetchall()]
+            
+            tables = self._get_table_list()
             print(f"  - Created {len(tables)} tables:")
             for table in tables:
                 self.db_cursor.execute(f"SELECT COUNT(*) FROM {self._quote_identifier(table)}")
@@ -5929,41 +6348,49 @@ class Interpreter:
             if 'RECNO' in self.variables:
                 del self.variables['RECNO']
                 
-    # In dbbasic.py, replace the existing _parse_dim_statement method
-
     def _parse_dim_statement(self):
         self._expect('DIM')
-        var_name = self._expect('ID')[1]
-        token = self._current_token()
+        while True:
+            var_name = self._expect('ID')[1]
+            token_after_var = self._current_token()
 
-        if token and token[0] == 'AS':
-            self._next_token()
-            type_token = self._current_token()
-            if not type_token or type_token[0] not in ['HASH', 'ARRAY']:
-                self._error(f"Expected HASH or ARRAY after AS")
-            self._next_token()
-            if type_token[0] == 'HASH':
-                self.variables[var_name] = {}
-            elif type_token[0] == 'ARRAY':
-                self.variables[var_name] = []
-        elif token and token[0] == 'LPAREN':
-            self._expect('LPAREN')
-            if self._current_token() and self._current_token()[0] == 'RPAREN':
-                self._expect('RPAREN')
-                self.variables[var_name] = []
+            # Case 1: Array with specific size, e.g., DIM x(10)
+            if token_after_var and token_after_var[0] == 'LPAREN':
+                self._expect('LPAREN')
+                if self._current_token() and self._current_token()[0] == 'RPAREN':
+                    self._expect('RPAREN')
+                    self.variables[var_name] = []
+                else:
+                    size = int(self._parse_expression())
+                    self._expect('RPAREN')
+                    default_value = "" if var_name.endswith('$') else 0.0
+                    self.variables[var_name] = [default_value] * (size + 1)
+
+            # Case 2: HASH or dynamic ARRAY, e.g., DIM x AS HASH
+            elif token_after_var and token_after_var[0] == 'AS':
+                self._next_token()
+                type_token = self._current_token()
+                if not type_token or type_token[0] not in ['HASH', 'ARRAY']:
+                    self._error(f"Expected HASH or ARRAY after AS")
+                self._next_token()
+                if type_token[0] == 'HASH':
+                    self.variables[var_name] = {}
+                elif type_token[0] == 'ARRAY':
+                    self.variables[var_name] = []
+            
+            # Case 3: Simple scalar variable, e.g., DIM x
             else:
-                size = int(self._parse_expression())
-                self._expect('RPAREN')
-                default_value = "" if var_name.endswith('$') else 0.0
-                self.variables[var_name] = [default_value] * (size + 1)
-        elif not token or token[0] in ['NEWLINE', 'COLON', 'END']:
-            # This is the new logic for scalar variables like "DIM myvar$"
-            if var_name.endswith('$'):
-                self.variables[var_name] = ""
+                if var_name.endswith('$'):
+                    self.variables[var_name] = ""
+                else:
+                    self.variables[var_name] = 0.0
+
+            # Check if another variable declaration follows on the same line
+            token_after_decl = self._current_token()
+            if token_after_decl and token_after_decl[0] == 'COMMA':
+                self._next_token()  # Consume the comma and continue the loop
             else:
-                self.variables[var_name] = 0.0
-        else:
-            self._error(f"Invalid DIM statement for '{var_name}'.")
+                break  # No comma, so the DIM statement is finished
             
     def _parse_json_statement(self):
         self._expect('PARSE'); self._expect('JSON')
@@ -6083,7 +6510,7 @@ class Interpreter:
 
                 for key, value in temp_options.items():
                     if key == 'header':
-                        if value.lower() in ['true', '1', 'y']: options['header'] = True
+                        if value is None or value.lower() in ['true', '1', 'y']: options['header'] = True
                         elif value.lower() in ['false', '0', 'n']: options['header'] = False
                     elif key == 'constraints': options['constraints'] = value
                     elif key == 'limit': options['limit'] = int(value)
@@ -7529,13 +7956,8 @@ class Interpreter:
             # Optional: consume semicolon if present
             if self._current_token() and self._current_token()[0] == 'SEMICOLON':
                 self._next_token()
-                
-            if self.db_engine == 'duckdb':
-                sql = "SHOW TABLES"
-            else:  # SQLite
-                sql = "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"
-                
-            results = self._execute_sql(sql, is_query=True)
+                              
+            results = self._get_table_list()
             if results:
                 for row in results:
                     print(row[0])
@@ -7637,49 +8059,6 @@ ORDER BY 1
             if self.sql_fatal_errors:
                 self._error(f"Error describing table: {e}")
                 
-    def _parse_describe_statement_old(self):
-        """Parses and executes DESCRIBE TABLE, printing or capturing metadata."""
-        self._expect('DESCRIBE')
-        # The TABLE keyword is optional for usability
-        if self._current_token() and self._current_token()[0] == 'TABLE':
-            self._next_token()
-        
-        table_name = self._parse_expression()
-        
-        into_array_name = None
-        if self._current_token() and self._current_token()[0] == 'INTO':
-            self._next_token()
-            into_array_name = self._expect('ID')[1]
-            if into_array_name not in self.variables or not isinstance(self.variables.get(into_array_name), list):
-                 self._error(f"'{into_array_name}' is not a dimensioned array for use with DESCRIBE INTO.")
-
-        try:
-            # Use PRAGMA to get table info, which is the standard SQLite way
-            pragma_sql = f"PRAGMA table_info('{table_name}')"
-            results = self._execute_sql(pragma_sql, is_query=True)
-            
-            if not results:
-                print(f"Table '{table_name}' not found or has no columns.")
-                return
-
-            # The column names from the PRAGMA result itself
-            headers = [desc[0] for desc in self.db_cursor.description]
-            
-            if into_array_name:
-                # Capture the metadata into an array of hashes
-                metadata_list = []
-                for row in results:
-                    metadata_list.append(dict(zip(headers, row)))
-                self.variables[into_array_name] = self._python_to_basic_data(metadata_list)
-            else:
-                # Print the metadata to the console using the existing table formatter
-                self._handle_output(results, headers)
-
-        except sqlite3.Error as e:
-            self.variables['ERR'] = 1.0
-            self.variables['ERRMSG$'] = str(e)
-            if self.sql_fatal_errors:
-                self._error(f"Fatal SQLite Error: {e}")
         
     def _parse_gosub_statement(self):
         self._expect('GOSUB'); label_name = self._expect('ID')[1]
@@ -7749,9 +8128,9 @@ class JSONToSQLiteNormalizer:
     def _ensure_table(self, table: str, schema: Dict[str, str], parent_table: Optional[str] = None):
         pk_name = f"pk_{table}"
         try:
-            res = self.cursor.execute(f"PRAGMA table_info([{table}])")
+            res = self.cursor.execute(f"PRAGMA table_info('{table}')")
             existing_cols = {row[1] for row in res.fetchall()}
-        except sqlite3.OperationalError:
+        except (sqlite3.OperationalError, duckdb.Error):
             existing_cols = set()
 
         if not existing_cols:
