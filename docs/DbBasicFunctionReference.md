@@ -1,206 +1,158 @@
-# **DbBasic Function Reference**
+# DbBasic Function Reference
 
-This document provides a reference for all built-in functions available in the DbBasic language. Functions are grouped by category.
-
----
-
-## **📁 File System Functions**
-
-* `CURDIR$()`  
-  * Returns the current working directory as a string.  
-* `DISKSPACE(path$)`  
-  * Returns the number of free bytes on the disk containing the specified path.  
-* `EOF(file_num)`  
-  * Returns true (`-1`) if the end of the specified file handle has been reached, otherwise false (`0`).  
-* `FILE_EXISTS(path$)`  
-  * Returns true (`-1`) if the specified file or directory path exists, otherwise false (`0`).  
-* `FILEATTR(path$)`  
-  * Returns a number representing the file's attributes (e.g., read-only, directory).  
-* `FILESIZE(path$)`  
-  * Returns the size of the specified file in bytes. Returns `-1` if the file doesn't exist.  
-* `FILETIME(path$)`  
-  * Returns the last modification timestamp of the file as a string (e.g., "YYYY-MM-DD HH:MI:SS").  
-* `FREEFILE()`  
-  * Returns the next available integer for use as a file handle.
+This reference lists all major built-in functions available in DbBasic, grouped by category and with usage examples. Replace variables as needed for your own programs.
 
 ---
 
-## **📝 String Functions**
+## 🗂️ FILE & DIRECTORY FUNCTIONS
 
-* `ASC(string$)`  
-  * Returns the ASCII code of the first character in the string.  
-* `CHR$(code)`  
-  * Returns the character corresponding to the given ASCII `code`.  
-* `FORMATDATE$(date$, format_mask$)`  
-  * Formats a date string according to a specified mask (e.g., "YYYY-MM-DD").  
-* `HEX$(number)`  
-  * Returns the hexadecimal representation of a number as a string.  
-* `INSTR([start_pos,] haystack$, needle$)`  
-  * Finds the starting position of `needle$` within `haystack$`. Returns `0` if not found.  
-* `JSON_SERIALIZE$(variable, [indent], [options...])`  
-  * Converts a DbBasic `HASH` or `ARRAY` into a JSON formatted string.  
-* `LCASE$(string$)`  
-  * Converts a string to all lowercase characters.  
-* `LEFT$(string$, length)`  
-  * Returns the first `length` characters from the left of the string.  
-* `LTRIM$(string$)`  
-  * Removes whitespace from the beginning (left side) of a string.  
-* `MID$(string$, start_pos, [length])`  
-  * Returns a substring of a specified `length` starting from `start_pos`.  
-* `OCT$(number)`  
-  * Returns the octal representation of a number as a string.  
-* `PADLEFT$(text$, length, pad_char$)`  
-  * Pads a string on the left to a total `length` using `pad_char$`.  
-* `PADRIGHT$(text$, length, pad_char$)`  
-  * Pads a string on the right to a total `length` using `pad_char$`.  
-* `PROPER$(string$)`  
-  * Converts a string to title case (e.g., "hello world" becomes "Hello World").  
-* `REPEAT$(string$, count)`  
-  * Returns a string consisting of `string$` repeated `count` times.  
-* `REPLACE$(source$, old$, new$, [count], [ignore_case])`  
-  * Replaces occurrences of `old$` with `new$` in the `source$` string.  
-* `REVERSE$(string$)`  
-  * Reverses the order of characters in a string.  
-* `RIGHT$(string$, length)`  
-  * Returns the last `length` characters from the right of the string.  
-* `RTRIM$(string$)`  
-  * Removes whitespace from the end (right side) of a string.  
-* `SPACE$(count)`  
-  * Returns a string consisting of `count` spaces.  
-* `SPLIT(string$, delimiter$, [limit])`  
-  * Splits a string by a `delimiter$` and returns an `ARRAY` of substrings.  
-* `STR$(number)`  
-  * Converts a number to its string representation.  
-* `TRIM$(string$)`  
-  * Removes whitespace from both the beginning and end of a string.  
-* `UCASE$(string$)`  
-  * Converts a string to all uppercase characters.
+| Function | Description | Example |
+|----------|-------------|---------|
+| `CURDIR$()` | Returns the current working directory as a string. | `PRINT CURDIR$` |
+| `DISKSPACE(path$)` | Returns the number of free bytes on the disk containing the path. | `PRINT DISKSPACE("C:\\")` |
+| `EOF(file_num)` | Returns -1 if at end of file, else 0. | `IF EOF(1) THEN PRINT "End of file"` |
+| `FILE_EXISTS(path$)` | Returns -1 if file/dir exists, else 0. | `IF FILE_EXISTS("data.txt") THEN PRINT "Found!"` |
+| `FILEATTR(path$)` | Returns file attributes as a number. | `PRINT FILEATTR("data.txt")` |
+| `FILESIZE(path$)` | Returns file size in bytes, or -1 if missing. | `PRINT FILESIZE("data.txt")` |
+| `FILETIME(path$)` | Returns last modification as "YYYY-MM-DD HH:MI:SS". | `PRINT FILETIME("data.txt")` |
+| `FREEFILE()` | Returns next available file handle. | `num = FREEFILE()` |
+| `BASENAME$(path$)` | Returns the filename from a path. | `PRINT BASENAME$("C:\\folder\\file.txt")` |
+| `PATHNAME$(path$)` | Returns the directory portion of a path. | `PRINT PATHNAME$("C:\\folder\\file.txt")` |
 
 ---
 
-## **🔢 Math Functions**
+## 📝 STRING FUNCTIONS
 
-* `ABS(number)`  
-  * Returns the absolute value of a number.  
-* `ATN(number)`  
-  * Returns the arctangent of a number in radians.  
-* `ATAN2(y, x)`  
-  * Returns the arctangent of `y/x` in radians.  
-* `CEIL(number)`  
-  * Rounds a number up to the nearest integer.  
-* `COS(number)`  
-  * Returns the cosine of an angle given in radians.  
-* `DEGREES(radians)`  
-  * Converts an angle from radians to degrees.  
-* `EXP(number)`  
-  * Returns e (the base of natural logarithms) raised to the power of `number`.  
-* `FIX(number)`  
-  * Truncates the decimal part of a number.  
-* `FLOOR(number)`  
-  * Rounds a number down to the nearest integer.  
-* `INT(number)`  
-  * Returns the integer portion of a number by rounding down (same as `FLOOR`).  
-* `LOG(number)`  
-  * Returns the natural logarithm of a number.  
-* `MAX(num1, num2, ...)`  
-  * Returns the largest number from a list of arguments.  
-* `MIN(num1, num2, ...)`  
-  * Returns the smallest number from a list of arguments.  
-* `MOD(number1, number2)`  
-  * Returns the remainder of `number1` divided by `number2`.  
-* `POWER(base, exponent)`  
-  * Returns the value of `base` raised to the power of `exponent`.  
-* `RADIANS(degrees)`  
-  * Converts an angle from degrees to radians.  
-* `RND([max_val])`  
-  * Returns a random number. If `max_val` is provided, returns an integer between 1 and `max_val`. Otherwise, returns a float between 0 and 1\.  
-* `ROUND(number, [decimals])`  
-  * Rounds a number to a specified number of `decimals`.  
-* `SGN(number)`  
-  * Returns the sign of a number (`-1` for negative, `0` for zero, `1` for positive).  
-* `SIN(number)`  
-  * Returns the sine of an angle given in radians.  
-* `SQR(number)`  
-  * Returns the square root of a number.  
-* `TAN(number)`  
-  * Returns the tangent of an angle given in radians.  
-* `VAL(string$)`  
-  * Converts a string representation of a number into a numeric value.
+| Function | Description | Example |
+|----------|-------------|---------|
+| `ASC(string$)` | ASCII code of the first character. | `PRINT ASC("A")    ' 65` |
+| `CHR$(code)` | Character for ASCII code. | `PRINT CHR$(65)    ' "A"` |
+| `FORMATDATE$(date$, mask$)` | Format date using a mask. | `PRINT FORMATDATE$("20240101", "YYYY-MM-DD")` |
+| `HEX$(number)` | Hexadecimal string. | `PRINT HEX$(255)   ' "ff"` |
+| `INSTR([start,] s$, sub$)` | Position of substring in string. | `PRINT INSTR("hello","e")   ' 2` |
+| `LCASE$(string$)` | To lowercase. | `PRINT LCASE$("ABC")` |
+| `LEFT$(string$, n)` | Leftmost n characters. | `PRINT LEFT$("hello",3)` |
+| `LTRIM$(string$)` | Trim leading whitespace. | `PRINT LTRIM$("  hi")` |
+| `MID$(string$, start, [len])` | Substring from position. | `PRINT MID$("hello",2,3)` |
+| `OCT$(number)` | Octal string. | `PRINT OCT$(10)` |
+| `PADLEFT$(s$, len, pad$)` | Pad left with character. | `PRINT PADLEFT$("A",5,"-")` |
+| `PADRIGHT$(s$, len, pad$)` | Pad right with character. | `PRINT PADRIGHT$("A",5,"-")` |
+| `PROPER$(string$)` | Title case. | `PRINT PROPER$("hello world")` |
+| `REPEAT$(s$, n)` | Repeat string n times. | `PRINT REPEAT$("x",3)` |
+| `REPLACE$(src$, old$, new$ [,count] [,ignore_case])` | Replace substrings. | `PRINT REPLACE$("abab","a","X")` |
+| `REVERSE$(string$)` | Reverse string. | `PRINT REVERSE$("abc")` |
+| `RIGHT$(string$, n)` | Rightmost n characters. | `PRINT RIGHT$("hello",2)` |
+| `RTRIM$(string$)` | Trim trailing whitespace. | `PRINT RTRIM$("hi  ")` |
+| `SPACE$(n)` | n spaces. | `PRINT "[" + SPACE$(4) + "]"` |
+| `SPLIT(s$, delim$, [limit])` | Split string to array. | `arr = SPLIT("a,b,c",",")` |
+| `STR$(number)` | Number to string. | `PRINT STR$(3.14)` |
+| `TRIM$(string$)` | Trim both ends. | `PRINT TRIM$(" hi ")` |
+| `UCASE$(string$)` | To uppercase. | `PRINT UCASE$("abc")` |
+| `STARTSWITH(s$, pre$)` | -1 if s$ starts with pre$, else 0. | `IF STARTSWITH("cat","c") THEN ...` |
+| `ENDSWITH(s$, suf$)` | -1 if s$ ends with suf$, else 0. | `IF ENDSWITH("cat","t") THEN ...` |
+| `CONTAINS(s$, sub$)` | -1 if s$ contains sub$, else 0. | `IF CONTAINS("dog","o") THEN ...` |
+| `LEN(value)` | Number of chars in value as string. | `PRINT LEN("abc")` |
 
 ---
 
-## **🗃️ Array & Hash Functions**
+## 🔢 MATH FUNCTIONS
 
-* `ARRAY(...)`  
-  * A constructor that creates and returns a new `ARRAY` from the provided arguments.  
-* `ARRAY_JOIN(array, delimiter$)`  
-  * Concatenates the elements of an `array` into a single string, separated by `delimiter$`.  
-* `ARRAY_SIZE(array)`  
-  * Returns the total number of elements in an `array`.  
-* `FIND(array, value)`  
-  * Returns the zero-based index of the first occurrence of `value` in an `array`. Returns `-1` if not found.  
-* `HASH_COUNT(hash)`  
-  * Returns the number of key-value pairs in a `hash`.  
-* `HASH_DELETE(hash, key$)`  
-  * Deletes a key-value pair from a `hash`.  
-* `HASH_EXISTS(hash, key$)`  
-  * Returns true (`-1`) if the `key$` exists in the `hash`, otherwise false (`0`).  
-* `HASH_JOIN(hash1, hash2, ...)`  
-  * Merges two or more hashes into a new `hash`. Keys from later hashes overwrite earlier ones.  
-* `HASH_KEYS(hash)`  
-  * Returns an `ARRAY` containing all the keys from a `hash`.  
-* `HASH_RENAME(hash, old_key$, new_key$)`  
-  * Renames a key in a `hash`.  
-* `HASH_VALUES(hash)`  
-  * Returns an `ARRAY` containing all the values from a `hash`.  
-* `UBOUND(array)`  
-  * Returns the upper bound (the highest index) of an `array`. Returns `-1` for an empty array.
-
----
-
-## **📅 Date & Time Functions**
-
-* `DATE$()`  
-  * Returns the current system date as a "YYYY-MM-DD" string.  
-* `DATEADD(date$, days)`  
-  * Adds a specified number of `days` to a `date$` and returns the new date string.  
-* `DATEDIFF(date1$, date2$)`  
-  * Returns the number of days between two date strings.  
-* `DAY(date$)`  
-  * Returns the day of the month (1-31) from a date string.  
-* `MONTH(date$)`  
-  * Returns the month (1-12) from a date string.  
-* `TIME$()`  
-  * Returns the current system time as an "HH:MI:SS" string.  
-* `WEEKDAY(date$)`  
-  * Returns the day of the week as a number (1 for Sunday, 7 for Saturday).  
-* `YEAR(date$)`  
-  * Returns the year from a date string.
+| Function | Description | Example |
+|----------|-------------|---------|
+| `ABS(number)` | Absolute value. | `PRINT ABS(-5)` |
+| `ATN(number)` | Arctangent (radians). | `PRINT ATN(1)` |
+| `ATAN2(y,x)` | Arctangent(y/x). | `PRINT ATAN2(1,1)` |
+| `CEIL(number)` | Round up. | `PRINT CEIL(2.1)` |
+| `COS(number)` | Cosine (radians). | `PRINT COS(3.14)` |
+| `DEGREES(rad)` | Radians to degrees. | `PRINT DEGREES(3.14)` |
+| `EXP(number)` | e^number. | `PRINT EXP(2)` |
+| `FIX(number)` | Truncate decimal. | `PRINT FIX(2.9)` |
+| `FLOOR(number)` | Round down. | `PRINT FLOOR(2.9)` |
+| `INT(number)` | Integer part. | `PRINT INT(2.7)` |
+| `LOG(number)` | Natural log. | `PRINT LOG(10)` |
+| `MAX(a, b, ...)` | Largest value. | `PRINT MAX(1,2,3)` |
+| `MIN(a, b, ...)` | Smallest value. | `PRINT MIN(1,2,3)` |
+| `MOD(a, b)` | Remainder. | `PRINT MOD(7,3)` |
+| `POWER(a,b)` | a to the b power. | `PRINT POWER(2,3)` |
+| `RADIANS(deg)` | Degrees to radians. | `PRINT RADIANS(180)` |
+| `RND([max])` | Random float (0-1) or int (1-max). | `PRINT RND()` / `PRINT RND(6)` |
+| `ROUND(num, [dec])` | Round to decimals. | `PRINT ROUND(3.1415,2)` |
+| `SGN(num)` | Sign: 1, 0, or -1. | `PRINT SGN(-10)` |
+| `SIN(num)` | Sine (radians). | `PRINT SIN(3.14)` |
+| `SQR(num)` | Square root. | `PRINT SQR(9)` |
+| `TAN(num)` | Tangent (radians). | `PRINT TAN(0.5)` |
+| `VAL(s$)` | String to number. | `PRINT VAL("123.45")` |
 
 ---
 
-## **ℹ️ Information & Type Functions**
+## 🗃️ ARRAY & HASH FUNCTIONS
 
-* `COMMAND$(index)`  
-  * Returns the command-line argument at the specified `index` position.  
-* `CONTAINS(string$, substring$)`  
-  * Returns true (`-1`) if `string$` contains `substring$`, otherwise false (`0`).  
-* `ENDSWITH(string$, suffix$)`  
-  * Returns true (`-1`) if `string$` ends with `suffix$`, otherwise false (`0`).  
-* `ENVIRON$(var_name$)`  
-  * Returns the value of a system environment variable.  
-* `IS_ARRAY(variable)`  
-  * Returns true (`-1`) if the `variable` is an `ARRAY`, otherwise false (`0`).  
-* `IS_HASH(variable)`  
-  * Returns true (`-1`) if the `variable` is a `HASH`, otherwise false (`0`).  
-* `ISALNUM(string$)`  
-  * Returns true (`-1`) if all characters in the string are alphanumeric, otherwise false (`0`).  
-* `ISALPHA(string$)`  
-  * Returns true (`-1`) if all characters in the string are alphabetic, otherwise false (`0`).  
-* `ISDIGIT(string$)`  
-  * Returns true (`-1`) if all characters in the string are digits, otherwise false (`0`).  
-* `LEN(value)`  
-  * Returns the number of characters in the string representation of a value.  
-* `STARTSWITH(string$, prefix$)`  
-  * Returns true (`-1`) if `string$` starts with `prefix$`, otherwise false (`0`).
+| Function | Description | Example |
+|----------|-------------|---------|
+| `ARRAY(...)` | Create array from args. | `arr = ARRAY(1,2,3)` |
+| `ARRAY_JOIN(arr, delim$)` | Join array into string. | `PRINT ARRAY_JOIN(arr, "-")` |
+| `ARRAY_SIZE(arr)` | Number of elements. | `PRINT ARRAY_SIZE(arr)` |
+| `FIND(arr, value)` | Index of value, or -1. | `PRINT FIND(arr, "b")` |
+| `UBOUND(arr)` | Highest index, or -1. | `PRINT UBOUND(arr)` |
+| `HASH_COUNT(hash)` | Number of keys in hash. | `PRINT HASH_COUNT(h)` |
+| `HASH_DELETE(hash, key$)` | Remove key from hash. | `HASH_DELETE(h, "city")` |
+| `HASH_EXISTS(hash, key$)` | -1 if key exists, 0 if not. | `IF HASH_EXISTS(h,"name") THEN ...` |
+| `HASH_JOIN(h1, h2, ...)` | Merge hashes (later wins). | `newh = HASH_JOIN(h1, h2)` |
+| `HASH_KEYS(hash)` | Array of keys. | `keys = HASH_KEYS(h)` |
+| `HASH_RENAME(hash, old$, new$)` | Rename hash key. | `HASH_RENAME(h,"old","new")` |
+| `HASH_VALUES(hash)` | Array of values. | `vals = HASH_VALUES(h)` |
+| `IS_ARRAY(var)` | -1 if ARRAY, 0 if not. | `IF IS_ARRAY(arr) THEN ...` |
+| `IS_HASH(var)` | -1 if HASH, 0 if not. | `IF IS_HASH(h) THEN ...` |
 
+---
+
+## 📅 DATE & TIME FUNCTIONS
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `DATE$()` | Current date as "YYYY-MM-DD". | `PRINT DATE$()` |
+| `DATEADD(date$, days)` | Add days to date. | `PRINT DATEADD("2025-01-01",7)` |
+| `DATEDIFF(date1$, date2$)` | Days between dates. | `PRINT DATEDIFF("2025-01-10","2025-01-01")` |
+| `DAY(date$)` | Day of month. | `PRINT DAY("2025-09-24")` |
+| `MONTH(date$)` | Month number. | `PRINT MONTH("2025-09-24")` |
+| `YEAR(date$)` | Year number. | `PRINT YEAR("2025-09-24")` |
+| `TIME$()` | Current time as "HH:MI:SS". | `PRINT TIME$()` |
+| `WEEKDAY(date$)` | Day of week (1=Sun, 7=Sat). | `PRINT WEEKDAY("2025-09-24")` |
+| `FORMATDATE$(date$,mask$)` | Format date string. | `PRINT FORMATDATE$("20250924","YYYY-MM-DD")` |
+
+---
+
+## 🔗 URL FUNCTIONS
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `URL_FILENAME$(url$)` | Returns filename from URL. | `PRINT URL_FILENAME$("https://site.com/files/a.txt")` |
+| `URL_PATH$(url$)` | Returns directory from URL. | `PRINT URL_PATH$("https://site.com/files/a.txt")` |
+| `URL_HOSTNAME$(url$)` | Returns hostname. | `PRINT URL_HOSTNAME$("https://site.com/files/a.txt")` |
+| `URL_SCHEME$(url$)` | Returns scheme (http, https, etc). | `PRINT URL_SCHEME$("https://site.com/files/a.txt")` |
+
+---
+
+## 🛈 INFORMATION & TYPE FUNCTIONS
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `COMMAND$(i)` | Returns command-line arg at index. | `PRINT COMMAND$(1)` |
+| `ENVIRON$(name$)` | Gets value of environment variable. | `PRINT ENVIRON$("HOME")` |
+
+---
+
+## 🧱 JSON FUNCTIONS
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `JSON_SERIALIZE$(hash_or_array, [indent], [options...])` | Converts a hash or array to JSON string with options for indent, sort, case. | `PRINT JSON_SERIALIZE$(h, 2)` |
+
+---
+
+**Note:**  
+- All functions can be used in assignments or expressions.  
+- Arrays/hashes are returned as native types, not strings.  
+- Return values: `-1` for true, `0` for false in boolean contexts.
+
+---
