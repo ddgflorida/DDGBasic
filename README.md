@@ -134,6 +134,109 @@ END
 
 ---
 
+# DbBasic Interpreter: Functions
+
+This document provides a quick reference to all available functions in the DbBasic language, categorized by function type.
+
+| Function Name            | Type        | Description |
+|-------------------------|-------------|-------------|
+| ABS(number)             | MATH        | Returns the absolute value of a number. |
+| ARRAY(...)              | ARRAY       | A constructor that creates and returns a new ARRAY from the provided arguments. |
+| ARRAY_JOIN(array, delimiter$) | ARRAY  | Concatenates the elements of an array into a single string, separated by delimiter$. |
+| ARRAY_SIZE(array)       | ARRAY       | Returns the total number of elements in an array. |
+| ASC(string$)            | STRING      | Returns the ASCII code of the first character in the string. |
+| ATN(number)             | MATH        | Returns the arctangent of a number in radians. |
+| ATAN2(y, x)             | MATH        | Returns the arctangent of y/x in radians. |
+| BASENAME$(path$)        | FILE        | Returns the filename portion of a path. |
+| CEIL(number)            | MATH        | Rounds a number up to the nearest integer. |
+| CHR$(code)              | STRING      | Returns the character corresponding to the given ASCII code. |
+| COMMAND$(index)         | INFO        | Returns the command-line argument at the specified index position. |
+| CONTAINS(string$, substring$) | STRING | Returns true (-1) if string$ contains substring$, otherwise false (0). |
+| COS(number)             | MATH        | Returns the cosine of an angle given in radians. |
+| CURDIR$()               | FILE        | Returns the current working directory as a string. |
+| DATE$()                 | DATE/TIME   | Returns the current system date as a "YYYY-MM-DD" string. |
+| DATEADD(date$, days)    | DATE/TIME   | Adds a specified number of days to a date$ and returns the new date string. |
+| DATEDIFF(date1$, date2$)| DATE/TIME   | Returns the number of days between two date strings. |
+| DAY(date$)              | DATE/TIME   | Returns the day of the month (1-31) from a date string. |
+| DEGREES(radians)        | MATH        | Converts an angle from radians to degrees. |
+| DISKSPACE(path$)        | FILE        | Returns the number of free bytes on the disk containing the specified path. |
+| ENDSWITH(string$, suffix$) | STRING   | Returns true (-1) if string$ ends with suffix$, otherwise false (0). |
+| ENVIRON$(var_name$)     | INFO        | Returns the value of a system environment variable. |
+| EOF(file_num)           | FILE        | Returns true (-1) if the end of the specified file handle has been reached, otherwise false (0). |
+| EXP(number)             | MATH        | Returns e (the base of natural logarithms) raised to the power of number. |
+| FILE_EXISTS(path$)      | FILE        | Returns true (-1) if the specified file or directory path exists, otherwise false (0). |
+| FILEATTR(path$)         | FILE        | Returns a number representing the file's attributes (e.g., read-only, directory). |
+| FILESIZE(path$)         | FILE        | Returns the size of the specified file in bytes. Returns -1 if the file doesn't exist. |
+| FILETIME(path$)         | FILE        | Returns the last modification timestamp of the file as a string (e.g., "YYYY-MM-DD HH:MI:SS"). |
+| FIND(array, value)      | ARRAY       | Returns the zero-based index of the first occurrence of value in an array. Returns -1 if not found. |
+| FIX(number)             | MATH        | Truncates the decimal part of a number. |
+| FLOOR(number)           | MATH        | Rounds a number down to the nearest integer. |
+| FORMATDATE$(date$, format_mask$) | DATE/TIME | Formats a date string according to a specified mask (e.g., "YYYY-MM-DD"). |
+| FREEFILE()              | FILE        | Returns the next available integer for use as a file handle. |
+| HASH_COUNT(hash)        | HASH        | Returns the number of key-value pairs in a hash. |
+| HASH_DELETE(hash, key$) | HASH        | Deletes a key-value pair from a hash. |
+| HASH_EXISTS(hash, key$) | HASH        | Returns true (-1) if the key$ exists in the hash, otherwise false (0). |
+| HASH_JOIN(hash1, hash2, ...) | HASH   | Merges two or more hashes into a new hash. Keys from later hashes overwrite earlier ones. |
+| HASH_KEYS(hash)         | HASH        | Returns an ARRAY containing all the keys from a hash. |
+| HASH_RENAME(hash, old_key$, new_key$) | HASH | Renames a key in a hash. |
+| HASH_VALUES(hash)       | HASH        | Returns an ARRAY containing all the values from a hash. |
+| HEX$(number)            | STRING      | Returns the hexadecimal representation of a number as a string. |
+| IF IS_ARRAY(variable)   | ARRAY       | Returns true (-1) if the variable is an ARRAY, otherwise false (0). |
+| IF IS_HASH(variable)    | HASH        | Returns true (-1) if the variable is a HASH, otherwise false (0). |
+| INSTR([start_pos,] haystack$, needle$) | STRING | Finds the starting position of needle$ within haystack$. Returns 0 if not found. |
+| INT(number)             | MATH        | Returns the integer portion of a number by rounding down (same as FLOOR). |
+| ISALNUM(string$)        | STRING      | Returns true (-1) if all characters in the string are alphanumeric, otherwise false (0). |
+| ISALPHA(string$)        | STRING      | Returns true (-1) if all characters in the string are alphabetic, otherwise false (0). |
+| ISDIGIT(string$)        | STRING      | Returns true (-1) if all characters in the string are digits, otherwise false (0). |
+| JSON_SERIALIZE$(variable, [indent], [options...]) | HASH/ARRAY | Converts a DbBasic HASH or ARRAY into a JSON formatted string. |
+| LCASE$(string$)         | STRING      | Converts a string to all lowercase characters. |
+| LEFT$(string$, length)  | STRING      | Returns the first length characters from the left of the string. |
+| LEN(value)              | STRING      | Returns the number of characters in the string representation of a value. |
+| LOG(number)             | MATH        | Returns the natural logarithm of a number. |
+| LTRIM$(string$)         | STRING      | Removes whitespace from the beginning (left side) of a string. |
+| MAX(num1, num2, ...)    | MATH        | Returns the largest number from a list of arguments. |
+| MID$(string$, start_pos, [length]) | STRING | Returns a substring of a specified length starting from start_pos. |
+| MIN(num1, num2, ...)    | MATH        | Returns the smallest number from a list of arguments. |
+| MOD(number1, number2)   | MATH        | Returns the remainder of number1 divided by number2. |
+| MONTH(date$)            | DATE/TIME   | Returns the month (1-12) from a date string. |
+| OCT$(number)            | STRING      | Returns the octal representation of a number as a string. |
+| PADLEFT$(text$, length, pad_char$) | STRING | Pads a string on the left to a total length using pad_char$. |
+| PADRIGHT$(text$, length, pad_char$) | STRING | Pads a string on the right to a total length using pad_char$. |
+| PATHNAME$(path$)        | FILE        | Returns the directory portion of a path. |
+| POWER(base, exponent)   | MATH        | Returns the value of base raised to the power of exponent. |
+| PROPER$(string$)        | STRING      | Converts a string to title case (e.g., "hello world" becomes "Hello World"). |
+| RADIANS(degrees)        | MATH        | Converts an angle from degrees to radians. |
+| REPEAT$(string$, count) | STRING      | Returns a string consisting of string$ repeated count times. |
+| REPLACE$(source$, old$, new$, [count], [ignore_case]) | STRING | Replaces occurrences of old$ with new$ in the source$ string. |
+| REVERSE$(string$)       | STRING      | Reverses the order of characters in a string. |
+| RIGHT$(string$, length) | STRING      | Returns the last length characters from the right of the string. |
+| RND([max_val])          | MATH        | Returns a random number. If max_val is provided, returns an integer between 1 and max_val. Otherwise, returns a float between 0 and 1. |
+| ROUND(number, [decimals]) | MATH      | Rounds a number to a specified number of decimals. |
+| RTRIM$(string$)         | STRING      | Removes whitespace from the end (right side) of a string. |
+| SGN(number)             | MATH        | Returns the sign of a number (-1 for negative, 0 for zero, 1 for positive). |
+| SIN(number)             | MATH        | Returns the sine of an angle given in radians. |
+| SPACE$(count)           | STRING      | Returns a string consisting of count spaces. |
+| SPLIT(string$, delimiter$, [limit]) | STRING/ARRAY | Splits a string by a delimiter$ and returns an ARRAY of substrings. |
+| SQR(number)             | MATH        | Returns the square root of a number. |
+| STARTSWITH(string$, prefix$) | STRING | Returns true (-1) if string$ starts with prefix$, otherwise false (0). |
+| STR$(number)            | STRING      | Converts a number to its string representation. |
+| TAN(number)             | MATH        | Returns the tangent of an angle given in radians. |
+| TIME$()                 | DATE/TIME   | Returns the current system time as an "HH:MI:SS" string. |
+| TRIM$(string$)          | STRING      | Removes whitespace from both the beginning and end of a string. |
+| UBOUND(array)           | ARRAY       | Returns the upper bound (the highest index) of an array. Returns -1 for an empty array. |
+| UCASE$(string$)         | STRING      | Converts a string to all uppercase characters. |
+| URL_FILENAME$(url$)     | STRING      | Returns the filename portion of a URL path. |
+| URL_HOSTNAME$(url$)     | STRING      | Returns the hostname component of a URL. |
+| URL_PATH$(url$)         | STRING      | Returns the directory portion of a URL path. |
+| URL_SCHEME$(url$)       | STRING      | Returns the scheme (e.g., "http", "https") of a URL. |
+| VAL(string$)            | STRING/MATH | Converts a string representation of a number into a numeric value. |
+| WEEKDAY(date$)          | DATE/TIME   | Returns the day of the week as a number (1 for Sunday, 7 for Saturday). |
+| YEAR(date$)             | DATE/TIME   | Returns the year from a date string. |
+
+---
+
+**Note:** All functions return a value and can be used in expressions, assignments, or as arguments to other functions/statements.
+
 
 
 
