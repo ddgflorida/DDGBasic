@@ -9,6 +9,7 @@ import csv
 import io
 import json
 import glob
+import html
 import fnmatch
 import subprocess
 import requests
@@ -22,8 +23,12 @@ from bs4 import BeautifulSoup
 from openpyxl.styles import Font, PatternFill, Alignment
 from tui_runner import FormRunner
 from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlparse
+from urllib.parse import urlparse, quote_plus
 
+try:
+    from web_form_runner import WebFormRunner
+except ImportError:
+    WebFormRunner = None
 
 csv.field_size_limit(1024 * 1024)
 
@@ -123,15 +128,128 @@ class SqliteStringFunctions:
       except:
         return 0
 
+    @staticmethod
+    def starts_with(s, prefix):
+      if not isinstance(s, str) or not isinstance(prefix, str): return None
+      return 1 if s.startswith(prefix) else 0
+
+    @staticmethod
+    def ends_with(s, suffix):
+      if not isinstance(s, str) or not isinstance(suffix, str): return None
+      return 1 if s.endswith(suffix) else 0
+
+    @staticmethod
+    def initcap(s):
+      if not isinstance(s, str): return None
+      return s.title()
+
+    @staticmethod
+    def split_part(s, delimiter, part_index):
+      if not isinstance(s, str) or not isinstance(delimiter, str) or not isinstance(part_index, int):
+          return None
+      
+      # SQL functions are typically 1-based, while Python is 0-based.
+      if part_index <= 0:
+          return ""
+      
+      parts = s.split(delimiter)
+      
+      try:
+          return parts[part_index - 1]
+      except IndexError:
+          # Return an empty string if the part index is out of bounds.
+          return ""
+    
+    @staticmethod
+    def translate(s, from_str, to_str):
+      if not isinstance(s, str) or not isinstance(from_str, str) or not isinstance(to_str, str):
+          return None
+      translation_table = str.maketrans(from_str, to_str)
+      return s.translate(translation_table)
+
+    @staticmethod
+    def instr2(s, substring):
+      if not isinstance(s, str) or not isinstance(substring, str): return None
+      pos = s.find(substring)
+      return pos + 1 if pos != -1 else 0
+
+    @staticmethod
+    def instr3(s, substring, start):
+      if not isinstance(s, str) or not isinstance(substring, str) or not isinstance(start, int): return None
+      if start == 0: return 0
+      start_pos = start - 1 if start > 0 else len(s) + start
+      if start_pos < 0: start_pos = 0
+      pos = s.find(substring, start_pos)
+      return pos + 1 if pos != -1 else 0
+
+    @staticmethod
+    def instr4(s, substring, start, nth):
+      if not isinstance(s, str) or not isinstance(substring, str) or not isinstance(start, int) or not isinstance(nth, int): return None
+      if nth <= 0: return 0
+      pos = start - 1 if start > 0 else len(s) + start
+      if pos < 0: pos = 0
+      found_pos = -1
+      for _ in range(nth):
+          found_pos = s.find(substring, pos)
+          if found_pos == -1:
+              return 0
+          pos = found_pos + 1
+      return found_pos + 1
+
+    @staticmethod
+    def soundex(s):
+        if not s or not isinstance(s, str):
+            return None
+        s = s.upper()
+        first_letter = s[0]
+        if not 'A' <= first_letter <= 'Z':
+            return None
+        soundex_map = {
+            'BFPV': '1', 'CGJKQSXZ': '2', 'DT': '3',
+            'L': '4', 'MN': '5', 'R': '6'
+        }
+        code = first_letter
+        prev_code = ''
+        for char_map, num_code in soundex_map.items():
+            if first_letter in char_map:
+                prev_code = num_code
+                break
+        for char in s[1:]:
+            if len(code) >= 4:
+                break
+            current_code = ''
+            for char_map, num_code in soundex_map.items():
+                if char in char_map:
+                    current_code = num_code
+                    break
+            if current_code and current_code != prev_code:
+                code += current_code
+            if current_code:
+                prev_code = current_code
+        return (code + '000')[:4]
+        
     @classmethod
     def register_all(cls, conn):
         functions_to_register = {
             "REVERSE": (1, cls.reverse), "STUFF": (4, cls.stuff), "LEFT$": (2, cls.left),
             "RIGHT$": (2, cls.right), "LPAD": (3, cls.lpad), "RPAD": (3, cls.rpad),
             "REPLICATE": (2, cls.replicate), "CHARINDEX": (2, cls.charindex),
+            "STARTS_WITH": (2, cls.starts_with),
+            "ENDS_WITH": (2, cls.ends_with),
+            "INITCAP": (1, cls.initcap),
+            "SPLIT_PART": (3, cls.split_part),
+            "TRANSLATE": (3, cls.translate),
+            "SOUNDEX": (1, cls.soundex),
+            "INSTR": [(2, cls.instr2), (3, cls.instr3), (4, cls.instr4)],
         }
-        for name, (num_params, func) in functions_to_register.items():
-            conn.create_function(name, num_params, func)
+        for name, funcs in functions_to_register.items():
+            # Handle both single and multiple function registrations for a given name
+            if isinstance(funcs, list):
+                for num_params, func in funcs:
+                    conn.create_function(name, num_params, func)
+            else:
+                num_params, func = funcs
+                conn.create_function(name, num_params, func)
 
 # =================================================================
 # GLOBAL STATE AND CONFIGURATION
@@ -146,6 +264,7 @@ class OutputConfig:
 g_output_config = OutputConfig()
 g_null_handling_settings = {}
 g_null_handling_default = 'CONVERT_EMPTY_TO_NULL'
+g_ui_mode = "TUI"
 
 # =================================================================
 # Exception class for loop exits
@@ -179,6 +298,24 @@ def preprocess_continuations(source_code):
         result.append(char); i += 1
     return ''.join(result)
 
+def preprocess_echo_statements(source_code):
+    lines = source_code.split('\n')
+    processed_lines = []
+    
+    for line in lines:
+        # Check if this line starts with ECHO (with optional leading whitespace)
+        echo_match = re.match(r'^(\s*ECHO)\s*(.*)$', line, re.IGNORECASE)
+        if echo_match:
+            leading_space = echo_match.group(1)  # "ECHO" with any leading whitespace
+            content = echo_match.group(2).rstrip()  # Content after ECHO
+            escaped_content = content.replace('"', '""')
+            processed_line = f'{leading_space} "{escaped_content}"'
+            processed_lines.append(processed_line)
+        else:
+            processed_lines.append(line)
+    
+    return '\n'.join(processed_lines)
+        
 class Lexer:
     def __init__(self, source_code):
         lines = source_code.splitlines()
@@ -187,8 +324,12 @@ class Lexer:
         self.line_starts = [0]
         for match in re.finditer(r"\n", source_code):
             self.line_starts.append(match.end())
-        self.tokens = self._tokenize()
-
+        # Pre-process ECHO statements before tokenizing
+        #print("DEBUG BEFORE:",self.raw_source_code)
+        processed_code = preprocess_echo_statements(self.raw_source_code)
+        #print("DEBUG AFTER:", processed_code)
+        self.tokens = self._tokenize(processed_code)
+    
     def get_line_col(self, pos):
         line = 1
         for i, start in enumerate(self.line_starts):
@@ -197,7 +338,7 @@ class Lexer:
         col = pos - self.line_starts[line-1] + 1
         return line, col
 
-    def _tokenize(self):
+    def _tokenize(self, source_code_to_process):
         replacements = {
             r'\bEND\s+IF\b': 'ENDIF', r'\bLINE\s+INPUT\b': 'LINEINPUT', r'\bEND\s+LOOP\b': 'ENDLOOP',
             r'\bFOR\s+EACH\b': 'FOREACH', r'\bEND\s+TRANSACTION\b': 'ENDTRANSACTION', r'\bREAD\s+FILE\b': 'READFILE',
@@ -213,7 +354,7 @@ class Lexer:
             r'\bWITH\s+FILESONLY\b': 'WITHFILESONLY', 
             r'\bLIST\s+FIELDS\b': 'LISTFIELDS'
         }
-        code = self.raw_source_code
+        code = source_code_to_process
         for pattern, repl in replacements.items():
             code = re.sub(pattern, repl, code, flags=re.IGNORECASE)
         self.modified_source_code = code
@@ -282,9 +423,9 @@ class Lexer:
             ('SET', r'\bSET\b(?!\$)'), ('OUTPUT', r'\bOUTPUT\b(?!\$)'), ('AS', r'\bAS\b(?!\$)'),
             ('PRINT', r'\bPRINT\b(?!\$)'), ('LET', r'\bLET\b(?!\$)'), ('IF', r'\bIF\b(?!\$)'), ('THEN', r'\bTHEN\b(?!\$)'),
             ('ELSEIF', r'\bELSEIF\b(?!\$)'),('ELSE', r'\bELSE\b(?!\$)'), ('ENDIF', r'\bENDIF\b(?!\$)'), 
-            ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),
+            ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),('ECHO', r'\bECHO\b(?!\$)'),
             ('ZIP', r'\bZIP\b(?!\$)'),('UNZIP', r'\bUNZIP\b(?!\$)'),
-            ('DO', r'\bDO\b(?!\$)'),('UNTIL', r'\bUNTIL\b(?!\$)'),
+            ('DO', r'\bDO\b(?!\$)'), ('UNTIL', r'\bUNTIL\b(?!\$)'),
             ('STEP', r'\bSTEP\b(?!\$)'), ('NEXT', r'\bNEXT\b(?!\$)'), ('IN', r'\bIN\b(?!\$)'), ('LOOP', r'\bLOOP\b(?!\$)'),
             ('WHILE', r'\bWHILE\b(?!\$)'), ('WEND', r'\bWEND\b(?!\$)'), ('NOT', r'\bNOT\b(?!\$)'), ('END', r'\bEND\b(?!\$)'),
             ('EXIT', r'\bEXIT\b(?!\$)'), ('FILES', r'\bFILES\b(?!\$)'), ('CHDIR', r'\bCHDIR\b(?!\$)'),
@@ -306,6 +447,7 @@ class Lexer:
         raw_tokens, tokens, is_start_of_line = [], [], True
         for mo in re.finditer(tok_regex, code, re.IGNORECASE):
             kind, value, pos = mo.lastgroup, mo.group(), mo.start()
+            #print("DEBUG", kind, value, pos)
             if kind in ['SKIP', 'REM']: continue
             if kind == 'MISMATCH':
                 line, col = self.get_line_col(pos); raise RuntimeError(f"Unexpected character '{value}' at line {line}, col {col}")
@@ -403,6 +545,7 @@ class Lexer:
             elif u_value == 'WITHFILESONLY': kind, value = 'WITH FILESONLY', 'WITH FILESONLY' 
             
             tokens.append((kind, value, pos)); is_start_of_line = False; i += 1
+            #print("DEBUG:", tokens)
         return tokens
         
 class Formatter:
@@ -570,7 +713,14 @@ class Interpreter:
                     self.jump_map[index] = {'elseifs': [], 'else': None, 'endif': None}
 
             elif token_type == 'DO':
-                # Check if the previous token was EXIT. If so, this is not a loop start.
+                # A DO loop must start a statement. Check if the previous token
+                # is a statement separator (or if it's the first token).
+                is_start_of_statement = (index == 0) or (self.tokens[index - 1][0] in ['NEWLINE', 'COLON'])
+                
+                if not is_start_of_statement:
+                    continue # This DO is part of another command, not a loop start.
+
+                # Also, ignore if it's part of an 'EXIT DO' statement.
                 if index > 0 and self.tokens[index - 1][0] == 'EXIT':
                     continue
                 stack.append(('DO', index))
@@ -1420,6 +1570,8 @@ class Interpreter:
             self._parse_analyze_xml_statement()
         elif token[0] == 'PRINT':
             self._parse_print_statement()
+        elif token[0] == 'ECHO':
+            self._parse_echo_statement()
         elif token[0] == 'DESCRIBE':                              # describe sql table/view
             self._parse_describe_statement()
         elif token[0] == 'WRITE':                                 # write variables as csv
@@ -1502,7 +1654,44 @@ class Interpreter:
             # The result will be in one of the capture groups
             return next((group for group in match.groups() if group is not None), None)
         return None
+
+    def execute(self, code_string):
+        """
+        Executes a string of DbBasic code using the interpreter's current state.
+        This allows the interpreter to be re-used for multiple scripts.
+        Currently used by web_server.py to implement scripting
+        """
+        # Reset program termination flag in case a previous script used END
+        self.program_terminated = False
         
+        # Find the base path from the currently running script if available
+        # This is a placeholder; more robust path handling may be needed for includes.
+        base_path = '.'
+        
+        # Pre-process includes and line continuations for the new code string
+        processed_includes = preprocess_includes(code_string, base_path=base_path)
+        processed_code = preprocess_continuations(processed_includes)
+        lexer = Lexer(processed_code)
+        
+        # Load the new tokens and reset the execution pointer
+        self.tokens = lexer.tokens
+        self.token_index = 0
+        
+        # Clear old jump/label info and rescan for the new script's context
+        self.labels = {}
+        self.jump_map = {}
+        self._pre_scan_for_jumps()
+        self._scan_for_labels()
+        
+        # Run the main execution loop for the new tokens
+        try:
+            while self._current_token():
+                if not self._parse_line() or self.program_terminated:
+                    break
+        except ProgramEnd:
+            # ProgramEnd should stop the script but not the whole server
+            pass
+            
     def run(self):
         try:
             while self._current_token() and self._current_token()[0] != 'END':
@@ -1660,7 +1849,19 @@ class Interpreter:
         self._expect('SET')
         token = self._current_token()
         
-        if token[0] == 'ID' and token[1].upper() == 'NULL_HANDLING':
+        if token[0] == 'ID' and token[1].upper() == 'UI':
+            self._next_token()
+            #self._expect('ID')
+            mode_token = self._expect('ID')
+            mode = mode_token[1].upper()
+            if mode in ['TUI', 'WEB']:
+                if mode == 'WEB' and WebFormRunner is None:
+                    self._error("WEB UI mode requires 'web_form_runner.py' to be present.")
+                global g_ui_mode
+                g_ui_mode = mode
+            else:
+                self._error("Invalid UI mode. Use TUI or WEB.")
+        elif token[0] == 'ID' and token[1].upper() == 'NULL_HANDLING':
             self._next_token() # Consume NULL_HANDLING
             
             # Check if this is a global or column-specific setting
@@ -1718,39 +1919,38 @@ class Interpreter:
             if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
                 self._next_token()
                 format_token = self._current_token()
-                if format_token and format_token[0] in ['ID', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL", "SQL"]:
+                if format_token and format_token[0] in ['ID', 'TEXT', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL", "SQL"]:
                     output_format = format_token[1].upper()
                     if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED", "EXCEL", "SQL"]: 
                         g_output_config.format = output_format
                         self._next_token()
                         
-                        # --- START OF MODIFIED LOGIC ---
-                        if output_format == 'SQL':
-                            g_output_config.sql_options = {}
-                            temp_options = {}
+                        # Generic OPTIONS parsing for TEXT and SQL ---
+                        g_output_config.sql_options = {} # Reset options for any format
+                        
+                        # Check for SQL-specific mode keywords first (for backward compatibility)
+                        mode_keywords = ['INSERT', 'UPDATE', 'MERGE', 'REPLACE', 'UPSERT']
+                        mode_token = self._current_token()
+                        if output_format == 'SQL' and mode_token and mode_token[0] in mode_keywords:
+                            g_output_config.sql_options['mode'] = mode_token[1].lower()
+                            self._next_token()
 
-                            # Check for optional, direct mode keywords (INSERT, UPDATE, etc.)
-                            mode_keywords = ['INSERT', 'UPDATE', 'MERGE', 'REPLACE', 'UPSERT']
-                            mode_token = self._current_token()
-                            if mode_token and mode_token[0] in mode_keywords:
-                                temp_options['mode'] = mode_token[1].lower()
-                                self._next_token() # Consume the mode keyword
+                        # Now, check for the general OPTIONS clause for all formats
+                        if self._current_token() and self._current_token()[0] == 'OPTIONS':
+                            self._next_token()
+                            options_str = self._parse_expression()
+                            # Start with any already parsed options (like SQL mode)
+                            temp_options = g_output_config.sql_options 
                             
-                            # Now, check for the OPTIONS clause for other settings (tablename, pk)
-                            if self._current_token() and self._current_token()[0] == 'OPTIONS':
-                                self._next_token()
-                                options_str = self._parse_expression()
-                                
-                                key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-                                for i, match in enumerate(key_matches):
-                                    key = match.group(1).lower()
-                                    start_pos = match.end()
-                                    end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                                    value = options_str[start_pos:end_pos].strip().strip(',').strip("'")
-                                    temp_options[key] = value
+                            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+                            for i, match in enumerate(key_matches):
+                                key = match.group(1).lower()
+                                start_pos = match.end()
+                                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                                value = options_str[start_pos:end_pos].strip().strip(',').strip("'\"")
+                                temp_options[key] = value
                             
                             g_output_config.sql_options = temp_options
-                        # --- END OF MODIFIED LOGIC ---
                     else: 
                         self._error(f"Unknown format type '{output_format}'")
                 else: 
@@ -1767,31 +1967,73 @@ class Interpreter:
         elif g_output_config.mode == "FILE":
             try:
                 with open(g_output_config.file_path, "w", encoding="utf-8", newline='') as f:
-                    writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}"); writer_function(results, column_names, f)
+                    writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}")
+                    writer_function(results, column_names, f)
                 print(f"{len(results)} rows written to {g_output_config.file_path}")
             except IOError as e: self._error(f"Error writing to file: {e}")
 
     def _write_as_text(self, results, headers, stream, options={}):
-        if not results: stream.write("(0 rows returned)\n"); return
+        if not results:
+            stream.write("(0 rows returned)\n")
+            return
+
+        # Define character sets based on the 'box_style' option
+        style = options.get('box_style', 'BOX').upper()
+        
+        BOX_CHARS = {'h': '─', 'v': '│', 'tl': '┌', 'tc': '┬', 'tr': '┐', 'ml': '├', 'mc': '┼', 'mr': '┤', 'bl': '└', 'bc': '┴', 'br': '┘'}
+        ASCII_CHARS = {'h': '-', 'v': '|', 'tl': '+', 'tc': '+', 'tr': '+', 'ml': '+', 'mc': '+', 'mr': '+', 'bl': '+', 'bc': '+', 'br': '+'}
+        
+        chars = BOX_CHARS if style == 'BOX' else ASCII_CHARS
+
+        # 1. Calculate column widths (without padding first)
         widths = {h: len(h) for h in headers}
+        # Pre-process all data to strings to calculate widths accurately
+        all_data_rows = []
         for row in results:
+            data_row = []
             for i, h in enumerate(headers):
-                cell_content = str(row[i])
-                max_line_len = max(len(line) for line in cell_content.splitlines()) if cell_content else 0
+                cell_content = str(row[i]) if row[i] is not None else "NULL"
+                data_row.append(cell_content)
+                # Check width against all lines in a multi-line cell
+                max_line_len = max(len(line) for line in cell_content.splitlines()) if cell_content else len("NULL")
                 widths[h] = max(widths[h], max_line_len)
-        header_line = " | ".join([f"{h:<{widths[h]}}" for h in headers])
-        separator = "-+-".join(["-" * widths[h] for h in headers])
-        stream.write(f"+-{separator}-+\n| {header_line} |\n+-{separator}-+\n")
-        for row in results:
-            processed_cells = [[str(v)] if v is not None else ["NULL"] for v in row]
-            cell_lines = [str(v).splitlines() if v is not None else ["NULL"] for v in row]
-            for cell in cell_lines:
-                if not cell: cell.append("")
-            max_lines_in_row = max(len(lines) for lines in cell_lines) if any(cell_lines) else 1
-            for i in range(max_lines_in_row):
-                row_parts = [f"{(cell_lines[j][i] if i < len(cell_lines[j]) else ''):<{widths[h]}}" for j, h in enumerate(headers)]
-                stream.write(f"| {' | '.join(row_parts)} |\n")
-            stream.write(f"+-{separator}-+\n")
+            all_data_rows.append(data_row)
+        
+        # 2. Helper to build separator lines with padding
+        def build_separator(left, join, right):
+            # Add 2 for padding: ' ' on each side
+            parts = [chars['h'] * (widths[h] + 2) for h in headers]
+            return f"{left}{join.join(parts)}{right}\n"
+        
+        # 3. Print top border
+        stream.write(build_separator(chars['tl'], chars['tc'], chars['tr']))
+        
+        # 4. Print header (centered)
+        header_parts = [f" {h:^{widths[h]}} " for h in headers]
+        stream.write(f"{chars['v']}{chars['v'].join(header_parts)}{chars['v']}\n")
+
+        # 5. Print header separator
+        stream.write(build_separator(chars['ml'], chars['mc'], chars['mr']))
+
+        # 6. Print data rows
+        if not all_data_rows:
+             # If there's no data, we still need to draw the bottom border.
+             pass
+        else:
+            for row_data in all_data_rows:
+                cell_lines = [cell.splitlines() for cell in row_data]
+                for cell in cell_lines:
+                    if not cell: cell.append("")
+
+                max_lines_in_row = max(len(lines) for lines in cell_lines) if any(cell_lines) else 1
+
+                for i in range(max_lines_in_row):
+                    # Left-align content within the padded width
+                    row_parts = [f" {(cell_lines[j][i] if i < len(cell_lines[j]) else ''):<{widths[h]}} " for j, h in enumerate(headers)]
+                    stream.write(f"{chars['v']}{chars['v'].join(row_parts)}{chars['v']}\n")
+
+        # 7. Print bottom border
+        stream.write(build_separator(chars['bl'], chars['bc'], chars['br']))
         stream.write(f"({len(results)} rows returned)\n")
 
     def _write_as_csv(self, results, headers, stream, options={}):
@@ -2498,6 +2740,11 @@ class Interpreter:
         elif name == 'MID$': s, st = str(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
         elif name == 'UCASE$': return str(args[0]).upper()
         elif name == 'LCASE$': return str(args[0]).lower()
+        elif name == 'SOUNDEX$':
+            if len(args) != 1: 
+                self._error("SOUNDEX$ requires one string argument.")
+            # Reuse the existing logic from the SQL function implementation
+            return SqliteStringFunctions.soundex(str(args[0]))
         elif name == 'INSTR':
             if not (2 <= len(args) <= 3): self._error("INSTR requires 2 or 3 arguments.")
             if len(args) == 2:
@@ -2584,6 +2831,18 @@ class Interpreter:
         elif name == 'LTRIM$': return str(args[0]).lstrip()
         elif name == 'RTRIM$': return str(args[0]).rstrip()
         elif name == 'STR$': return self._format_output_value(args[0])
+        elif name == 'HTMLENCODE$':
+            if len(args) != 1: self._error("HTMLENCODE$ requires one string argument.")
+            return html.escape(str(args[0]))
+        elif name == 'HTMLDECODE$':
+            if len(args) != 1: self._error("HTMLDECODE$ requires one string argument.")
+            return html.unescape(str(args[0]))
+        elif name == 'URLENCODE$':
+            if len(args) != 1: self._error("URLENCODE$ requires one string argument.")
+            return quote_plus(str(args[0]))
+        elif name == 'URLDECODE$':
+            if len(args) != 1: self._error("URLDECODE$ requires one string argument.")
+            return unquote_plus(str(args[0]))
         elif name == 'VAL': 
             try:
                 # Attempt to convert the argument to a float
@@ -3044,6 +3303,29 @@ class Interpreter:
         user_input = input(prompt)
         if var_name.endswith('$'): self.variables[var_name] = user_input
         else: self.variables[var_name] = float(user_input)
+    
+    def _parse_echo_statement(self):
+        """
+        Parses an ECHO statement. Assumes pre-processing has wrapped the
+        content in a single STRING token.
+        """
+        self._expect('ECHO')
+
+        # If ECHO is on a line by itself, print a blank line.
+        if not self._current_token() or self._current_token()[0] in ['NEWLINE', 'COLON', 'END']:
+            print()
+            # Consume the NEWLINE token if it's there
+            if self._current_token() and self._current_token()[0] == 'NEWLINE':
+                self._next_token()
+            return
+        
+        # The content is now a single, well-formed STRING token.
+        token_value = self._expect('STRING')[1]
+        
+        # Un-escape the content: strip outer quotes and convert "" back to "
+        output_string = token_value[1:-1].replace('""', '"')
+        
+        print(output_string)
         
     def _parse_print_statement(self):
         self._expect('PRINT')
@@ -7012,7 +7294,6 @@ class Interpreter:
                 if len(temp_columns) == 1 and ',' in temp_columns[0]:
                     user_columns = [field.strip() for field in temp_columns[0].split(',')]
                 else:
-                    # Otherwise, the list was parsed correctly.
                     user_columns = temp_columns
             elif token[0] == 'WHERE' or (token[0] == 'ID' and token[1].upper() == 'WHERE'):
                 self._next_token(); where_condition = self._parse_expression()
@@ -7042,12 +7323,10 @@ class Interpreter:
                 lookup_field = self._expect('ID')[1]
                 query = self._extract_sql_from_parens()
                 self._expect('RETURNS')
-                # This now correctly handles an ID or a STRING
                 returns_col = self._parse_table_name()
                 display_col = returns_col
                 if self._current_token() and self._current_token()[0] == 'DISPLAY':
                     self._next_token()
-                    # This also correctly handles an ID or a STRING
                     display_col = self._parse_table_name()
                 lookup_definitions[lookup_field] = {"query": query, "returns": returns_col, "display": display_col} 
             else:
@@ -7058,30 +7337,37 @@ class Interpreter:
         all_column_names = metadata['columns']
         column_types = metadata['types']
         numeric_types = {'INTEGER', 'REAL', 'NUMERIC', 'INT', 'BIGINT', 'FLOAT', 'DOUBLE', 'DECIMAL'}
-
-        # --- 3. Build the definitive list of columns to SELECT ---
+        
+        # --- START OF FIX for column ordering ---
+        
+        # Determine which columns to show in the grid view. Order is preserved from user input or schema.
         display_columns = user_columns if user_columns else [col for col in all_column_names if col.lower() != 'rowid']
-        
-        # --- THIS IS THE FIX ---
-        # Start the list of columns to select with the primary key to ensure it's always included in the query result.
-        base_select_list = {pk_column}
-        base_select_list.update(all_column_names)
-        # --- END FIX ---
-        
-        if user_columns:
-            base_select_list.update(user_columns)
-        if search_config['fields']:
-            base_select_list.update(search_config['fields'])
 
-        final_select_list = [f"{self._quote_identifier(table_name)}.{self._quote_identifier(col)}" for col in base_select_list]
-        for field, lookup in lookup_definitions.items():
-            display_col, returns_col = lookup['display'], lookup['returns']
-            lookup_table = self._extract_table_from_select(lookup['query'])
-            if lookup_table:
-                subquery = f'(SELECT {self._quote_identifier(display_col)} FROM {self._quote_identifier(lookup_table)} WHERE {self._quote_identifier(lookup_table)}.{self._quote_identifier(returns_col)} = {self._quote_identifier(table_name)}.{self._quote_identifier(field)})'
-                final_select_list.append(f'{subquery} AS {self._quote_identifier(display_col)}')
+        # Build the final list of columns for the SELECT statement, preserving order and avoiding duplicates.
+        # This list determines the order in the returned dataset and thus the form.
+        select_cols_ordered = []
+        seen_cols = set()
 
+        # Helper to add a column to our ordered list if it hasn't been added yet.
+        def add_col_if_new(col_name):
+            if col_name and col_name.lower() not in seen_cols:
+                select_cols_ordered.append(col_name)
+                seen_cols.add(col_name.lower())
+
+        # 1. Always add the primary key first to ensure it's available.
+        add_col_if_new(pk_column)
+
+        # 2. Add all columns from the table in their natural schema order.
+        #    This ensures all data is fetched for the edit form in a consistent order.
+        for col in all_column_names:
+            add_col_if_new(col)
+        
+        # Now, `select_cols_ordered` contains all necessary columns in a consistent, logical order.
+        final_select_list = [f"{self._quote_identifier(table_name)}.{self._quote_identifier(col)}" for col in select_cols_ordered]
+        # --- END OF FIX ---
+        
         entry_form_elements = []
+        # The TUI form already uses the correctly ordered `all_column_names` list.
         for col in all_column_names:
             field_def = { "type": "FIELD", "name": col, "label": f"{col.replace('_', ' ').title()}", "readonly": (col.lower() == pk_column.lower()) }
             if col in lookup_definitions: 
@@ -7092,8 +7378,13 @@ class Interpreter:
             "name": f"{table_name}_entry", "title": f"Editing: {table_name}", "elements": entry_form_elements, 
             "buttons": [{"name": "Save", "action": "UPDATE"}, {"name": "Cancel", "action": "CANCEL"}]
         }
+        
+        new_form_def = {
+             "name": f"{table_name}_new", "title": f"New Record for {table_name}", "elements": entry_form_elements, 
+             "buttons": [{"name": "Create", "action": "INSERT"}, {"name": "Cancel", "action": "CANCEL"}]
+        }
 
-        # --- 5. Main Application Loop ---
+        # --- Main Application Loop ---
         current_search_term = ""
         while True:
             final_where_clause, params = base_where_clause, []
@@ -7112,15 +7403,101 @@ class Interpreter:
             headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
             initial_grid_data = {"headers": headers, "rows": rows}
             
-            list_runner = FormRunner(
-                form_def={'buttons': [{"name": "Edit", "action": "EDIT"}, {"name": "New", "action": "NEW"}, {"name": "Delete", "action": "DELETE"}, {"name": "Close", "action": "CLOSE"}],
-                          'elements': [{"type": "FIELD", "name": col, 'label': col.title()} for col in display_columns]},
-                initial_data=initial_grid_data, view_mode='grid', pk_column_name=pk_column,
-                search_config=search_config, current_search_term=current_search_term)
+            grid_form_def = {
+                'name': f'{table_name}_grid', 'title': f'Editing: {table_name}',
+                'buttons': [{"name": "Edit", "action": "EDIT"}, {"name": "New", "action": "NEW"}, 
+                            {"name": "Delete", "action": "DELETE"}, {"name": "Close", "action": "CLOSE"}],
+                'elements': [{"type": "FIELD", "name": col, 'label': col.title()} for col in display_columns]
+            }
+
+            if g_ui_mode == 'WEB':
+                list_runner = WebFormRunner(
+                    form_def=grid_form_def, initial_data=initial_grid_data, view_mode='grid', 
+                    pk_column_name=pk_column, search_config=search_config, current_search_term=current_search_term
+                )
+            else: # TUI
+                list_runner = FormRunner(
+                    form_def=grid_form_def, initial_data=initial_grid_data, view_mode='grid', 
+                    pk_column_name=pk_column, search_config=search_config, current_search_term=current_search_term
+                )
+                 
             list_results = list_runner.run()
             
-            action, current_search_term, selected_id = list_results.get("action"), list_results.get("search_term", ""), list_results.get("selected_id")
+            action, current_search_term, selected_id = list_results.get("action", "").upper(), list_results.get("search_term", ""), list_results.get("selected_id")
             
+            if action in ["UPDATE", "INSERT"]:
+                form_data = list_results.get("data", {})
+                if not form_data:
+                    continue
+
+                if action == "UPDATE":
+                    pk_value = None
+                    for k, v in form_data.items():
+                        if k.lower() == pk_column.lower():
+                            pk_value = v
+                            break
+                    
+                    if not pk_value:
+                        print(f"Warning: Could not determine primary key '{pk_column}' from submitted form data. Update failed.")
+                        continue
+
+                    self.variables['GRIDEDIT_ID_TEMP'] = pk_value
+                    single_query = f"SELECT * FROM {self._quote_identifier(table_name)} WHERE {self._quote_identifier(pk_column)} = :GRIDEDIT_ID_TEMP"
+                    row_data_list = self._execute_sql(single_query, is_query=True)
+                    if not row_data_list:
+                        print(f"Warning: Original record with PK {pk_value} not found. Update failed.")
+                        continue
+                    
+                    original_db_data = dict(zip(all_column_names, row_data_list[0]))
+
+                    changed_data = {}
+                    for key, new_value in form_data.items():
+                        if key not in all_column_names or key.lower() == pk_column.lower():
+                            continue
+                        original_value = original_db_data.get(key)
+                        original_str = str(original_value) if original_value is not None else ""
+                        new_str = str(new_value) if new_value is not None else ""
+
+                        if original_str != new_str:
+                            final_value = new_value
+                            col_type = column_types.get(key.upper(), 'TEXT')
+                            if new_value == "":
+                                if any(num_type in col_type for num_type in numeric_types):
+                                    final_value = None
+                                else:
+                                    setting_key = f"{table_name}.{key}".upper()
+                                    handling_rule = g_null_handling_settings.get(setting_key, g_null_handling_default)
+                                    if handling_rule == 'CONVERT_EMPTY_TO_NULL':
+                                        final_value = None
+                            changed_data[key] = final_value
+                    
+                    if changed_data:
+                        set_clauses = [f"{self._quote_identifier(k)} = ?" for k in changed_data.keys()]
+                        update_params = list(changed_data.values())
+                        update_params.append(pk_value)
+                        update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
+                        self._execute_sql(update_sql, False, update_params)
+                        if self.db_engine == 'sqlite': self.db_connection.commit()
+
+                elif action == "INSERT":
+                    insert_columns = [col for col in all_column_names if col.lower() != pk_column.lower() and col in form_data and form_data[col] != '']
+                    if insert_columns:
+                        column_placeholders = ', '.join(['?'] * len(insert_columns))
+                        quoted_columns = ', '.join([self._quote_identifier(col) for col in insert_columns])
+                        insert_values = []
+                        for col in insert_columns:
+                           new_value = form_data[col]
+                           final_value = new_value
+                           col_type = column_types.get(col.upper(), 'TEXT')
+                           if new_value == "":
+                                if any(num_type in col_type for num_type in numeric_types): final_value = None
+                           insert_values.append(final_value)
+
+                        insert_sql = f"INSERT INTO {self._quote_identifier(table_name)} ({quoted_columns}) VALUES ({column_placeholders})"
+                        self._execute_sql(insert_sql, False, insert_values)
+                        if self.db_engine == 'sqlite': self.db_connection.commit()
+                continue
+
             if action == "SEARCH": continue
             if action == "CLOSE" or not action: break
 
@@ -7128,13 +7505,17 @@ class Interpreter:
                 if selected_id is None: continue
                 self.variables['GRIDEDIT_ID'] = selected_id
                 
-                single_query = f"SELECT {quoted_select_list_str} FROM {self._quote_identifier(table_name)} WHERE {self._quote_identifier(table_name)}.{self._quote_identifier(pk_column)} = :GRIDEDIT_ID"
+                single_query = f"SELECT * FROM {self._quote_identifier(table_name)} WHERE {self._quote_identifier(pk_column)} = :GRIDEDIT_ID"
                 row_data_list = self._execute_sql(single_query, is_query=True)
                 if not row_data_list: continue
                 
                 current_headers = [desc[0] for desc in self.db_cursor.description]
                 initial_entry_data = dict(zip(current_headers, row_data_list[0]))
                 
+                if g_ui_mode == 'WEB':
+                    list_runner.set_edit_context(entry_form_def, initial_entry_data)
+                    continue 
+
                 original_db_data = initial_entry_data.copy()
                 
                 while True:
@@ -7164,40 +7545,49 @@ class Interpreter:
                         except Exception as e:
                             print(f"DEBUG: Query failed: {e}")
                         continue
+                    
+                    if entry_results.get("action") == "UPDATE":
+                        #print("DEBUG: UPDATE 1:", entry_results.get("data", {}))
+                        updated_data_from_form = entry_results.get("data", {})
+                        changed_data = {}
+                        for key, new_value in updated_data_from_form.items():
+                            if key not in all_column_names or key.lower() == pk_column.lower(): continue
+                            original_value = original_db_data.get(key)
+                            original_str = str(original_value) if original_value is not None else ""
+                            new_str = str(new_value) if new_value is not None else ""
+                            if original_str != new_str:
+                                final_value = new_value
+                                col_type = column_types.get(key.upper(), 'TEXT')
+                                if new_value == "":
+                                    if any(num_type in col_type for num_type in numeric_types): final_value = None
+                                    else:
+                                        setting_key = f"{table_name}.{key}".upper()
+                                        handling_rule = g_null_handling_settings.get(setting_key, g_null_handling_default)
+                                        if handling_rule == 'CONVERT_EMPTY_TO_NULL': final_value = None
+                                changed_data[key] = final_value
+                        #print("DEBUG: UPDATE 2:", changed_data)
+                        if changed_data:
+                            set_clauses = [f"{self._quote_identifier(k)} = ?" for k in changed_data.keys()]
+                            update_params = list(changed_data.values())
+                            pk_value = original_db_data.get(pk_column)
+                            update_params.append(pk_value)
+                            update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
+                            #print("DEBUG: UPDATE 3",update_sql)
+                            #print("DEBUG: UPDATE 4:", update_params)
+                            result = self._execute_sql(update_sql, False, update_params)
+                            if self.db_engine == 'sqlite': self.db_connection.commit()
+                            original_db_data.update(changed_data)
                     break
-                
-                if entry_results.get("action") == "UPDATE":
-                    updated_data_from_form = entry_results.get("data", {})
-                    changed_data = {}
-                    for key, new_value in updated_data_from_form.items():
-                        if key not in all_column_names or key.lower() == pk_column.lower(): continue
-                        original_value = original_db_data.get(key)
-                        original_str = str(original_value) if original_value is not None else ""
-                        new_str = str(new_value) if new_value is not None else ""
-                        if original_str != new_str:
-                            final_value = new_value
-                            col_type = column_types.get(key.upper(), 'TEXT')
-                            if new_value == "":
-                                if any(num_type in col_type for num_type in numeric_types): final_value = None
-                                else:
-                                    setting_key = f"{table_name}.{key}".upper()
-                                    handling_rule = g_null_handling_settings.get(setting_key, g_null_handling_default)
-                                    if handling_rule == 'CONVERT_EMPTY_TO_NULL': final_value = None
-                            changed_data[key] = final_value
-                    if changed_data:
-                        set_clauses = [f"{self._quote_identifier(k)} = ?" for k in changed_data.keys()]
-                        update_params = list(changed_data.values())
-                        pk_value = original_db_data.get(pk_column)
-                        update_params.append(pk_value)
-                        update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
-                        result = self._execute_sql(update_sql, False, update_params)
-                        if self.db_engine == 'sqlite': self.db_connection.commit()
-                        original_db_data.update(changed_data)
 
             elif action == "NEW":
                 initial_entry_data = {col: "" for col in all_column_names if col.lower() != pk_column.lower()}
+                
+                if g_ui_mode == 'WEB':
+                    list_runner.set_edit_context(new_form_def, initial_entry_data)
+                    continue
+
                 while True:
-                    entry_runner = FormRunner(entry_form_def, initial_data=initial_entry_data, view_mode='single', pk_column_name=pk_column)
+                    entry_runner = FormRunner(new_form_def, initial_data=initial_entry_data, view_mode='single', pk_column_name=pk_column)
                     entry_results = entry_runner.run()
                     if entry_results.get("action") == "RUN_LOOKUP":
                         lookup_field_name = entry_results.get("lookup_field")
@@ -7222,17 +7612,26 @@ class Interpreter:
                             except Exception as e:
                                 print(f"DEBUG: Query failed: {e}")
                         continue
+
+                    if entry_results.get("action") == "INSERT":
+                        new_data = entry_results.get("data", {})
+                        insert_columns = [col for col in all_column_names if col.lower() != pk_column.lower() and col in new_data and new_data[col] != '']
+                        if insert_columns:
+                            column_placeholders = ', '.join(['?'] * len(insert_columns))
+                            quoted_columns = ', '.join([self._quote_identifier(col) for col in insert_columns])
+                            insert_values = []
+                            for col in insert_columns:
+                               new_value = new_data[col]
+                               final_value = new_value
+                               col_type = column_types.get(col.upper(), 'TEXT')
+                               if new_value == "":
+                                    if any(num_type in col_type for num_type in numeric_types): final_value = None
+                               insert_values.append(final_value)
+
+                            insert_sql = f"INSERT INTO {self._quote_identifier(table_name)} ({quoted_columns}) VALUES ({column_placeholders})"
+                            self._execute_sql(insert_sql, False, insert_values)
+                            if self.db_engine == 'sqlite': self.db_connection.commit()
                     break
-                if entry_results.get("action") == "UPDATE":
-                    new_data = entry_results.get("data", {})
-                    insert_columns = [col for col in all_column_names if col.lower() != pk_column.lower() and col in new_data]
-                    if insert_columns:
-                        column_placeholders = ', '.join(['?'] * len(insert_columns))
-                        quoted_columns = ', '.join([self._quote_identifier(col) for col in insert_columns])
-                        insert_values = [new_data[col] for col in insert_columns]
-                        insert_sql = f"INSERT INTO {self._quote_identifier(table_name)} ({quoted_columns}) VALUES ({column_placeholders})"
-                        self._execute_sql(insert_sql, False, insert_values)
-                        if self.db_engine == 'sqlite': self.db_connection.commit()
 
             elif action == "DELETE":
                 if selected_id is None: continue
@@ -7497,7 +7896,10 @@ class Interpreter:
                     headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
                     current_data = {"headers": headers, "rows": rows}
 
-                runner = FormRunner(form_def, current_data, nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
+                if g_ui_mode == 'WEB':
+                    runner = WebFormRunner(form_def, current_data, nav_info=nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
+                else:
+                    runner = FormRunner(form_def, current_data, nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
                 results = runner.run()
                 action = results.get("action")
                 
@@ -7563,13 +7965,21 @@ class Interpreter:
             if record_id is not None:
                  self._error(f"USING clause is only valid for forms with a SOURCE clause.")
 
-            runner = FormRunner(
-                form_def,
-                initial_data={},      # Start with empty data
-                nav_info={},          # No navigation available
-                view_mode='single',
-                pk_column_name='id'   # A default is harmless
-            )
+            if g_ui_mode == 'WEB':
+                runner = WebFormRunner(
+                    form_def,
+                    initial_data={},
+                    view_mode='single',
+                    pk_column_name='id'
+                )
+            else: # TUI
+                runner = FormRunner(
+                    form_def,
+                    initial_data={},
+                    nav_info={},
+                    view_mode='single',
+                    pk_column_name='id'
+                )
             results = runner.run()
 
             # After the form closes, set the system variables with the results
