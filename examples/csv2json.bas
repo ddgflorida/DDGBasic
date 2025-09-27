@@ -37,7 +37,7 @@ IF HASH_COUNT(report) = 0 THEN
 END IF
 
 stats_hash = report("COLUMN_STATISTICS")
-headers = report("HEADERS") ' Get the ordered headers directly from the report
+headers = report("HEADERS")   REM Get the ordered headers directly from the report
 has_header = (report("HEADER_ROW") = -1)
 num_columns = UBOUND(headers) + 1
 
@@ -66,27 +66,27 @@ FOR i = 0 TO UBOUND(headers)
     IF has_header THEN
         lookup_key$ = header_name$
     ELSE
-        ' If no header, the keys in the rec hash are "1", "2", etc.
+        REM If no header, the keys in the rec hash are "1", "2", etc.
         lookup_key$ = LTRIM$(STR$(i + 1))
     END IF
 
     cell_value$ = rec(lookup_key$)
     
-    ' Get the analysis stats for this column
+    REM Get the analysis stats for this column
     column_stats = stats_hash(header_name$)
     suggested_type$ = column_stats("SUGGESTED_SQL_TYPE")
 
-    ' Convert the value based on the suggested type
+    REM Convert the value based on the suggested type
     IF cell_value$ = "" THEN
-        ' Leave empty strings as they are (will become "" in JSON)
+        REM Leave empty strings as they are (will become "" in JSON)
         record_hash(header_name$) = cell_value$
     ELSEIF suggested_type$ = "INTEGER" OR suggested_type$ = "REAL" THEN
-        ' Clean and convert to number
+        REM Clean and convert to number
         cleaned_value$ = REPLACE$(cell_value$, "$", "")
         cleaned_value$ = REPLACE$(cleaned_value$, ",", "")
         record_hash(header_name$) = VAL(cleaned_value$)
     ELSEIF suggested_type$ = "LOGICAL" THEN
-        ' Convert to BASIC boolean (-1 for true, 0 for false)
+        REM Convert to BASIC boolean (-1 for true, 0 for false)
         lower_val$ = LCASE$(cell_value$)
         IF lower_val$ = "true" OR lower_val$ = "t" OR lower_val$ = "y" OR lower_val$ = "yes" OR lower_val$ = "1" THEN
             record_hash(header_name$) = -1.0
@@ -94,7 +94,7 @@ FOR i = 0 TO UBOUND(headers)
             record_hash(header_name$) = 0.0
         END IF
     ELSE
-        ' For DATE and TEXT, keep as string
+        REM For DATE and TEXT, keep as string
         record_hash(header_name$) = cell_value$
     END IF
 
@@ -111,7 +111,7 @@ PRINT ""
 REM --- 4. Serialize the Array to JSON and Write to File ---
 PRINT "Writing to "; output_file$; "..."
 
-json_output$ = JSON_SERIALIZE$(all_records, 2) ' Pretty-print with an indent of 2
+json_output$ = JSON_SERIALIZE$(all_records, 2)    REM Pretty-print with an indent of 2
 
 out_handle = FREEFILE()
 OPEN output_file$ FOR OUTPUT AS #out_handle
@@ -127,5 +127,4 @@ errhandler:
   PRINT ERR
   PRINT ERRMSG$
   PRINT "-------------------------------------------"
-  'PRINT PROGRAM$
   END

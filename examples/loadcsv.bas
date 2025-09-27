@@ -5,14 +5,28 @@ PRINT "CSV Load Test Script"
 PRINT "==================="
 PRINT
 
+DIM cleanup_script$
+cleanup_script$ = `
+    REM Rule 1: Clean up the region and product fields
+    rec.department = UCASE$(TRIM$(rec.department))
+    rec.name = PROPER$(rec.name)
+
+    REM Rule 2: Validate the salary.
+    IF NOT ISNUMERIC(rec.salary) OR VAL(rec.salary) < 60000 OR VAL(rec.salary) > 999999 THEN
+        PRINT "Skipping invalid row for employee record: "; rec.name$, rec.salary
+        rec.is_valid = 0      REM Signal to the LOAD command to skip this row
+    ELSE
+        rec.is_valid = -1     REM Signal that the row is valid
+    END IF
+`
+
 REM Create a sample CSV file with employee data
 PRINT "Creating sample CSV file..."
 OPEN "employees.csv" FOR OUTPUT AS #1
 
+REM Write sample employee records
 REM Write header row
 PRINT #1, "name,department,salary"
-
-REM Write sample employee records
 PRINT #1, "John Smith,Engineering,75000"
 PRINT #1, "Jane Doe,Marketing,65000"
 PRINT #1, "Bob Johnson,Engineering,80000"
@@ -27,9 +41,7 @@ PRINT
 
 REM Load the CSV into a SQLite table
 PRINT "Loading CSV into SQLite table..."
-LOAD CSV "employees.csv" CREATE "employees" OPTIONS "header=true"
-REM LOAD CSV "employees.csv" CREATE "employees" OPTIONS "header=true,linenum=1"
-
+LOAD CSV "employees.csv" CREATE TABLE "employees" OPTIONS "header=true,process_by=cleanup_script$"
 IF ERR = 0 THEN
     PRINT "CSV loaded successfully into 'employees' table"
 ELSE
@@ -49,7 +61,7 @@ SELECT * FROM employees ORDER BY name;
 PRINT
 PRINT "2. Engineering department only:"
 PRINT "==============================="
-SELECT name, salary FROM employees WHERE department = 'Engineering' ORDER BY salary DESC;
+SELECT name, salary FROM employees WHERE department = 'ENGINEERING' ORDER BY salary DESC;
 
 PRINT
 PRINT "3. Average salary by department:"
@@ -74,3 +86,4 @@ KILL "employees.csv"
 PRINT "Cleaned up test file"
 
 END
+

@@ -8,14 +8,15 @@ PRINT
 REM --- Configuration ---
 REM Set the path to your source Excel file and the desired output file.
 excel_file$ = "c:\ddg\data\excel\salesdata.xlsx"
-
-REM --- Define Options ---
-REM 1. sheetname: Specify the exact sheet to load.
-REM 2. fields: Select and rename columns.
-REM 3. transform: Clean up the data by trimming and uppercasing the Region.
-REM 4. format: Specify the output format as JSON.
+PRINT "Loading Excel data into a SQL table. Using file: ";excel_file$
+PRINT "Header is:"; "Product ID     Region     Sales Amount"
+PRINT
+PRINT "--- Define Options ---"
+PRINT "1. sheetname: Specify the exact sheet to load."
+PRINT "2. fields: Select and rename columns."
+PRINT "3. transform: Clean up the data by trimming and uppercasing the Region."
+PRINT "4. format: Specify the output format as JSON."
 options$ = `sheetname="SalesData" fields=[Product ID] as product_id,[Region],[Sales Amount] as amount transform=trimall;Region:upper`
-
 PRINT "Source File: "; excel_file$
 PRINT "Using Options: "; options$
 PRINT
@@ -28,7 +29,8 @@ IF ERR <> 0 THEN
     PRINT ERRMSG$
     END
 END IF
-
+PRINT
+DESCRIBE TABLE "excel_sample"
 PRINT
 PRINT "--- Verification ---"
 PRINT "SELECT the table data to verify its content..."
