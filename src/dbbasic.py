@@ -13,6 +13,7 @@ import html
 import fnmatch
 import subprocess
 import requests
+import calendar
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
 import webbrowser
@@ -781,7 +782,91 @@ class Interpreter:
             # Before quoting, remove any characters that would conflict with the quotes.
             safe_identifier = identifier_str.replace(open_quote, '').replace(close_quote, '')
             return f'{open_quote}{safe_identifier}{close_quote}'
+
+    def _split_sql_statements(self, sql_text: str) -> list[str]:
+        """
+        Splits a single string of SQL into a list of individual statements.
+
+        This function correctly handles:
+        - Single-line comments starting with '--'
+        - Multi-line comments enclosed in '/*' and '*/'
+        - Semicolons used as statement terminators, ignoring those inside comments or string literals.
+
+        Args:
+            sql_text: A string containing one or more SQL statements.
+
+        Returns:
+            A list of strings, where each string is a single SQL statement.
+        """
+        statements = []
+        current_statement = []
         
+        # State flags
+        in_multiline_comment = False
+        in_single_line_comment = False
+        in_string_literal = False
+        
+        # We use an index to allow for two-character lookaheads (e.g., for '/*' or '--')
+        i = 0
+        while i < len(sql_text):
+            char = sql_text[i]
+            
+            # --- State: In a single-line comment ---
+            if in_single_line_comment:
+                if char == '\n':
+                    in_single_line_comment = False
+                    # Preserve the newline in the current statement buffer
+                    current_statement.append(char)
+                i += 1
+                continue
+
+            # --- State: In a multi-line comment ---
+            if in_multiline_comment:
+                if char == '*' and i + 1 < len(sql_text) and sql_text[i+1] == '/':
+                    in_multiline_comment = False
+                    i += 2 # Skip both '*' and '/'
+                else:
+                    i += 1
+                continue
+
+            # --- State: Not in any comment ---
+            
+            # Check for start of a multi-line comment '/*'
+            if not in_string_literal and char == '/' and i + 1 < len(sql_text) and sql_text[i+1] == '*':
+                in_multiline_comment = True
+                i += 2
+                continue
+
+            # Check for start of a single-line comment '--'
+            if not in_string_literal and char == '-' and i + 1 < len(sql_text) and sql_text[i+1] == '-':
+                in_single_line_comment = True
+                i += 2
+                continue
+            
+            # Check for entering/exiting a string literal
+            if char == "'":
+                in_string_literal = not in_string_literal
+            
+            # Check for statement terminator ';'
+            if char == ';' and not in_string_literal:
+                statement_str = "".join(current_statement).strip()
+                if statement_str:
+                    statements.append(statement_str)
+                current_statement = [] # Reset for the next statement
+                i += 1
+                continue
+
+            # If not a special character, append to the current statement
+            current_statement.append(char)
+            i += 1
+            
+        # After the loop, add any remaining text as the final statement
+        last_statement = "".join(current_statement).strip()
+        if last_statement:
+            statements.append(last_statement)
+            
+        return statements
+    
     def _find_next_statement_index(self, start_index):
         """Find the index of the next statement (after a COLON or NEWLINE token)"""
         index = start_index
@@ -1724,13 +1809,40 @@ class Interpreter:
 
     def _parse_execute_statement(self):
         self._expect('EXECUTE')
-        # Parse any valid expression that results in a string
         sql_string = self._parse_expression()
         if not isinstance(sql_string, str):
-            self._error("Argument for EXECUTE must be a string containing a SQL statement.")
+            self._error("Argument for EXECUTE must be a string containing SQL statement(s).")
         
-        # Use the existing _execute_sql helper
-        self._execute_sql(sql_string)
+        # Set up error variables
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': "", 'SQL_ROWCOUNT': 0.0, 'SQL_FOUND': 0.0, 'SQL_NOTFOUND': -1.0})
+        
+        try:
+            if self.db_engine == 'sqlite':
+                # Split into individual statements
+                statements = self._split_sql_statements(sql_string)
+                
+                for i, stmt in enumerate(statements):
+                    if stmt.upper().startswith('SELECT') or stmt.upper().startswith('WITH') or stmt.upper().startswith('PRAGMA'):
+                        # This is a query - execute normally to get results
+                        results = self._execute_sql(stmt, is_query=True)
+                        if results:
+                            column_names = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
+                            self._handle_output(results, column_names)
+                    else:
+                        # This is a non-query statement
+                        self._execute_sql(stmt, is_query=False)
+                        
+            elif self.db_engine == 'duckdb':
+                # DuckDB can handle multiple statements - use existing logic
+                self._execute_sql(sql_string)
+            else:
+                # Fallback
+                self._execute_sql(sql_string)
+                
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            if self.sql_fatal_errors:
+                self._error(f"SQL execution error: {e}")
     
     def _parse_on_error_statement(self):
         self._expect('ON ERROR GOTO')
@@ -2603,6 +2715,16 @@ class Interpreter:
             return -1.0 if isinstance(args[0], dict) else 0.0
         elif name == 'IS_ARRAY': 
             return -1.0 if isinstance(args[0], list) else 0.0
+        elif name == 'NVL':
+            if len(args) < 2:
+                self._error("NVL requires at least 2 arguments.")
+            for value in args:
+                # This simple check correctly handles 0, 0.0, and "" as empty/"falsey" values
+                if value:
+                    return value
+            # If the loop finishes, all arguments were empty. Return an empty string.
+            return ""
+            
         elif name == 'COMMAND$':
             if len(args) != 1: 
                 self._error("COMMAND$ requires 1 argument.")
@@ -2720,8 +2842,69 @@ class Interpreter:
         elif name == 'DATEDIFF': return float((self._parse_date_string(args[0]) - self._parse_date_string(args[1])).days)
         elif name == 'YEAR': return float(self._parse_date_string(args[0]).year)
         elif name == 'MONTH': return float(self._parse_date_string(args[0]).month)
+        elif name == 'MONTHNAME$':
+            if len(args) != 1:
+                self._error("MONTHNAME$ requires 1 argument: month_number.")
+            try:
+                month_num = int(args[0])
+                if 1 <= month_num <= 12:
+                    # calendar.month_name is a list where index 1 is "January"
+                    return calendar.month_name[month_num]
+                else:
+                    self._error("Month number must be between 1 and 12.")
+            except (ValueError, TypeError):
+                self._error("Invalid month number provided to MONTHNAME$.")
         elif name == 'DAY': return float(self._parse_date_string(args[0]).day)
         elif name == 'WEEKDAY': return float((self._parse_date_string(args[0]).weekday() + 1) % 7 + 1)
+        elif name == 'DAYSINMONTH':
+            if len(args) != 2:
+                self._error("DAYSINMONTH requires 2 arguments: month, year.")
+            try:
+                month = int(args[0])
+                year = int(args[1])
+                # calendar.monthrange returns (weekday of 1st day, num_days)
+                num_days = calendar.monthrange(year, month)[1]
+                return float(num_days)
+            except (ValueError, TypeError):
+                self._error("Invalid month or year provided to DAYSINMONTH.")
+        elif name == 'DAYSINYEAR':
+            if len(args) != 1:
+                self._error("DAYSINYEAR requires 1 argument: year.")
+            try:
+                year = int(args[0])
+                # Return 366.0 if it's a leap year, otherwise 365.0
+                days = 366 if calendar.isleap(year) else 365
+                return float(days)
+            except (ValueError, TypeError):
+                self._error("Invalid year provided to DAYSINYEAR.")
+        elif name == 'ISLEAP':
+            if len(args) != 1:
+                self._error("ISLEAP requires 1 argument: year.")
+            try:
+                year = int(args[0])
+                is_leap = calendar.isleap(year)
+                return -1.0 if is_leap else 0.0
+            except (ValueError, TypeError):
+                self._error("Invalid year provided to ISLEAP.")
+        elif name == 'MONTHCAL$':
+            if len(args) != 2:
+                self._error("MONTHCAL$ requires 2 arguments: year, month.")
+            try:
+                year = int(args[0])
+                month = int(args[1])
+                # calendar.month() returns a pre-formatted string
+                return calendar.month(year, month)
+            except (ValueError, TypeError):
+                self._error("Invalid year or month provided to MONTHCAL$.")
+        elif name == 'YEARCAL$':
+            if len(args) != 1:
+                self._error("YEARCAL$ requires 1 argument: year.")
+            try:
+                year = int(args[0])
+                # calendar.calendar() returns the formatted string for the whole year
+                return calendar.calendar(year)
+            except (ValueError, TypeError):
+                self._error("Invalid year provided to YEARCAL$.")
         elif name == 'FORMATDATE$':
             date_obj, format_mask = self._parse_date_string(args[0]), str(args[1]).upper()
             format_map = {'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d', 'HH': '%H', 'MI': '%M', 'SS': '%S'}

@@ -60,6 +60,15 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         out = []
         i = 0
         
+        def escape_for_print(text):
+            """Escape text for use in PRINT statements."""
+            # First try backticks if no backticks in the text
+            if '`' not in text:
+                return f'`{text}`'
+            # Otherwise escape double quotes
+            escaped = text.replace('"', '""')
+            return f'"{escaped}"'
+        
         while i < len(content):
             # Look for <%
             if content[i:i+2] == '<%':
@@ -80,7 +89,7 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                         
                     if i > text_start:
                         text = content[text_start:i]
-                        out.append(f'PRINT "{text}"\n')
+                        out.append(f'PRINT {escape_for_print(text)}\n')
                         
                     # Skip the newline if present
                     if i < len(content) and content[i] == '\n':
@@ -92,14 +101,15 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     code_start = i
                     while i < len(content) and content[i:i+2] != '%>':
                         i += 1
-                    code = content[code_start:i]
+                    code = content[code_start:i].strip()
                     
-                    # Output the code line by line
+                    # Output the code as-is, preserving the original formatting
                     if code:
-                        lines = code.split('\n')
-                        for line in lines:
-                            if line.strip():  # Only output non-empty lines
-                                out.append(line.strip() + '\n')
+                        # Don't split by lines, just output the code block as-is
+                        # but ensure it ends with a newline
+                        if not code.endswith('\n'):
+                            code += '\n'
+                        out.append(code)
                             
                     i += 2  # Skip %>
                     
@@ -126,7 +136,7 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                     # This line has embedded code - handle text before it
                     text = content[line_start:line_end]
                     if text:
-                        out.append(f'PRINT "{text}";\n')
+                        out.append(f'PRINT {escape_for_print(text)};\n')
                     i = line_end
                 else:
                     # Simple line without code
@@ -143,6 +153,7 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         if not result.endswith('\n'):
             result += '\n'
         return result
+
 
 
     def setup_request_data(self, form_data=None):
@@ -258,26 +269,34 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
             self.send_error(500, f"Script execution error: {str(e)}")
 
 if __name__ == '__main__':
+    import webbrowser
     # Create persistent interpreter instance
     print("Initializing persistent DbBasic interpreter...")
     db_interpreter = Interpreter(Lexer(""))
     
-    # Use ThreadingHTTPServer for better request handling
+    # Use single-threaded HTTPServer
     server_address = (HOST_NAME, PORT_NUMBER)
-    httpd = http.server.ThreadingHTTPServer(server_address, DbBasicHTTPRequestHandler)
-
+    httpd = http.server.HTTPServer(server_address, DbBasicHTTPRequestHandler)
+    
     print(f"DbBasic Web Server started on http://{HOST_NAME}:{PORT_NUMBER}")
     print("Supported files: .bas (DbBasic scripts) and .htb (HTML with embedded DbBasic)")
     print("Place your scripts in the same directory and access them in your browser.")
     print("Press Ctrl+C to stop the server.")
     
-    # Run server in background thread
-    server_thread = threading.Thread(target=httpd.serve_forever)
-    server_thread.daemon = True
-    server_thread.start()
-
+    # Auto-open browser after a short delay to ensure server is ready
+    def open_browser():
+        import time
+        time.sleep(1)  # Give server time to start
+        webbrowser.open(f'http://{HOST_NAME}:{PORT_NUMBER}')
+    
+    # Start browser in background thread (this is fine, it's just opening a browser)
+    browser_thread = threading.Thread(target=open_browser)
+    browser_thread.daemon = True
+    browser_thread.start()
+    
     try:
-        server_thread.join()
+        # Run server in main thread (blocking call)
+        httpd.serve_forever()
     except KeyboardInterrupt:
         print("\nCtrl+C received, shutting down server...")
     
