@@ -1,8 +1,8 @@
-' This script demonstrates loading a text file into a sqlite table
+REM This script demonstrates loading a text file into a sqlite table
 
 
-' --- Step 1: Load the data   ---
-PRINT "Loading data from the first table in colleges.html..."
+REM --- Step 1: Load the data   ---
+PRINT "Loading data from file example.csv into table EXAMPLE ..."
 LOAD TEXT "c:\ddg\data\csv\example.csv" CREATE TABLE "example" OPTIONS "linenum=1"
 
 IF ERR <> 0 THEN
@@ -13,7 +13,7 @@ END IF
 PRINT "Data loaded successfully."
 PRINT
 
-' --- Step 3: Display the results ---
+REM --- Step 3: Display the results ---
 PRINT "--- Florida Tennis Colleges Data ---"
 SELECT * FROM example ORDER BY [_linenum];
 DESCRIBE TABLE "example"
