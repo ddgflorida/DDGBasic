@@ -10,6 +10,39 @@ from urllib.parse import urlparse, parse_qs
 # Import the necessary components from your DbBasic interpreter file
 from dbbasic import Interpreter, Lexer, preprocess_continuations, preprocess_includes
 
+
+def preprocess_htb_includes(content, base_path='.', included_files=None):
+    """
+    Recursively finds all <% INCLUDE "filename" %> statements in .htb files
+    and replaces them with the content of the specified file.
+    """
+    if included_files is None:
+        included_files = set()
+
+    # Regex to find <% INCLUDE "file.htb" %>
+    include_pattern = re.compile(r'<%\s*INCLUDE\s+"([^"]+)"\s*%>', re.IGNORECASE)
+
+    def replacer(match):
+        include_filename = match.group(1)
+        include_path = os.path.join(base_path, include_filename)
+        absolute_path = os.path.abspath(include_path)
+        if absolute_path in included_files:
+            return f""
+
+        included_files.add(absolute_path)
+        try:
+            with open(include_path, 'r', encoding='utf-8') as f:
+                included_content = f.read()
+            # Recursively process includes within the included file
+            new_base_path = os.path.dirname(include_path)
+            return preprocess_htb_includes(included_content, new_base_path, included_files)
+        except FileNotFoundError:
+            return f""
+        except Exception as e:
+            return f""
+
+    return include_pattern.sub(replacer, content)
+    
 # --- Configuration ---
 HOST_NAME = 'localhost'
 PORT_NUMBER = 8000
@@ -32,6 +65,7 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                      'CONTENT_TYPE': self.headers['Content-Type'],
                      })
         self.run_script(form_data=form_data)
+
 
     def process_htb_file(self, content, form_data=None):
         """
@@ -213,57 +247,65 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
                 source_code = f.read()
 
             if script_path.endswith('.htb'):
-                # Process .htb template file
-                response_text = self.process_htb_file(source_code, form_data)
-                
-                # For .htb files, assume HTML content unless headers are explicitly set
-                if not response_text.startswith(('Content-Type:', 'HTTP/')):
-                    headers_str = "Content-Type: text/html; charset=utf-8"
-                    body = response_text
-                else:
-                    # Check if response contains headers
-                    if '\n\n' in response_text:
-                        headers_str, body = response_text.split('\n\n', 1)
-                    elif '\r\n\r\n' in response_text:
-                        headers_str, body = response_text.split('\r\n\r\n', 1)
-                    else:
-                        headers_str = "Content-Type: text/html; charset=utf-8"
-                        body = response_text
-                
-            else:
-                # Process .bas script file
+                source_code = preprocess_htb_includes(source_code, base_path=os.path.dirname(script_path))
+                dbbasic_code = self.convert_template_to_dbbasic(source_code)
                 self.setup_request_data(form_data)
                 
-                # Capture script output
-                old_stdout = sys.stdout
-                sys.stdout = captured_output = io.StringIO()
-                
-                try:
-                    db_interpreter.execute(source_code)
-                finally:
-                    sys.stdout = old_stdout
+                # --- MODIFICATION STARTS HERE ---
 
-                response_text = captured_output.getvalue()
+                # Call the interpreter and get the result
+                result = db_interpreter.execute(dbbasic_code)
                 
-                # Parse headers from .bas output
+                # Check if the result is a redirect signal
+                if isinstance(result, tuple) and result[0] == 'redirect':
+                    _, destination_url = result
+                    self.send_response(303) # 303 See Other is correct for this
+                    self.send_header('Location', destination_url)
+                    self.end_headers()
+                    return # Stop further processing
+
+                # If not a redirect, it's HTML content
+                body = result
+                self.send_response(200)
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.end_headers()
+                self.wfile.write(body.encode('utf-8'))
+
+                # --- MODIFICATION ENDS HERE ---
+
+            else: # .bas file logic (remains mostly the same but simplified)
+                self.setup_request_data(form_data)
+
+                # --- MODIFICATION STARTS HERE ---
+
+                result = db_interpreter.execute(source_code)
+                
+                if isinstance(result, tuple) and result[0] == 'redirect':
+                    _, destination_url = result
+                    self.send_response(303)
+                    self.send_header('Location', destination_url)
+                    self.end_headers()
+                    return
+
+                # --- The rest of the .bas logic for parsing headers from output ---
+                # This part is complex, the HTB approach is cleaner.
+                # If you only use HTB files for web, you can simplify this.
+                response_text = result
                 if '\n\n' in response_text:
                     headers_str, body = response_text.split('\n\n', 1)
                 elif '\r\n\r\n' in response_text:
                     headers_str, body = response_text.split('\r\n\r\n', 1)
                 else:
-                    headers_str = "Content-Type: text/html; charset=utf-8"
+                    headers_str = "Content-Type: text/plain; charset=utf-8"
                     body = response_text
-
-            # Send response
-            self.send_response(200)
-            
-            for line in headers_str.strip().splitlines():
-                if ':' in line:
-                    key, value = line.split(':', 1)
-                    self.send_header(key.strip(), value.strip())
-            
-            self.end_headers()
-            self.wfile.write(body.encode('utf-8'))
+                
+                self.send_response(200)
+                for line in headers_str.strip().splitlines():
+                    if ':' in line:
+                        key, value = line.split(':', 1)
+                        self.send_header(key.strip(), value.strip())
+                self.end_headers()
+                self.wfile.write(body.encode('utf-8'))
 
         except Exception as e:
             self.send_error(500, f"Script execution error: {str(e)}")
