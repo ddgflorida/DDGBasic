@@ -265,7 +265,6 @@ class OutputConfig:
 g_output_config = OutputConfig()
 g_null_handling_settings = {}
 g_null_handling_default = 'CONVERT_EMPTY_TO_NULL'
-g_ui_mode = "TUI"
 
 # =================================================================
 # Exception class for loop exits
@@ -277,6 +276,10 @@ class LoopExit(Exception):
 class ProgramEnd(Exception):
     """Exception raised to signal the END of the program."""
     pass
+
+class RedirectSignal(Exception):
+    """Exception raised to signal an HTTP redirect."""
+    pass
     
 # =================================================================
 # APPLICATION LOGIC
@@ -287,7 +290,7 @@ def preprocess_continuations(source_code):
         char = source_code[i]
         if not in_string and not in_comment:
             if char.upper() == 'R' and source_code[i:i+3].upper() == 'REM': in_comment = True
-            elif char == "'": in_comment = True
+            elif source_code[i:i+2] == '--': in_comment = True
             elif char in ['"', '`']: in_string, string_char = True, char
         elif in_string and char == string_char:
             if char == '"' and i + 1 < len(source_code) and source_code[i + 1] == '"':
@@ -396,7 +399,8 @@ class Lexer:
             # ---------------------------
             ('STRING', r'"([^"]|"")*"'), ('SINGLE_Q_STRING', r"'[^']*'"),
             ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?'),
-            ('REM', r'REM[^\n]*'), ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
+            ('REM', r'REM[^\n]*'), ('DASH_COMMENT', r'--[^\n]*'),
+            ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
             ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZETEXT', r'\bANALYZETEXT\b'),
             ('LINEINPUT', r'\bLINEINPUT\b(?!\$)'), ('TOFILE', r'\bTOFILE\b(?!\$)'), ('READFILE', r'\bREADFILE\b(?!\$)'),
             ('ENDLOOP', r'\bENDLOOP\b(?!\$)'), ('DATABASE', r'\bDATABASE\b(?!\$)'), ('SELECT', r'\bSELECT\b(?!\$)'),
@@ -418,27 +422,28 @@ class Lexer:
             ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),('CHAIN', r'\bCHAIN\b(?!\$)'),
             ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), 
             ('TABLE', r'\bTABLE\b(?!\$)'), ('TEXT', r'\bTEXT\b(?!\$)'),('EVAL', r'\bEVAL\b(?!\$)'),
-            ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('REPLACE', r'\bREPLACE\b(?!\$)'),
+            ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), 
+            ('REPLACE', r'\bREPLACE\b(?!\$)'), ('TRUNCATE', r'\bTRUNCATE\b(?!\$)'),
             ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
             ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
             ('SET', r'\bSET\b(?!\$)'), ('OUTPUT', r'\bOUTPUT\b(?!\$)'), ('AS', r'\bAS\b(?!\$)'),
             ('PRINT', r'\bPRINT\b(?!\$)'), ('LET', r'\bLET\b(?!\$)'), ('IF', r'\bIF\b(?!\$)'), ('THEN', r'\bTHEN\b(?!\$)'),
             ('ELSEIF', r'\bELSEIF\b(?!\$)'),('ELSE', r'\bELSE\b(?!\$)'), ('ENDIF', r'\bENDIF\b(?!\$)'), 
             ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),('ECHO', r'\bECHO\b(?!\$)'),
-            ('ZIP', r'\bZIP\b(?!\$)'),('UNZIP', r'\bUNZIP\b(?!\$)'),
+            ('ZIP', r'\bZIP\b(?!\$)'),('UNZIP', r'\bUNZIP\b(?!\$)'), ('UNPACK', r'\bUNPACK\b(?!\$)'),
             ('DO', r'\bDO\b(?!\$)'), ('UNTIL', r'\bUNTIL\b(?!\$)'),
             ('STEP', r'\bSTEP\b(?!\$)'), ('NEXT', r'\bNEXT\b(?!\$)'), ('IN', r'\bIN\b(?!\$)'), ('LOOP', r'\bLOOP\b(?!\$)'),
             ('WHILE', r'\bWHILE\b(?!\$)'), ('WEND', r'\bWEND\b(?!\$)'), ('NOT', r'\bNOT\b(?!\$)'), ('END', r'\bEND\b(?!\$)'),
             ('EXIT', r'\bEXIT\b(?!\$)'), ('FILES', r'\bFILES\b(?!\$)'), ('CHDIR', r'\bCHDIR\b(?!\$)'),
             ('MKDIR', r'\bMKDIR\b(?!\$)'), ('RMDIR', r'\bRMDIR\b(?!\$)'), ('KILL', r'\bKILL\b(?!\$)'),
-            ('ONERRORGOTO', r'\bONERRORGOTO\b'),('RESUME', r'\bRESUME\b(?!\$)'),
+            ('ONERRORGOTO', r'\bONERRORGOTO\b'), ('RESUME', r'\bRESUME\b(?!\$)'),
             ('TRON', r'\bTRON\b(?!\$)'), ('TROFF', r'\bTROFF\b(?!\$)'),('GOTO', r'\bGOTO\b(?!\$)'), 
-            ('DETAILS', r'\bDETAILS\b(?!\$)'),
+            ('DETAILS', r'\bDETAILS\b(?!\$)'), ('REDIRECT', r'\bREDIRECT\b(?!\$)'),
             ('PUSH', r'\bPUSH\b(?!\$)'), ('POP', r'\bPOP\b(?!\$)'),
             ('SHIFT', r'\bSHIFT\b(?!\$)'), ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
             ('SPLICE', r'\bSPLICE\b(?!\$)'), ('REVERSE', r'\bREVERSE\b(?!\$)'),
             ('ID', r'(?!INTO\b)[a-zA-Z_][a-zA-Z0-9_]*\$?'),
-            ('OP', r"[+\*/-]"),
+            ('OP', r"[+\*/-]"), ('CARET', r'\^'),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), 
             ('LBRACKET', r'\['), ('RBRACKET', r'\]'),('COMMA', r','),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('NEWLINE', r'\n'),
@@ -449,7 +454,7 @@ class Lexer:
         for mo in re.finditer(tok_regex, code, re.IGNORECASE):
             kind, value, pos = mo.lastgroup, mo.group(), mo.start()
             #print("DEBUG", kind, value, pos)
-            if kind in ['SKIP', 'REM']: continue
+            if kind in ['SKIP', 'REM', 'DASH_COMMENT']: continue
             if kind == 'MISMATCH':
                 line, col = self.get_line_col(pos); raise RuntimeError(f"Unexpected character '{value}' at line {line}, col {col}")
             raw_tokens.append((kind, value, pos))
@@ -950,7 +955,7 @@ class Interpreter:
             engine_name = engine_token[1].lower()
             if engine_name in ['sqlite', 'duckdb']:
                 self.db_engine = engine_name
-                print(f"Database engine set to {self.db_engine}.")
+                #print(f"Database engine set to {self.db_engine}.")
                 # Close any existing connection when switching engines
                 if self.db_connection:
                     self.db_connection.close()
@@ -1062,7 +1067,17 @@ class Interpreter:
             print(f"Warning: Failed to auto-discover primary key for '{table_name}': {e}")
             # Both SQLite and DuckDB support rowid as fallback
             return None
+    
+    def _table_exists(self, table_name):
+            """Checks if a table exists in the current database."""
+            if self.db_engine == 'duckdb':
+                sql = f"SELECT 1 FROM duckdb_tables() WHERE table_name = ?"
+            else: # SQLite
+                sql = f"SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?"
             
+            result = self._execute_sql(sql, is_query=True, params=[table_name])
+            return bool(result)
+        
     def _get_table_metadata(self, table_name: str, include_indexes: bool = False) -> dict:
         """
         Fetches comprehensive metadata for a given table.
@@ -1637,8 +1652,6 @@ class Interpreter:
             self._parse_error_statement()
         elif token[0] == 'FETCH':                                 # invoke URL
             self._parse_fetch_statement()
-        elif token[0] == 'PARSE':                                 # PARSE JSON
-            self._parse_json_statement()
         elif token[0] == 'LOAD':                                  # LOAD data into a sql table
             self._parse_load_statement()
         elif token[0] == 'ANALYZE TEXT':
@@ -1707,6 +1720,12 @@ class Interpreter:
             self._parse_copy_statement()
         elif token[0] == 'BELL':                                  # Ring a bell
             self._parse_bell_statement()
+        elif token[0] == 'REDIRECT':
+            self._next_token() # Consume REDIRECT
+            destination_url = self._parse_expression()
+            raise RedirectSignal(destination_url)
+        elif token[0] == 'UNPACK':
+            self._parse_unpack_statement()
         elif token[0] == 'FORM':                                   
             self._parse_form_statement()
         elif token[0] == 'OPENFORM':
@@ -1744,38 +1763,46 @@ class Interpreter:
         """
         Executes a string of DbBasic code using the interpreter's current state.
         This allows the interpreter to be re-used for multiple scripts.
-        Currently used by web_server.py to implement scripting
+        Currently used by dbbasicweb.py to implement scripting
         """
-        # Reset program termination flag in case a previous script used END
         self.program_terminated = False
-        
-        # Find the base path from the currently running script if available
-        # This is a placeholder; more robust path handling may be needed for includes.
+
         base_path = '.'
-        
-        # Pre-process includes and line continuations for the new code string
+
         processed_includes = preprocess_includes(code_string, base_path=base_path)
         processed_code = preprocess_continuations(processed_includes)
         lexer = Lexer(processed_code)
-        
-        # Load the new tokens and reset the execution pointer
+
         self.tokens = lexer.tokens
         self.token_index = 0
-        
-        # Clear old jump/label info and rescan for the new script's context
+
         self.labels = {}
         self.jump_map = {}
         self._pre_scan_for_jumps()
         self._scan_for_labels()
-        
-        # Run the main execution loop for the new tokens
+
+        output_html = io.StringIO()
+        old_stdout = sys.stdout
+
         try:
-            while self._current_token():
-                if not self._parse_line() or self.program_terminated:
-                    break
+            sys.stdout = output_html
+
+            # --- MODIFIED: Catch the RedirectSignal ---
+            try:
+                while self._current_token():
+                    if not self._parse_line() or self.program_terminated:
+                        break
+            except RedirectSignal as e:
+                # Restore stdout before returning the signal
+                sys.stdout = old_stdout
+                return ('redirect', e.args[0])
+
+            return output_html.getvalue()
+
         except ProgramEnd:
-            # ProgramEnd should stop the script but not the whole server
-            pass
+            return output_html.getvalue()
+        finally:
+            sys.stdout = old_stdout
             
     def run(self):
         try:
@@ -1891,7 +1918,880 @@ class Interpreter:
             self.in_error_handler = False
         else:
             self._error("Expected NEXT after RESUME.")
+ 
+    def _execute_function(self, name, args):
+        name = name.upper()
+        if name == 'RND':
+            if not args: return random.random()
+            if len(args) == 1: max_val = int(args[0]); return float(random.randint(1, max_val)) if max_val >= 1 else self._error("RND arg must be >= 1")
+            self._error("RND takes 0 or 1 arguments.")
+        elif name == 'UBOUND':
+            if len(args) != 1 or not isinstance(args[0], list): self._error("UBOUND requires one array argument.")
+            return float(len(args[0]) - 1 if args[0] else -1)
+        elif name == 'LEFT$': return str(args[0])[:int(args[1])]
+        elif name == 'RIGHT$': return str(args[0])[-int(args[1]):]
+        elif name == 'MID$': s, st = str(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
+        elif name == 'UCASE$': return str(args[0]).upper()
+        elif name == 'LCASE$': return str(args[0]).lower()
+        elif name == 'CENTER$':
+            if not (2 <= len(args) <= 3):
+                self._error("CENTER$ requires 2 or 3 arguments: string$, width, [pad_char$].")
             
+            source_str = str(args[0])
+            width = int(args[1])
+            pad_char = ' ' # Default padding character
+            if len(args) == 3:
+                pad_char = str(args[2])
+                if len(pad_char) != 1:
+                    self._error("Padding character for CENTER$ must be a single character.")
+
+            return source_str.center(width, pad_char)
+        elif name == 'EXTRACT$':
+            # s$ = EXTRACT#(t$,2,";") -- return the 2nd argument (1-based) in a delimited string (default ,)
+            if not (2 <= len(args) <= 3):
+                self._error("EXTRACT$ requires 2 or 3 arguments: source_string$, position, [delimiter$].")
+            
+            source_str = str(args[0])
+            position = int(args[1])
+            
+            # Conditionally set the delimiter
+            if len(args) == 3:
+                delimiter = str(args[2])
+            else:
+                delimiter = "," # Default to a comma if not provided
+
+            # Ensure position is 1-based
+            if position <= 0:
+                return ""
+
+            try:
+                parts = source_str.split(delimiter)
+                # Convert 1-based position to 0-based index
+                return parts[position - 1]
+            except IndexError:
+                # Return an empty string if the position is out of bounds
+                return ""
+        elif name == 'FIND':
+            if len(args) != 2: self._error("FIND requires 2 arguments.")
+            if not isinstance(args[0], list): self._error("First argument to FIND must be an array.")
+            try:
+                return float(args[0].index(args[1]))
+            except ValueError:
+                return -1.0  # Not found
+        elif name == 'ARRAY_SIZE':
+            if len(args) != 1: self._error("ARRAY_SIZE requires 1 argument.")
+            if not isinstance(args[0], list): self._error("ARRAY_SIZE requires an array argument.")
+            return float(len(args[0]))
+        elif name == 'ARRAY_JOIN':
+            if not (2 <= len(args) <= 3): self._error("ARRAY_JOIN requires 2 or 3 arguments.")
+            if not isinstance(args[0], list): self._error("First argument to ARRAY_JOIN must be an array.")
+            delimiter = str(args[1]) if len(args) >= 2 else ","
+            return delimiter.join(str(item) for item in args[0])
+        elif name == 'ARRAY':
+            # The 'args' parameter is already a Python list of the evaluated arguments.
+            # We simply return it, and the interpreter will assign this new list
+            # to the variable.
+            return args
+        elif name == 'JSON_SERIALIZE$':
+            if not (1 <= len(args) <= 5):
+                self._error("JSON_SERIALIZE$ requires 1 to 5 arguments: data, [indent], [sort_option$], [case_option$], ...")
+
+            data = args[0]
+            if not isinstance(data, (dict, list)):
+                self._error("First argument to JSON_SERIALIZE$ must be a HASH or ARRAY.")
+
+            indent_val, sort_keys, lowercase_keys, camelcase_keys = 0, False, False, False
+            
+            # Process optional arguments
+            string_options = [str(arg).upper() for arg in args[1:] if isinstance(arg, str)]
+            if "SORT_KEYS" in string_options: sort_keys = True
+            if "LOWERCASE_KEYS" in string_options: lowercase_keys = True
+            if "CAMELCASE_KEYS" in string_options: camelcase_keys = True
+            
+            numeric_args = [arg for arg in args[1:] if isinstance(arg, (int, float))]
+            if numeric_args: indent_val = numeric_args[0]
+                
+            indent = int(indent_val) if indent_val > 0 else None
+
+            serializable_data = self._basic_to_json_serializable(data)
+            
+            # --- NEW: Automatic filtering logic ---
+            if isinstance(serializable_data, dict):
+                keys = list(serializable_data.keys())
+                has_numeric_keys = any(k.isdigit() for k in keys)
+                has_non_numeric_keys = any(not k.isdigit() for k in keys)
+
+                if has_numeric_keys and has_non_numeric_keys:
+                    serializable_data = {k: v for k, v in serializable_data.items() if not k.isdigit()}
+            # --- End of new logic ---
+
+            if camelcase_keys and isinstance(serializable_data, dict):
+                serializable_data = {self._to_camel_case(k): v for k, v in serializable_data.items()}
+            elif lowercase_keys and isinstance(serializable_data, dict):
+                serializable_data = {k.lower(): v for k, v in serializable_data.items()}
+
+            return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys)
+        # --- HASH FUNCTIONS ---
+        elif name == 'PARSEJSON':
+            if len(args) != 1:
+                self._error("PARSEJSON function requires 1 argument: the JSON string.")
+            
+            json_string = str(args[0])
+            if not json_string.strip():
+                return {} # Return an empty hash for an empty string
+
+            try:
+                parsed_data = json.loads(json_string)
+            except json.JSONDecodeError as e:
+                self._error(f"Invalid JSON string: {e}")
+            
+            # Convert the Python object to the interpreter's internal HASH/ARRAY format
+            return self._python_to_basic_data(parsed_data)
+        elif name == 'HASH_EXISTS':
+            if len(args) != 2 or not isinstance(args[0], dict): 
+                self._error("HASH_EXISTS requires hash_var, key$.")
+            lookup_key = self._normalize_hash_key(args[1])
+            return -1.0 if lookup_key in args[0] else 0.0
+        elif name == 'HASH_JOIN':
+            if len(args) < 2:
+                self._error("HASH_JOIN requires at least two HASH arguments.")
+            
+            new_hash = {}
+            for h in args:
+                if not isinstance(h, dict):
+                    self._error("All arguments to HASH_JOIN must be HASH variables.")
+                new_hash.update(h)
+            return new_hash
+            if len(args) < 2:
+                self._error("HASH_JOIN requires at least two HASH arguments.")
+            
+            new_hash = {}
+            for h in args:
+                if not isinstance(h, dict):
+                    self._error("All arguments to HASH_JOIN must be HASH variables.")
+                new_hash.update(h)
+            return new_hash       
+        elif name == 'HASH_KEYS':
+            if len(args) != 1 or not isinstance(args[0], dict):
+                self._error("HASH_KEYS requires one HASH argument.")
+            return list(args[0].keys())
+
+        elif name == 'HASH_VALUES':
+            if len(args) != 1 or not isinstance(args[0], dict):
+                self._error("HASH_VALUES requires one HASH argument.")
+            return list(args[0].values())
+        
+        elif name == 'HASH_RENAME':
+            if len(args) != 3 or not isinstance(args[0], dict):
+                self._error("HASH_RENAME requires hash_var, old_key$, new_key$.")
+            
+            the_hash, old_key, new_key = args[0], args[1], args[2]
+            
+            # Normalize keys according to the current mode (IGNORE_CASE/PRESERVE_CASE)
+            normalized_old = self._normalize_hash_key(old_key)
+            normalized_new = self._normalize_hash_key(new_key)
+
+            if normalized_old in the_hash:
+                # Prevent overwriting an existing key with the new name
+                if normalized_new in the_hash and normalized_old != normalized_new:
+                    self._error(f"Cannot rename key: new key '{new_key}' already exists.")
+                
+                the_hash[normalized_new] = the_hash.pop(normalized_old)
+                return -1.0 # BASIC true for success
+            
+            return 0.0 # BASIC false if old key was not found
+        elif name == 'HASH_DELETE':
+            # Note that this a a FUNCTION, i.e. n = hash_delete(h,"city")
+            if len(args) != 2 or not isinstance(args[0], dict): 
+                self._error("HASH_DELETE requires hash_var, key$.")
+            lookup_key = self._normalize_hash_key(args[1])
+            if lookup_key in args[0]: 
+                del args[0][lookup_key]
+                return 0
+            return 0
+        elif name == 'HASH_COUNT':
+            if len(args) != 1 or not isinstance(args[0], dict): 
+                self._error("HASH_COUNT requires a hash argument.")
+            return float(len(args[0]))
+        elif name == 'IS_HASH': 
+            return -1.0 if isinstance(args[0], dict) else 0.0
+        elif name == 'IS_ARRAY': 
+            return -1.0 if isinstance(args[0], list) else 0.0
+        elif name == 'NVL':
+            if len(args) < 2:
+                self._error("NVL requires at least 2 arguments.")
+            for value in args:
+                # This simple check correctly handles 0, 0.0, and "" as empty/"falsey" values
+                if value:
+                    return value
+            # If the loop finishes, all arguments were empty. Return an empty string.
+            return ""
+            
+        elif name == 'COMMAND$':
+            if len(args) != 1: 
+                self._error("COMMAND$ requires 1 argument.")
+            idx = int(args[0])
+            return self.command_args[idx-1] if 1 <= idx <= len(self.command_args) else ""
+        elif name == 'ENVIRON$':
+            if len(args) != 1:
+                self._error("ENVIRON$ requires 1 argument.")
+            var_name = str(args[0])
+            return os.environ.get(var_name, "")
+        elif name == 'CURDIR$':
+            if args: 
+                self._error("CURDIR$ takes no arguments."); 
+            return os.getcwd()
+        elif name == 'FREEFILE':
+            if args:
+                self._error("FREEFILE function takes no arguments.")
+            # This initialization must happen outside the 'if args:' check.
+            file_num = 1
+            while file_num in self.file_handles:
+                file_num += 1
+            return float(file_num)
+        elif name == 'EOF':
+            if len(args) < 1: return 0
+            file_num = int(args[0])
+            handle_info = self.file_handles.get(file_num)
+            if not handle_info: 
+                self._error(f"File #{file_num} is not open.")
+            pos = handle_info['handle'].tell()
+            is_eof = handle_info['handle'].read(1) == ''
+            handle_info['handle'].seek(pos)
+            return -1.0 if is_eof else 0.0
+        elif name == 'FILE_EXISTS':
+            if len(args) != 1: self._error("FILE_EXISTS requires 1 argument.")
+            return -1.0 if os.path.exists(os.path.expanduser(str(args[0]))) else 0.0
+        elif name == 'FILESIZE':
+            if len(args) != 1: self._error("FILESIZE requires 1 argument.")
+            filename = str(args[0])
+            try:
+                return float(os.path.getsize(os.path.expanduser(filename)))
+            except (FileNotFoundError, OSError):
+                return -1.0  # Return -1 if file doesn't exist or can't be accessed
+
+        elif name == 'FILETIME':
+            if len(args) != 1: self._error("FILETIME requires 1 argument.")
+            filename = str(args[0])
+            try:
+                mtime = os.path.getmtime(os.path.expanduser(filename))
+                return datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
+            except (FileNotFoundError, OSError):
+                return ""  # Return empty string if file doesn't exist
+
+        elif name == 'FILEATTR':
+            if len(args) != 1: self._error("FILEATTR requires 1 argument.")
+            filename = str(args[0])
+            try:
+                filepath = os.path.expanduser(filename)
+                stat_info = os.stat(filepath)
+                attr_bits = 0
+                if stat_info.st_mode & 0o200 == 0: attr_bits |= 1  # Read-only
+                if os.name == 'nt':  # Windows
+                    import stat
+                    if stat_info.st_file_attributes & 2: attr_bits |= 2  # Hidden
+                    if stat_info.st_file_attributes & 4: attr_bits |= 4  # System
+                if os.path.isdir(filepath): attr_bits |= 16  # Directory
+                return float(attr_bits)
+            except (FileNotFoundError, OSError, AttributeError):
+                return 0.0
+
+        elif name == 'DISKSPACE':
+            if len(args) != 1: self._error("DISKSPACE requires 1 argument.")
+            path = str(args[0])
+            try:
+                if os.name == 'nt':  # Windows
+                    import shutil
+                    total, used, free = shutil.disk_usage(path)
+                    return float(free)
+                else:  # Unix-like
+                    statvfs = os.statvfs(path)
+                    return float(statvfs.f_frsize * statvfs.f_bavail)
+            except (FileNotFoundError, OSError):
+                return -1.0
+        elif name == 'BASENAME$':
+            if len(args) != 1: self._error("BASENAME$ requires 1 string argument.")
+            path = str(args[0])
+            return os.path.basename(path)
+        elif name == 'PATHNAME$':
+            if len(args) != 1: self._error("PATHNAME$ requires 1 string argument.")
+            path = str(args[0])
+            return os.path.dirname(path)
+        elif name == 'URL_FILENAME$':
+            if len(args) != 1: self._error("URL_FILENAME$ requires 1 string argument.")
+            url = str(args[0])
+            path = urlparse(url).path
+            return os.path.basename(path)
+
+        elif name == 'URL_PATH$':
+            if len(args) != 1: self._error("URL_PATH$ requires 1 string argument.")
+            url = str(args[0])
+            path = urlparse(url).path
+            return os.path.dirname(path)
+
+        elif name == 'URL_HOSTNAME$':
+            if len(args) != 1: self._error("URL_HOSTNAME$ requires 1 string argument.")
+            url = str(args[0])
+            return urlparse(url).hostname
+
+        elif name == 'URL_SCHEME$':
+            if len(args) != 1: self._error("URL_SCHEME$ requires 1 string argument.")
+            url = str(args[0])
+            return urlparse(url).scheme
+        elif name == 'DATE$': return datetime.now().strftime('%Y-%m-%d')
+        elif name == 'TIME$': return datetime.now().strftime('%H:%M:%S')
+        elif name == 'DATEADD': return (self._parse_date_string(args[0]) + timedelta(days=int(args[1]))).strftime('%Y-%m-%d')
+        elif name == 'DATEDIFF': return float((self._parse_date_string(args[0]) - self._parse_date_string(args[1])).days)
+        elif name == 'YEAR': return float(self._parse_date_string(args[0]).year)
+        elif name == 'MONTH': return float(self._parse_date_string(args[0]).month)
+        elif name == 'MONTHNAME$':
+            if len(args) != 1:
+                self._error("MONTHNAME$ requires 1 argument: month_number.")
+            try:
+                month_num = int(args[0])
+                if 1 <= month_num <= 12:
+                    # calendar.month_name is a list where index 1 is "January"
+                    return calendar.month_name[month_num]
+                else:
+                    self._error("Month number must be between 1 and 12.")
+            except (ValueError, TypeError):
+                self._error("Invalid month number provided to MONTHNAME$.")
+        elif name == 'DAY': return float(self._parse_date_string(args[0]).day)
+        elif name == 'WEEKDAY': return float((self._parse_date_string(args[0]).weekday() + 1) % 7 + 1)
+        elif name == 'DAYSINMONTH':
+            if len(args) != 2:
+                self._error("DAYSINMONTH requires 2 arguments: month, year.")
+            try:
+                month = int(args[0])
+                year = int(args[1])
+                # calendar.monthrange returns (weekday of 1st day, num_days)
+                num_days = calendar.monthrange(year, month)[1]
+                return float(num_days)
+            except (ValueError, TypeError):
+                self._error("Invalid month or year provided to DAYSINMONTH.")
+        elif name == 'DAYSINYEAR':
+            if len(args) != 1:
+                self._error("DAYSINYEAR requires 1 argument: year.")
+            try:
+                year = int(args[0])
+                # Return 366.0 if it's a leap year, otherwise 365.0
+                days = 366 if calendar.isleap(year) else 365
+                return float(days)
+            except (ValueError, TypeError):
+                self._error("Invalid year provided to DAYSINYEAR.")
+        elif name == 'ISLEAP':
+            if len(args) != 1:
+                self._error("ISLEAP requires 1 argument: year.")
+            try:
+                year = int(args[0])
+                is_leap = calendar.isleap(year)
+                return -1.0 if is_leap else 0.0
+            except (ValueError, TypeError):
+                self._error("Invalid year provided to ISLEAP.")
+        elif name == 'MONTHCAL$':
+            if len(args) != 2:
+                self._error("MONTHCAL$ requires 2 arguments: year, month.")
+            try:
+                year = int(args[0])
+                month = int(args[1])
+                # calendar.month() returns a pre-formatted string
+                return calendar.month(year, month)
+            except (ValueError, TypeError):
+                self._error("Invalid year or month provided to MONTHCAL$.")
+        elif name == 'YEARCAL$':
+            if len(args) != 1:
+                self._error("YEARCAL$ requires 1 argument: year.")
+            try:
+                year = int(args[0])
+                # calendar.calendar() returns the formatted string for the whole year
+                return calendar.calendar(year)
+            except (ValueError, TypeError):
+                self._error("Invalid year provided to YEARCAL$.")
+        elif name == 'FORMATDATE$':
+            date_obj, format_mask = self._parse_date_string(args[0]), str(args[1]).upper()
+            format_map = {'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d', 'HH': '%H', 'MI': '%M', 'SS': '%S'}
+            py_format_str = format_mask
+            for b, p in format_map.items(): py_format_str = py_format_str.replace(b, p)
+            return date_obj.strftime(py_format_str)
+        elif name == 'NOW':
+            if len(args) != 0:
+                self._error("NOW function takes no arguments.")
+            return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        elif name == 'HOUR' or name == 'MINUTE' or name == 'SECOND':
+            if len(args) != 1:
+                self._error(f"{name} requires 1 time string argument.")
+            time_str = str(args[0])
+            parts = time_str.split(':')
+            try:
+                if name == 'HOUR':
+                    return float(parts[0]) if len(parts) >= 1 else 0.0
+                elif name == 'MINUTE':
+                    return float(parts[1]) if len(parts) >= 2 else 0.0
+                elif name == 'SECOND':
+                    return float(parts[2]) if len(parts) >= 3 else 0.0
+            except (ValueError, IndexError):
+                return 0.0
+
+        elif name == 'DATESERIAL':
+            if len(args) != 3:
+                self._error("DATESERIAL requires 3 arguments: year, month, day.")
+            try:
+                year, month, day = int(args[0]), int(args[1]), int(args[2])
+                return datetime(year, month, day).strftime('%Y-%m-%d')
+            except (ValueError, TypeError):
+                self._error("Invalid arguments for DATESERIAL.")
+        
+        elif name == 'ISDATE':
+            if len(args) != 1:
+                self._error("ISDATE requires 1 string argument.")
+            date_str = str(args[0])
+            # Try a few common formats
+            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d', '%Y%m%d'):
+                try:
+                    datetime.strptime(date_str, fmt)
+                    return -1.0 # BASIC True
+                except ValueError:
+                    continue
+            return 0.0 # BASIC False
+
+        elif name == 'WEEKDAYNAME$':
+            if len(args) != 1:
+                self._error("WEEKDAYNAME$ requires 1 argument: day_number (1-7 for Sun-Sat).")
+            try:
+                day_num = int(args[0])
+                if not 1 <= day_num <= 7:
+                    self._error("Day number must be between 1 (Sunday) and 7 (Saturday).")
+                # Map from (Sun=1...Sat=7) to Python's calendar index (Mon=0...Sun=6)
+                python_index = (day_num % 7) - 1 if day_num < 7 else 6
+                return calendar.day_name[python_index]
+            except (ValueError, TypeError):
+                self._error("Invalid day number for WEEKDAYNAME$.")
+        
+        # --- String & Array Functions ---
+        elif name == 'INSTRREV':
+            if not (2 <= len(args) <= 3):
+                self._error("INSTRREV requires 2 or 3 arguments: haystack$, needle$, [start].")
+            haystack, needle = str(args[0]), str(args[1])
+            start = len(haystack)
+            if len(args) == 3:
+                start = int(args[2])
+            
+            # Python's rfind returns -1 if not found, we need to return 0.
+            # It also needs the end position, which is what 'start' means in InStrRev.
+            pos = haystack.rfind(needle, 0, start)
+            return float(pos + 1)
+
+        elif name == 'FILTER':
+            if not (2 <= len(args) <= 3):
+                self._error("FILTER requires 2 or 3 arguments: array, criteria$, [include_flag].")
+            
+            source_array, criteria = args[0], str(args[1])
+            include = True # Default to include matches
+            if len(args) == 3:
+                include = (args[2] != 0)
+
+            if not isinstance(source_array, list):
+                self._error("First argument to FILTER must be an array.")
+
+            result_array = []
+            for item in source_array:
+                item_str = str(item)
+                is_match = criteria in item_str
+                if (is_match and include) or (not is_match and not include):
+                    result_array.append(item)
+            return result_array
+
+        # --- Utility & Type Functions ---
+        elif name == 'TYPENAME$':
+            if len(args) != 1:
+                self._error("TYPENAME$ requires 1 argument.")
+            value = args[0]
+            if isinstance(value, str):
+                return "STRING"
+            elif isinstance(value, (int, float)):
+                return "FLOAT"
+            elif isinstance(value, list):
+                return "ARRAY"
+            elif isinstance(value, dict):
+                return "HASH"
+            else:
+                return "UNKNOWN"
+        elif name == 'LEN': return float(len(str(args[0])))
+        elif name == 'SPLIT':
+            if not (2 <= len(args) <= 3): self._error("SPLIT requires 2 or 3 arguments.")
+            source_str, delimiter_str = str(args[0]), str(args[1])
+            if not delimiter_str: return list(source_str)
+            if len(args) == 3: limit = int(args[2]); return source_str.split(delimiter_str, limit - 1) if limit > 0 else self._error("Limit must be > 0")
+            return source_str.split(delimiter_str)
+        elif name == 'SOUNDEX$':
+            if len(args) != 1: 
+                self._error("SOUNDEX$ requires one string argument.")
+            # Reuse the existing logic from the SQL function implementation
+            return SqliteStringFunctions.soundex(str(args[0]))
+        elif name == 'INSTR':
+            if not (2 <= len(args) <= 3): self._error("INSTR requires 2 or 3 arguments.")
+            if len(args) == 2:
+                haystack, needle = str(args[0]), str(args[1])
+                pos = haystack.find(needle)
+                return float(pos + 1) if pos != -1 else 0.0
+            else:  # 3 arguments: INSTR(start, haystack, needle)
+                start, haystack, needle = int(args[0]) - 1, str(args[1]), str(args[2])
+                pos = haystack.find(needle, max(0, start))
+                return float(pos + 1) if pos != -1 else 0.0
+        elif name == 'REVERSE$': 
+            return str(args[0])[::-1]
+
+        elif name == 'REPEAT$': 
+            if len(args) != 2: self._error("REPEAT$ requires 2 arguments.")
+            return str(args[0]) * int(args[1])
+
+        elif name == 'PADLEFT$':
+            if len(args) != 3: self._error("PADLEFT$ requires 3 arguments.")
+            text, length, pad_char = str(args[0]), int(args[1]), str(args[2])
+            if len(pad_char) == 0: pad_char = ' '
+            return text.rjust(length, pad_char[0])
+
+        elif name == 'PADRIGHT$':
+            if len(args) != 3: self._error("PADRIGHT$ requires 3 arguments.")
+            text, length, pad_char = str(args[0]), int(args[1]), str(args[2])
+            if len(pad_char) == 0: pad_char = ' '
+            return text.ljust(length, pad_char[0])
+
+        elif name == 'STARTSWITH':
+            if len(args) != 2: self._error("STARTSWITH requires 2 arguments.")
+            text, prefix = str(args[0]), str(args[1])
+            return -1.0 if text.startswith(prefix) else 0.0
+
+        elif name == 'ENDSWITH':
+            if len(args) != 2: self._error("ENDSWITH requires 2 arguments.")
+            text, suffix = str(args[0]), str(args[1])
+            return -1.0 if text.endswith(suffix) else 0.0
+
+        elif name == 'CONTAINS':
+            if len(args) != 2: self._error("CONTAINS requires 2 arguments.")
+            text, substring = str(args[0]), str(args[1])
+            return -1.0 if substring in text else 0.0
+
+        elif name == 'PROPER$':
+            if len(args) != 1: self._error("PROPER$ requires 1 argument.")
+            return str(args[0]).title()
+
+        elif name == 'ISALPHA':
+            if len(args) != 1: self._error("ISALPHA requires 1 argument.")
+            return -1.0 if str(args[0]).isalpha() else 0.0
+
+        elif name == 'ISDIGIT':
+            if len(args) != 1: self._error("ISDIGIT requires 1 argument.")
+            return -1.0 if str(args[0]).isdigit() else 0.0
+        elif name == 'ISNUMERIC':
+            if len(args) != 1: self._error("ISNUMERIC requires 1 argument.")
+            try:
+                float(args[0])
+                return -1.0 # True
+            except (ValueError, TypeError):
+                return 0.0 # False
+        elif name == 'ISALNUM':
+            if len(args) != 1: self._error("ISALNUM requires 1 argument.")
+            return -1.0 if str(args[0]).isalnum() else 0.0
+        elif name == 'CHR$':
+            if len(args) != 1: self._error("CHR$ requires one numeric argument.")
+            return chr(int(args[0]))
+        elif name == 'ASC':
+            if len(args) != 1 or not isinstance(args[0], str) or len(args[0]) == 0:
+                self._error("ASC requires one non-empty string argument.")
+            return float(ord(args[0][0]))
+        elif name == 'REPLACE$':
+            if not (3 <= len(args) <= 5): self._error("REPLACE$ requires 3 to 5 arguments.")
+            source_str, old_str, new_str = str(args[0]), str(args[1]), str(args[2])
+            count = int(args[3]) if len(args) >= 4 else -1
+            ignore_case = (args[4] != 0) if len(args) == 5 else False
+            if ignore_case: return re.sub(re.escape(old_str), new_str, source_str, count=count if count != -1 else 0, flags=re.IGNORECASE)
+            return source_str.replace(old_str, new_str, count)
+        elif name == 'HEX$': return hex(int(args[0]))[2:]
+        elif name == 'OCT$': return oct(int(args[0]))[2:]
+        elif name == 'SPACE$': return ' ' * int(args[0])
+        elif name == 'TRIM$': return str(args[0]).strip()
+        elif name == 'LTRIM$': return str(args[0]).lstrip()
+        elif name == 'RTRIM$': return str(args[0]).rstrip()
+        elif name == 'STR$': return self._format_output_value(args[0])
+        elif name == 'HTMLENCODE$':
+            if len(args) != 1: self._error("HTMLENCODE$ requires one string argument.")
+            return html.escape(str(args[0]))
+        elif name == 'HTMLDECODE$':
+            if len(args) != 1: self._error("HTMLDECODE$ requires one string argument.")
+            return html.unescape(str(args[0]))
+        elif name == 'URLENCODE$':
+            if len(args) != 1: self._error("URLENCODE$ requires one string argument.")
+            return quote_plus(str(args[0]))
+        elif name == 'URLDECODE$':
+            if len(args) != 1: self._error("URLDECODE$ requires one string argument.")
+            return unquote_plus(str(args[0]))
+        elif name == 'VAL': 
+            try:
+                # Attempt to convert the argument to a float
+                return float(args[0])
+            except (ValueError, TypeError):
+                # If conversion fails (e.g., for an empty or non-numeric string), return 0.0
+                return 0.0
+        elif name == 'INT': return float(math.floor(args[0]))
+        elif name == 'FIX': return float(math.trunc(args[0]))
+        elif name == 'ATN': return math.atan(args[0])
+        elif name == 'COS': return math.cos(args[0])
+        elif name == 'SIN': return math.sin(args[0])
+        elif name == 'TAN': return math.tan(args[0])
+        elif name == 'EXP': return math.exp(args[0])
+        elif name == 'LOG': return math.log(args[0])
+        elif name == 'SGN': n = args[0]; return 1.0 if n > 0 else -1.0 if n < 0 else 0.0
+        elif name == 'SQR': return math.sqrt(args[0])
+        elif name == 'MOD':
+            if len(args) != 2: self._error("MOD requires 2 arguments.")
+            return float(args[0] % args[1])
+
+        elif name == 'ROUND':
+            if not (1 <= len(args) <= 2): self._error("ROUND requires 1 or 2 arguments.")
+            if len(args) == 1: return float(round(args[0]))
+            return float(round(args[0], int(args[1])))
+
+        elif name == 'CEIL':
+            if len(args) != 1: self._error("CEIL requires 1 argument.")
+            return float(math.ceil(args[0]))
+
+        elif name == 'FLOOR':
+            if len(args) != 1: self._error("FLOOR requires 1 argument.")
+            return float(math.floor(args[0]))
+
+        elif name == 'ABS':
+            if len(args) != 1: self._error("ABS requires 1 argument.")
+            return float(abs(args[0]))
+
+        elif name == 'MIN':
+            if len(args) < 2: self._error("MIN requires at least 2 arguments.")
+            return float(min(args))
+
+        elif name == 'MAX':
+            if len(args) < 2: self._error("MAX requires at least 2 arguments.")
+            return float(max(args))
+
+        elif name == 'POWER':
+            if len(args) != 2: self._error("POWER requires 2 arguments.")
+            return float(pow(args[0], args[1]))
+
+        elif name == 'DEGREES':
+            if len(args) != 1: self._error("DEGREES requires 1 argument.")
+            return float(math.degrees(args[0]))
+
+        elif name == 'RADIANS':
+            if len(args) != 1: self._error("RADIANS requires 1 argument.")
+            return float(math.radians(args[0]))
+
+        elif name == 'ATAN2':
+            if len(args) != 2: self._error("ATAN2 requires 2 arguments.")
+            return float(math.atan2(args[0], args[1]))
+        else: self._error(f"Unknown function: {name}")
+        
+    def _parse_factor(self):
+        token = self._current_token()
+        if token[0] == 'OP' and token[1] in '+-':
+            op = token[1]
+            self._next_token()
+            res = self._parse_factor() 
+            return -res if op == '-' else res
+        if token[0] == 'NUMBER': 
+            self._next_token(); 
+            return float(token[1])
+        elif token[0] in ('STRING', 'BACKTICK_STRING'):
+            self._next_token(); raw_value = token[1]
+            if raw_value.startswith('"'): 
+                return raw_value[1:-1].replace('""', '"')
+            return raw_value[1:-1]
+        elif token[0] == 'LPAREN':
+            if self._peek_token() and self._peek_token()[0] == 'SQL_STRING':
+                results = self._execute_sql(self._extract_sql_from_parens(), is_query=True)
+                if len(results) != 1 or len(results[0]) != 1:
+                    self._error("Scalar subquery must return one row/column.")
+                return results[0][0]
+            else: 
+                self._next_token()
+                res = self._parse_condition()
+                self._expect('RPAREN')
+                return res
+        elif token[0] == 'SQL_STRING':
+            self._next_token()
+            results = self._execute_sql(token[1], is_query=True)
+            if len(results) == 1 and len(results[0]) == 1:
+                return results[0][0]
+            else:
+                self._error("A subquery used as a value must return exactly one row and one column.")
+            return results[0][0]
+        elif token[0] == 'ID':
+            var_name = token[1]
+            #print(f"DEBUG _parse_factor: Looking up '{var_name}', variables: {list(self.variables.keys())}")
+            # Handle case-insensitive BASIC variable lookup
+            actual_var_name = var_name
+            if var_name not in self.variables:
+                # Try to find existing variable with different case
+                #print("DEBUG: var_name not in self.variables")
+                found = False
+                for existing_var in self.variables:
+                    if existing_var.upper() == var_name.upper():
+                        actual_var_name = existing_var
+                        found = True
+                        break
+                if not found:
+                    #print("DEBUG: var_name not found so creating new one")
+                    # Variable doesn't exist, create with uppercase name
+                    actual_var_name = var_name
+                    if not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                        self.variables[actual_var_name] = "" if var_name.endswith('$') else 0.0
+            
+            var_name = actual_var_name
+            
+            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                self._next_token(); 
+                return self._execute_function(var_name, [])
+            
+            self._next_token()    
+            #print("DEBUG: getting current_value, var_name=", var_name)            
+            current_value = self._get_variable_value(var_name, auto_create=True)
+            #print("DEBUG: current_value=", current_value)
+            
+            while self._current_token():
+                token = self._current_token()
+                if token[0] == 'LPAREN':
+                    self._next_token()
+                    if not isinstance(current_value, (list, dict)):
+                        args = [];
+                        if self._current_token()[0] != 'RPAREN':
+                            while True:
+                                args.append(self._parse_expression())
+                                if self._current_token()[0] == 'RPAREN': break
+                                self._expect('COMMA')
+                        self._expect('RPAREN')
+                        current_value = self._execute_function(var_name, args)
+                        continue
+                    if self._current_token()[0] == 'RPAREN': self._expect('RPAREN'); break
+                    key_or_index = self._parse_expression(); self._expect('RPAREN')
+                    if isinstance(current_value, list):
+                        index = int(key_or_index)
+                        if not 0 <= index < len(current_value): self._error("Array index out of bounds.")
+                        current_value = current_value[index]
+                    elif isinstance(current_value, dict):
+                        original_key = str(key_or_index)
+                        normalized_key = self._normalize_hash_key(key_or_index)
+                        # Use the original key expression to determine type, not the variable name
+                        default_val = "" if original_key.endswith('$') else 0.0
+                        current_value = current_value.get(normalized_key, default_val)
+                    continue
+                elif token[0] == 'DOT':
+                    #print("DEBUG:", self.variables)
+                    if not isinstance(current_value, dict): self._error("Dot notation only for HASH.")
+                    self._next_token()
+                    key_token = self._current_token()
+                    if not key_token:
+                        self._error("Expected a key name after '.'")
+
+                    key_name = ""
+                    # It first checks for a generic ID as before.
+                    if key_token[0] == 'ID':
+                        self._next_token() 
+                        key_name = key_token[1]
+                    # If not an ID, it checks if it's an acceptable keyword.
+                    elif key_token[0] not in self.INVALID_KEY_TOKENS:
+                        self._next_token() 
+                        key_name = key_token[1] 
+                    # If neither, it's an error.
+                    else:
+                        self._error(f"Invalid key name '{key_token[1]}' after '.'")
+                    
+                    is_string_access = key_name.endswith('$')
+                    base_key = key_name.rstrip('$')
+                    
+                    #print(f"DEBUG: Looking for key '{base_key}' in hash with keys: {list(current_value.keys())}", file=sys.stderr)
+                    
+                    # 1. Try exact match first (fastest)
+                    if base_key in current_value:
+                        current_value = current_value[base_key]
+                        #print(f"DEBUG: Found exact match", file=sys.stderr)
+                    else:
+                        # 2. Fall back to case-insensitive search for dot notation forgiveness
+                        found = False
+                        for candidate_key in current_value.keys():
+                            if candidate_key.lower() == base_key.lower():
+                                current_value = current_value[candidate_key]
+                                #print(f"DEBUG: Found case-insensitive match: '{candidate_key}'", file=sys.stderr)
+                                found = True
+                                break
+                        
+                        if not found:
+                            current_value = "" if is_string_access else 0.0
+                            #print(f"DEBUG: No match found, using default", file=sys.stderr)
+                    continue
+                else: 
+                    break
+            return current_value
+        elif token[0] == 'ARRAY':
+            # This handles the specific case of the ARRAY() constructor function.
+            # The logic is a simplified version of a function call.
+            function_name = self._expect('ARRAY')[1]
+            self._expect('LPAREN')
+            
+            args = []
+            if self._current_token()[0] != 'RPAREN':
+                while True:
+                    args.append(self._parse_expression())
+                    if self._current_token()[0] == 'RPAREN': break
+                    self._expect('COMMA')
+            
+            self._expect('RPAREN')
+            return self._execute_function(function_name, args)
+        else:
+            self._error(f"Unexpected token in factor: {token}")
+            print("\n--- TOKEN DUMP IN LEXER ---")
+            for token in self.tokens:
+                print(token)
+            print("--------------------\n")     
+            
+    def _parse_power(self):
+        res = self._parse_factor()
+        while self._current_token() and self._current_token()[0] == 'CARET':
+            self._next_token()
+            right = self._parse_factor()
+            res = pow(res, right)
+        return res 
+        
+    def _parse_term(self):
+        res = self._parse_power()
+        while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '*/':
+            op = self._current_token()[1]
+            self._next_token()
+            right = self._parse_power() # <-- This also needed to be changed
+            try:
+                if op == '*':
+                    res *= right
+                elif op == '/':
+                    res /= right
+            except ZeroDivisionError:
+                raise RuntimeError("Division by zero")
+            except Exception as e:
+                raise RuntimeError(f"Arithmetic error: {e}")
+        return res
+        
+    def _parse_expression(self):
+        res = self._parse_term()
+        while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '+-':
+            op = self._current_token()[1]
+            self._next_token()
+            right = self._parse_term()
+            if op == '+':
+                res = self._to_string(res) + self._to_string(right) if isinstance(res, str) or isinstance(right, str) else res + right
+                #res = str(res) + str(right) if isinstance(res, str) or isinstance(right, str) else res + right
+            elif op == '-':
+                if isinstance(res, str) or isinstance(right, str):
+                    raise RuntimeError("Type mismatch: Cannot subtract strings")
+                res -= right
+        return res
+        
     def _parse_condition(self): return self._parse_or_condition()
     def _parse_or_condition(self):
         left = self._parse_and_condition()
@@ -1961,19 +2861,7 @@ class Interpreter:
         self._expect('SET')
         token = self._current_token()
         
-        if token[0] == 'ID' and token[1].upper() == 'UI':
-            self._next_token()
-            #self._expect('ID')
-            mode_token = self._expect('ID')
-            mode = mode_token[1].upper()
-            if mode in ['TUI', 'WEB']:
-                if mode == 'WEB' and WebFormRunner is None:
-                    self._error("WEB UI mode requires 'web_form_runner.py' to be present.")
-                global g_ui_mode
-                g_ui_mode = mode
-            else:
-                self._error("Invalid UI mode. Use TUI or WEB.")
-        elif token[0] == 'ID' and token[1].upper() == 'NULL_HANDLING':
+        if token[0] == 'ID' and token[1].upper() == 'NULL_HANDLING':
             self._next_token() # Consume NULL_HANDLING
             
             # Check if this is a global or column-specific setting
@@ -2527,12 +3415,20 @@ class Interpreter:
             self.token_index = endif_index + 1 if endif_index is not None else len(self.tokens)
             raise e
 
-
-    def _format_output_value(self, value):
-        if isinstance(value, (int, float)) and value >= 0:
-            return " " + (str(int(value)) if isinstance(value, float) and value.is_integer() else str(value))
-        if isinstance(value, float) and value.is_integer(): return str(int(value))
+    def _to_string(self, value):
+        """Converts a value to a string, formatting floats that are whole numbers as integers."""
+        if isinstance(value, float) and value.is_integer():
+            return str(int(value))
         return str(value)
+        
+    def _format_output_value(self, value):
+        # First, convert the number to the desired base string format ("1" not "1.0")
+        string_value = self._to_string(value)
+        
+        # Then, apply PRINT's special rule: add a leading space for positive numbers
+        if isinstance(value, (int, float)) and value >= 0:
+            return " " + string_value
+        return string_value
         
     def _parse_date_string(self, date_str):
         date_str = date_str.replace('-', '')
@@ -2571,685 +3467,7 @@ class Interpreter:
     def _to_camel_case(self, s):
         """Converts an UPPER_SNAKE_CASE string to camelCase."""
         components = s.lower().split('_')
-        return components[0] + ''.join(x.title() for x in components[1:])
-        
-    def _execute_function(self, name, args):
-        name = name.upper()
-        if name == 'RND':
-            if not args: return random.random()
-            if len(args) == 1: max_val = int(args[0]); return float(random.randint(1, max_val)) if max_val >= 1 else self._error("RND arg must be >= 1")
-            self._error("RND takes 0 or 1 arguments.")
-        elif name == 'UBOUND':
-            if len(args) != 1 or not isinstance(args[0], list): self._error("UBOUND requires one array argument.")
-            return float(len(args[0]) - 1 if args[0] else -1)
-        elif name == 'FIND':
-            if len(args) != 2: self._error("FIND requires 2 arguments.")
-            if not isinstance(args[0], list): self._error("First argument to FIND must be an array.")
-            try:
-                return float(args[0].index(args[1]))
-            except ValueError:
-                return -1.0  # Not found
-
-        elif name == 'ARRAY_SIZE':
-            if len(args) != 1: self._error("ARRAY_SIZE requires 1 argument.")
-            if not isinstance(args[0], list): self._error("ARRAY_SIZE requires an array argument.")
-            return float(len(args[0]))
-
-        elif name == 'ARRAY_JOIN':
-            if not (2 <= len(args) <= 3): self._error("ARRAY_JOIN requires 2 or 3 arguments.")
-            if not isinstance(args[0], list): self._error("First argument to ARRAY_JOIN must be an array.")
-            delimiter = str(args[1]) if len(args) >= 2 else ","
-            return delimiter.join(str(item) for item in args[0])
-        elif name == 'ARRAY':
-            # The 'args' parameter is already a Python list of the evaluated arguments.
-            # We simply return it, and the interpreter will assign this new list
-            # to the variable.
-            return args
-        elif name == 'JSON_SERIALIZE$':
-            if not (1 <= len(args) <= 5):
-                self._error("JSON_SERIALIZE$ requires 1 to 5 arguments: data, [indent], [sort_option$], [case_option$], ...")
-
-            data = args[0]
-            if not isinstance(data, (dict, list)):
-                self._error("First argument to JSON_SERIALIZE$ must be a HASH or ARRAY.")
-
-            indent_val, sort_keys, lowercase_keys, camelcase_keys = 0, False, False, False
-            
-            # Process optional arguments
-            string_options = [str(arg).upper() for arg in args[1:] if isinstance(arg, str)]
-            if "SORT_KEYS" in string_options: sort_keys = True
-            if "LOWERCASE_KEYS" in string_options: lowercase_keys = True
-            if "CAMELCASE_KEYS" in string_options: camelcase_keys = True
-            
-            numeric_args = [arg for arg in args[1:] if isinstance(arg, (int, float))]
-            if numeric_args: indent_val = numeric_args[0]
-                
-            indent = int(indent_val) if indent_val > 0 else None
-
-            serializable_data = self._basic_to_json_serializable(data)
-            
-            # --- NEW: Automatic filtering logic ---
-            if isinstance(serializable_data, dict):
-                keys = list(serializable_data.keys())
-                has_numeric_keys = any(k.isdigit() for k in keys)
-                has_non_numeric_keys = any(not k.isdigit() for k in keys)
-
-                if has_numeric_keys and has_non_numeric_keys:
-                    serializable_data = {k: v for k, v in serializable_data.items() if not k.isdigit()}
-            # --- End of new logic ---
-
-            if camelcase_keys and isinstance(serializable_data, dict):
-                serializable_data = {self._to_camel_case(k): v for k, v in serializable_data.items()}
-            elif lowercase_keys and isinstance(serializable_data, dict):
-                serializable_data = {k.lower(): v for k, v in serializable_data.items()}
-
-            return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys)
-        # --- HASH FUNCTIONS ---
-        elif name == 'HASH_EXISTS':
-            if len(args) != 2 or not isinstance(args[0], dict): 
-                self._error("HASH_EXISTS requires hash_var, key$.")
-            lookup_key = self._normalize_hash_key(args[1])
-            return -1.0 if lookup_key in args[0] else 0.0
-        elif name == 'HASH_JOIN':
-            if len(args) < 2:
-                self._error("HASH_JOIN requires at least two HASH arguments.")
-            
-            new_hash = {}
-            for h in args:
-                if not isinstance(h, dict):
-                    self._error("All arguments to HASH_JOIN must be HASH variables.")
-                new_hash.update(h)
-            return new_hash
-            if len(args) < 2:
-                self._error("HASH_JOIN requires at least two HASH arguments.")
-            
-            new_hash = {}
-            for h in args:
-                if not isinstance(h, dict):
-                    self._error("All arguments to HASH_JOIN must be HASH variables.")
-                new_hash.update(h)
-            return new_hash       
-        elif name == 'HASH_KEYS':
-            if len(args) != 1 or not isinstance(args[0], dict):
-                self._error("HASH_KEYS requires one HASH argument.")
-            return list(args[0].keys())
-
-        elif name == 'HASH_VALUES':
-            if len(args) != 1 or not isinstance(args[0], dict):
-                self._error("HASH_VALUES requires one HASH argument.")
-            return list(args[0].values())
-        
-        elif name == 'HASH_RENAME':
-            if len(args) != 3 or not isinstance(args[0], dict):
-                self._error("HASH_RENAME requires hash_var, old_key$, new_key$.")
-            
-            the_hash, old_key, new_key = args[0], args[1], args[2]
-            
-            # Normalize keys according to the current mode (IGNORE_CASE/PRESERVE_CASE)
-            normalized_old = self._normalize_hash_key(old_key)
-            normalized_new = self._normalize_hash_key(new_key)
-
-            if normalized_old in the_hash:
-                # Prevent overwriting an existing key with the new name
-                if normalized_new in the_hash and normalized_old != normalized_new:
-                    self._error(f"Cannot rename key: new key '{new_key}' already exists.")
-                
-                the_hash[normalized_new] = the_hash.pop(normalized_old)
-                return -1.0 # BASIC true for success
-            
-            return 0.0 # BASIC false if old key was not found
-        elif name == 'HASH_DELETE':
-            # Note that this a a FUNCTION, i.e. n = hash_delete(h,"city")
-            if len(args) != 2 or not isinstance(args[0], dict): 
-                self._error("HASH_DELETE requires hash_var, key$.")
-            lookup_key = self._normalize_hash_key(args[1])
-            if lookup_key in args[0]: 
-                del args[0][lookup_key]
-                return 0
-            return 0
-        elif name == 'HASH_COUNT':
-            if len(args) != 1 or not isinstance(args[0], dict): 
-                self._error("HASH_COUNT requires a hash argument.")
-            return float(len(args[0]))
-        elif name == 'IS_HASH': 
-            return -1.0 if isinstance(args[0], dict) else 0.0
-        elif name == 'IS_ARRAY': 
-            return -1.0 if isinstance(args[0], list) else 0.0
-        elif name == 'NVL':
-            if len(args) < 2:
-                self._error("NVL requires at least 2 arguments.")
-            for value in args:
-                # This simple check correctly handles 0, 0.0, and "" as empty/"falsey" values
-                if value:
-                    return value
-            # If the loop finishes, all arguments were empty. Return an empty string.
-            return ""
-            
-        elif name == 'COMMAND$':
-            if len(args) != 1: 
-                self._error("COMMAND$ requires 1 argument.")
-            idx = int(args[0])
-            return self.command_args[idx-1] if 1 <= idx <= len(self.command_args) else ""
-        elif name == 'ENVIRON$':
-            if len(args) != 1:
-                self._error("ENVIRON$ requires 1 argument.")
-            var_name = str(args[0])
-            return os.environ.get(var_name, "")
-        elif name == 'CURDIR$':
-            if args: 
-                self._error("CURDIR$ takes no arguments."); 
-            return os.getcwd()
-        elif name == 'FREEFILE':
-            if args:
-                self._error("FREEFILE function takes no arguments.")
-            # This initialization must happen outside the 'if args:' check.
-            file_num = 1
-            while file_num in self.file_handles:
-                file_num += 1
-            return float(file_num)
-        elif name == 'EOF':
-            if len(args) < 1: return 0
-            file_num = int(args[0])
-            handle_info = self.file_handles.get(file_num)
-            if not handle_info: 
-                self._error(f"File #{file_num} is not open.")
-            pos = handle_info['handle'].tell()
-            is_eof = handle_info['handle'].read(1) == ''
-            handle_info['handle'].seek(pos)
-            return -1.0 if is_eof else 0.0
-        elif name == 'FILE_EXISTS':
-            if len(args) != 1: self._error("FILE_EXISTS requires 1 argument.")
-            return -1.0 if os.path.exists(os.path.expanduser(str(args[0]))) else 0.0
-        elif name == 'FILESIZE':
-            if len(args) != 1: self._error("FILESIZE requires 1 argument.")
-            filename = str(args[0])
-            try:
-                return float(os.path.getsize(os.path.expanduser(filename)))
-            except (FileNotFoundError, OSError):
-                return -1.0  # Return -1 if file doesn't exist or can't be accessed
-
-        elif name == 'FILETIME':
-            if len(args) != 1: self._error("FILETIME requires 1 argument.")
-            filename = str(args[0])
-            try:
-                mtime = os.path.getmtime(os.path.expanduser(filename))
-                return datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
-            except (FileNotFoundError, OSError):
-                return ""  # Return empty string if file doesn't exist
-
-        elif name == 'FILEATTR':
-            if len(args) != 1: self._error("FILEATTR requires 1 argument.")
-            filename = str(args[0])
-            try:
-                filepath = os.path.expanduser(filename)
-                stat_info = os.stat(filepath)
-                attr_bits = 0
-                if stat_info.st_mode & 0o200 == 0: attr_bits |= 1  # Read-only
-                if os.name == 'nt':  # Windows
-                    import stat
-                    if stat_info.st_file_attributes & 2: attr_bits |= 2  # Hidden
-                    if stat_info.st_file_attributes & 4: attr_bits |= 4  # System
-                if os.path.isdir(filepath): attr_bits |= 16  # Directory
-                return float(attr_bits)
-            except (FileNotFoundError, OSError, AttributeError):
-                return 0.0
-
-        elif name == 'DISKSPACE':
-            if len(args) != 1: self._error("DISKSPACE requires 1 argument.")
-            path = str(args[0])
-            try:
-                if os.name == 'nt':  # Windows
-                    import shutil
-                    total, used, free = shutil.disk_usage(path)
-                    return float(free)
-                else:  # Unix-like
-                    statvfs = os.statvfs(path)
-                    return float(statvfs.f_frsize * statvfs.f_bavail)
-            except (FileNotFoundError, OSError):
-                return -1.0
-        elif name == 'BASENAME$':
-            if len(args) != 1: self._error("BASENAME$ requires 1 string argument.")
-            path = str(args[0])
-            return os.path.basename(path)
-        elif name == 'PATHNAME$':
-            if len(args) != 1: self._error("PATHNAME$ requires 1 string argument.")
-            path = str(args[0])
-            return os.path.dirname(path)
-        elif name == 'URL_FILENAME$':
-            if len(args) != 1: self._error("URL_FILENAME$ requires 1 string argument.")
-            url = str(args[0])
-            path = urlparse(url).path
-            return os.path.basename(path)
-
-        elif name == 'URL_PATH$':
-            if len(args) != 1: self._error("URL_PATH$ requires 1 string argument.")
-            url = str(args[0])
-            path = urlparse(url).path
-            return os.path.dirname(path)
-
-        elif name == 'URL_HOSTNAME$':
-            if len(args) != 1: self._error("URL_HOSTNAME$ requires 1 string argument.")
-            url = str(args[0])
-            return urlparse(url).hostname
-
-        elif name == 'URL_SCHEME$':
-            if len(args) != 1: self._error("URL_SCHEME$ requires 1 string argument.")
-            url = str(args[0])
-            return urlparse(url).scheme
-        elif name == 'DATE$': return datetime.now().strftime('%Y-%m-%d')
-        elif name == 'TIME$': return datetime.now().strftime('%H:%M:%S')
-        elif name == 'DATEADD': return (self._parse_date_string(args[0]) + timedelta(days=int(args[1]))).strftime('%Y-%m-%d')
-        elif name == 'DATEDIFF': return float((self._parse_date_string(args[0]) - self._parse_date_string(args[1])).days)
-        elif name == 'YEAR': return float(self._parse_date_string(args[0]).year)
-        elif name == 'MONTH': return float(self._parse_date_string(args[0]).month)
-        elif name == 'MONTHNAME$':
-            if len(args) != 1:
-                self._error("MONTHNAME$ requires 1 argument: month_number.")
-            try:
-                month_num = int(args[0])
-                if 1 <= month_num <= 12:
-                    # calendar.month_name is a list where index 1 is "January"
-                    return calendar.month_name[month_num]
-                else:
-                    self._error("Month number must be between 1 and 12.")
-            except (ValueError, TypeError):
-                self._error("Invalid month number provided to MONTHNAME$.")
-        elif name == 'DAY': return float(self._parse_date_string(args[0]).day)
-        elif name == 'WEEKDAY': return float((self._parse_date_string(args[0]).weekday() + 1) % 7 + 1)
-        elif name == 'DAYSINMONTH':
-            if len(args) != 2:
-                self._error("DAYSINMONTH requires 2 arguments: month, year.")
-            try:
-                month = int(args[0])
-                year = int(args[1])
-                # calendar.monthrange returns (weekday of 1st day, num_days)
-                num_days = calendar.monthrange(year, month)[1]
-                return float(num_days)
-            except (ValueError, TypeError):
-                self._error("Invalid month or year provided to DAYSINMONTH.")
-        elif name == 'DAYSINYEAR':
-            if len(args) != 1:
-                self._error("DAYSINYEAR requires 1 argument: year.")
-            try:
-                year = int(args[0])
-                # Return 366.0 if it's a leap year, otherwise 365.0
-                days = 366 if calendar.isleap(year) else 365
-                return float(days)
-            except (ValueError, TypeError):
-                self._error("Invalid year provided to DAYSINYEAR.")
-        elif name == 'ISLEAP':
-            if len(args) != 1:
-                self._error("ISLEAP requires 1 argument: year.")
-            try:
-                year = int(args[0])
-                is_leap = calendar.isleap(year)
-                return -1.0 if is_leap else 0.0
-            except (ValueError, TypeError):
-                self._error("Invalid year provided to ISLEAP.")
-        elif name == 'MONTHCAL$':
-            if len(args) != 2:
-                self._error("MONTHCAL$ requires 2 arguments: year, month.")
-            try:
-                year = int(args[0])
-                month = int(args[1])
-                # calendar.month() returns a pre-formatted string
-                return calendar.month(year, month)
-            except (ValueError, TypeError):
-                self._error("Invalid year or month provided to MONTHCAL$.")
-        elif name == 'YEARCAL$':
-            if len(args) != 1:
-                self._error("YEARCAL$ requires 1 argument: year.")
-            try:
-                year = int(args[0])
-                # calendar.calendar() returns the formatted string for the whole year
-                return calendar.calendar(year)
-            except (ValueError, TypeError):
-                self._error("Invalid year provided to YEARCAL$.")
-        elif name == 'FORMATDATE$':
-            date_obj, format_mask = self._parse_date_string(args[0]), str(args[1]).upper()
-            format_map = {'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d', 'HH': '%H', 'MI': '%M', 'SS': '%S'}
-            py_format_str = format_mask
-            for b, p in format_map.items(): py_format_str = py_format_str.replace(b, p)
-            return date_obj.strftime(py_format_str)
-        elif name == 'LEN': return float(len(str(args[0])))
-        elif name == 'SPLIT':
-            if not (2 <= len(args) <= 3): self._error("SPLIT requires 2 or 3 arguments.")
-            source_str, delimiter_str = str(args[0]), str(args[1])
-            if not delimiter_str: return list(source_str)
-            if len(args) == 3: limit = int(args[2]); return source_str.split(delimiter_str, limit - 1) if limit > 0 else self._error("Limit must be > 0")
-            return source_str.split(delimiter_str)
-        elif name == 'LEFT$': return str(args[0])[:int(args[1])]
-        elif name == 'RIGHT$': return str(args[0])[-int(args[1]):]
-        elif name == 'MID$': s, st = str(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
-        elif name == 'UCASE$': return str(args[0]).upper()
-        elif name == 'LCASE$': return str(args[0]).lower()
-        elif name == 'SOUNDEX$':
-            if len(args) != 1: 
-                self._error("SOUNDEX$ requires one string argument.")
-            # Reuse the existing logic from the SQL function implementation
-            return SqliteStringFunctions.soundex(str(args[0]))
-        elif name == 'INSTR':
-            if not (2 <= len(args) <= 3): self._error("INSTR requires 2 or 3 arguments.")
-            if len(args) == 2:
-                haystack, needle = str(args[0]), str(args[1])
-                pos = haystack.find(needle)
-                return float(pos + 1) if pos != -1 else 0.0
-            else:  # 3 arguments: INSTR(start, haystack, needle)
-                start, haystack, needle = int(args[0]) - 1, str(args[1]), str(args[2])
-                pos = haystack.find(needle, max(0, start))
-                return float(pos + 1) if pos != -1 else 0.0
-        elif name == 'REVERSE$': 
-            return str(args[0])[::-1]
-
-        elif name == 'REPEAT$': 
-            if len(args) != 2: self._error("REPEAT$ requires 2 arguments.")
-            return str(args[0]) * int(args[1])
-
-        elif name == 'PADLEFT$':
-            if len(args) != 3: self._error("PADLEFT$ requires 3 arguments.")
-            text, length, pad_char = str(args[0]), int(args[1]), str(args[2])
-            if len(pad_char) == 0: pad_char = ' '
-            return text.rjust(length, pad_char[0])
-
-        elif name == 'PADRIGHT$':
-            if len(args) != 3: self._error("PADRIGHT$ requires 3 arguments.")
-            text, length, pad_char = str(args[0]), int(args[1]), str(args[2])
-            if len(pad_char) == 0: pad_char = ' '
-            return text.ljust(length, pad_char[0])
-
-        elif name == 'STARTSWITH':
-            if len(args) != 2: self._error("STARTSWITH requires 2 arguments.")
-            text, prefix = str(args[0]), str(args[1])
-            return -1.0 if text.startswith(prefix) else 0.0
-
-        elif name == 'ENDSWITH':
-            if len(args) != 2: self._error("ENDSWITH requires 2 arguments.")
-            text, suffix = str(args[0]), str(args[1])
-            return -1.0 if text.endswith(suffix) else 0.0
-
-        elif name == 'CONTAINS':
-            if len(args) != 2: self._error("CONTAINS requires 2 arguments.")
-            text, substring = str(args[0]), str(args[1])
-            return -1.0 if substring in text else 0.0
-
-        elif name == 'PROPER$':
-            if len(args) != 1: self._error("PROPER$ requires 1 argument.")
-            return str(args[0]).title()
-
-        elif name == 'ISALPHA':
-            if len(args) != 1: self._error("ISALPHA requires 1 argument.")
-            return -1.0 if str(args[0]).isalpha() else 0.0
-
-        elif name == 'ISDIGIT':
-            if len(args) != 1: self._error("ISDIGIT requires 1 argument.")
-            return -1.0 if str(args[0]).isdigit() else 0.0
-        elif name == 'ISNUMERIC':
-            if len(args) != 1: self._error("ISNUMERIC requires 1 argument.")
-            try:
-                float(args[0])
-                return -1.0 # True
-            except (ValueError, TypeError):
-                return 0.0 # False
-        elif name == 'ISALNUM':
-            if len(args) != 1: self._error("ISALNUM requires 1 argument.")
-            return -1.0 if str(args[0]).isalnum() else 0.0
-        elif name == 'CHR$':
-            if len(args) != 1: self._error("CHR$ requires one numeric argument.")
-            return chr(int(args[0]))
-        elif name == 'ASC':
-            if len(args) != 1 or not isinstance(args[0], str) or len(args[0]) == 0:
-                self._error("ASC requires one non-empty string argument.")
-            return float(ord(args[0][0]))
-        elif name == 'REPLACE$':
-            if not (3 <= len(args) <= 5): self._error("REPLACE$ requires 3 to 5 arguments.")
-            source_str, old_str, new_str = str(args[0]), str(args[1]), str(args[2])
-            count = int(args[3]) if len(args) >= 4 else -1
-            ignore_case = (args[4] != 0) if len(args) == 5 else False
-            if ignore_case: return re.sub(re.escape(old_str), new_str, source_str, count=count if count != -1 else 0, flags=re.IGNORECASE)
-            return source_str.replace(old_str, new_str, count)
-        elif name == 'HEX$': return hex(int(args[0]))[2:]
-        elif name == 'OCT$': return oct(int(args[0]))[2:]
-        elif name == 'SPACE$': return ' ' * int(args[0])
-        elif name == 'TRIM$': return str(args[0]).strip()
-        elif name == 'LTRIM$': return str(args[0]).lstrip()
-        elif name == 'RTRIM$': return str(args[0]).rstrip()
-        elif name == 'STR$': return self._format_output_value(args[0])
-        elif name == 'HTMLENCODE$':
-            if len(args) != 1: self._error("HTMLENCODE$ requires one string argument.")
-            return html.escape(str(args[0]))
-        elif name == 'HTMLDECODE$':
-            if len(args) != 1: self._error("HTMLDECODE$ requires one string argument.")
-            return html.unescape(str(args[0]))
-        elif name == 'URLENCODE$':
-            if len(args) != 1: self._error("URLENCODE$ requires one string argument.")
-            return quote_plus(str(args[0]))
-        elif name == 'URLDECODE$':
-            if len(args) != 1: self._error("URLDECODE$ requires one string argument.")
-            return unquote_plus(str(args[0]))
-        elif name == 'VAL': 
-            try:
-                # Attempt to convert the argument to a float
-                return float(args[0])
-            except (ValueError, TypeError):
-                # If conversion fails (e.g., for an empty or non-numeric string), return 0.0
-                return 0.0
-        elif name == 'INT': return float(math.floor(args[0]))
-        elif name == 'FIX': return float(math.trunc(args[0]))
-        elif name == 'ATN': return math.atan(args[0])
-        elif name == 'COS': return math.cos(args[0])
-        elif name == 'SIN': return math.sin(args[0])
-        elif name == 'TAN': return math.tan(args[0])
-        elif name == 'EXP': return math.exp(args[0])
-        elif name == 'LOG': return math.log(args[0])
-        elif name == 'SGN': n = args[0]; return 1.0 if n > 0 else -1.0 if n < 0 else 0.0
-        elif name == 'SQR': return math.sqrt(args[0])
-        elif name == 'MOD':
-            if len(args) != 2: self._error("MOD requires 2 arguments.")
-            return float(args[0] % args[1])
-
-        elif name == 'ROUND':
-            if not (1 <= len(args) <= 2): self._error("ROUND requires 1 or 2 arguments.")
-            if len(args) == 1: return float(round(args[0]))
-            return float(round(args[0], int(args[1])))
-
-        elif name == 'CEIL':
-            if len(args) != 1: self._error("CEIL requires 1 argument.")
-            return float(math.ceil(args[0]))
-
-        elif name == 'FLOOR':
-            if len(args) != 1: self._error("FLOOR requires 1 argument.")
-            return float(math.floor(args[0]))
-
-        elif name == 'ABS':
-            if len(args) != 1: self._error("ABS requires 1 argument.")
-            return float(abs(args[0]))
-
-        elif name == 'MIN':
-            if len(args) < 2: self._error("MIN requires at least 2 arguments.")
-            return float(min(args))
-
-        elif name == 'MAX':
-            if len(args) < 2: self._error("MAX requires at least 2 arguments.")
-            return float(max(args))
-
-        elif name == 'POWER':
-            if len(args) != 2: self._error("POWER requires 2 arguments.")
-            return float(pow(args[0], args[1]))
-
-        elif name == 'DEGREES':
-            if len(args) != 1: self._error("DEGREES requires 1 argument.")
-            return float(math.degrees(args[0]))
-
-        elif name == 'RADIANS':
-            if len(args) != 1: self._error("RADIANS requires 1 argument.")
-            return float(math.radians(args[0]))
-
-        elif name == 'ATAN2':
-            if len(args) != 2: self._error("ATAN2 requires 2 arguments.")
-            return float(math.atan2(args[0], args[1]))
-        else: self._error(f"Unknown function: {name}")
-        
-    def _parse_factor(self):
-        token = self._current_token()
-        if token[0] == 'OP' and token[1] in '+-':
-            op = token[1]
-            self._next_token()
-            res = self._parse_factor() 
-            return -res if op == '-' else res
-        if token[0] == 'NUMBER': 
-            self._next_token(); 
-            return float(token[1])
-        elif token[0] in ('STRING', 'BACKTICK_STRING'):
-            self._next_token(); raw_value = token[1]
-            if raw_value.startswith('"'): 
-                return raw_value[1:-1].replace('""', '"')
-            return raw_value[1:-1]
-        elif token[0] == 'LPAREN':
-            if self._peek_token() and self._peek_token()[0] == 'SQL_STRING':
-                results = self._execute_sql(self._extract_sql_from_parens(), is_query=True)
-                if len(results) != 1 or len(results[0]) != 1:
-                    self._error("Scalar subquery must return one row/column.")
-                return results[0][0]
-            else: 
-                self._next_token()
-                res = self._parse_condition()
-                self._expect('RPAREN')
-                return res
-        elif token[0] == 'SQL_STRING':
-            self._next_token()
-            results = self._execute_sql(token[1], is_query=True)
-            if len(results) == 1 and len(results[0]) == 1:
-                return results[0][0]
-            else:
-                self._error("A subquery used as a value must return exactly one row and one column.")
-            return results[0][0]
-        elif token[0] == 'ID':
-            var_name = token[1]
-            #print(f"DEBUG _parse_factor: Looking up '{var_name}', variables: {list(self.variables.keys())}")
-            # Handle case-insensitive BASIC variable lookup
-            actual_var_name = var_name
-            if var_name not in self.variables:
-                # Try to find existing variable with different case
-                #print("DEBUG: var_name not in self.variables")
-                found = False
-                for existing_var in self.variables:
-                    if existing_var.upper() == var_name.upper():
-                        actual_var_name = existing_var
-                        found = True
-                        break
-                if not found:
-                    #print("DEBUG: var_name not found so creating new one")
-                    # Variable doesn't exist, create with uppercase name
-                    actual_var_name = var_name
-                    if not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
-                        self.variables[actual_var_name] = "" if var_name.endswith('$') else 0.0
-            
-            var_name = actual_var_name
-            
-            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
-                self._next_token(); 
-                return self._execute_function(var_name, [])
-            
-            self._next_token()    
-            #print("DEBUG: getting current_value, var_name=", var_name)            
-            current_value = self._get_variable_value(var_name, auto_create=True)
-            #print("DEBUG: current_value=", current_value)
-            
-            while self._current_token():
-                token = self._current_token()
-                if token[0] == 'LPAREN':
-                    self._next_token()
-                    if not isinstance(current_value, (list, dict)):
-                        args = [];
-                        if self._current_token()[0] != 'RPAREN':
-                            while True:
-                                args.append(self._parse_expression())
-                                if self._current_token()[0] == 'RPAREN': break
-                                self._expect('COMMA')
-                        self._expect('RPAREN')
-                        current_value = self._execute_function(var_name, args)
-                        continue
-                    if self._current_token()[0] == 'RPAREN': self._expect('RPAREN'); break
-                    key_or_index = self._parse_expression(); self._expect('RPAREN')
-                    if isinstance(current_value, list):
-                        index = int(key_or_index)
-                        if not 0 <= index < len(current_value): self._error("Array index out of bounds.")
-                        current_value = current_value[index]
-                    elif isinstance(current_value, dict):
-                        original_key = str(key_or_index)
-                        normalized_key = self._normalize_hash_key(key_or_index)
-                        # Use the original key expression to determine type, not the variable name
-                        default_val = "" if original_key.endswith('$') else 0.0
-                        current_value = current_value.get(normalized_key, default_val)
-                    continue
-                elif token[0] == 'DOT':
-                    #print("DEBUG:", self.variables)
-                    if not isinstance(current_value, dict): self._error("Dot notation only for HASH.")
-                    self._next_token()
-                    key_token = self._current_token()
-                    if not key_token:
-                        self._error("Expected a key name after '.'")
-
-                    key_name = ""
-                    # It first checks for a generic ID as before.
-                    if key_token[0] == 'ID':
-                        self._next_token() 
-                        key_name = key_token[1]
-                    # If not an ID, it checks if it's an acceptable keyword.
-                    elif key_token[0] not in self.INVALID_KEY_TOKENS:
-                        self._next_token() 
-                        key_name = key_token[1] 
-                    # If neither, it's an error.
-                    else:
-                        self._error(f"Invalid key name '{key_token[1]}' after '.'")
-                    
-                    is_string_access = key_name.endswith('$')
-                    base_key = key_name.rstrip('$')
-                    
-                    #print(f"DEBUG: Looking for key '{base_key}' in hash with keys: {list(current_value.keys())}", file=sys.stderr)
-                    
-                    # 1. Try exact match first (fastest)
-                    if base_key in current_value:
-                        current_value = current_value[base_key]
-                        #print(f"DEBUG: Found exact match", file=sys.stderr)
-                    else:
-                        # 2. Fall back to case-insensitive search for dot notation forgiveness
-                        found = False
-                        for candidate_key in current_value.keys():
-                            if candidate_key.lower() == base_key.lower():
-                                current_value = current_value[candidate_key]
-                                #print(f"DEBUG: Found case-insensitive match: '{candidate_key}'", file=sys.stderr)
-                                found = True
-                                break
-                        
-                        if not found:
-                            current_value = "" if is_string_access else 0.0
-                            #print(f"DEBUG: No match found, using default", file=sys.stderr)
-                    continue
-                else: 
-                    break
-            return current_value
-        elif token[0] == 'ARRAY':
-            # This handles the specific case of the ARRAY() constructor function.
-            # The logic is a simplified version of a function call.
-            function_name = self._expect('ARRAY')[1]
-            self._expect('LPAREN')
-            
-            args = []
-            if self._current_token()[0] != 'RPAREN':
-                while True:
-                    args.append(self._parse_expression())
-                    if self._current_token()[0] == 'RPAREN': break
-                    self._expect('COMMA')
-            
-            self._expect('RPAREN')
-            return self._execute_function(function_name, args)
-        else:
-            self._error(f"Unexpected token in factor: {token}")
-            print("\n--- TOKEN DUMP IN LEXER ---")
-            for token in self.tokens:
-                print(token)
-            print("--------------------\n")            
+        return components[0] + ''.join(x.title() for x in components[1:])       
 
     def _dump_tokens(self):
         print("=== TOKEN DUMP ===")
@@ -3340,37 +3558,6 @@ class Interpreter:
                         print()
         else:
             self._error(f"Unknown DUMP target: {target}. Use TOKENS, VARIABLES, LABELS, or JUMPS")
-        
-    def _parse_term(self):
-        res = self._parse_factor()
-        while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '*/':
-            op = self._current_token()[1]
-            self._next_token()
-            right = self._parse_factor()
-            try:
-                if op == '*':
-                    res *= right
-                elif op == '/':
-                    res /= right
-            except ZeroDivisionError:
-                raise RuntimeError("Division by zero")
-            except Exception as e:
-                raise RuntimeError(f"Arithmetic error: {e}")
-        return res
-        
-    def _parse_expression(self):
-        res = self._parse_term()
-        while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '+-':
-            op = self._current_token()[1]
-            self._next_token()
-            right = self._parse_term()
-            if op == '+':
-                res = str(res) + str(right) if isinstance(res, str) or isinstance(right, str) else res + right
-            elif op == '-':
-                if isinstance(res, str) or isinstance(right, str):
-                    raise RuntimeError("Type mismatch: Cannot subtract strings")
-                res -= right
-        return res
 
     def _parse_line_input_statement(self):
         self._expect('LINE INPUT')
@@ -3529,9 +3716,17 @@ class Interpreter:
                 values.append(self._parse_expression())
                 if self._current_token() and self._current_token()[0] == 'COMMA': self._next_token()
                 else: break
+            suppress_nl = False
+            if self._current_token() and self._current_token()[0] == 'SEMICOLON':
+                self._next_token()
+                suppress_nl = True
             formatted_output = Formatter.format(format_string, values)
-            if target == sys.stdout: print(formatted_output)
-            else: target.write(formatted_output + '\n')
+            if target == sys.stdout:
+                print(formatted_output, end="" if suppress_nl else "\n")
+            else:
+                target.write(formatted_output)
+                if not suppress_nl:
+                    target.write('\n')
             return
         parts = []
         suppress_nl = False
@@ -4480,6 +4675,37 @@ class Interpreter:
             if self.sql_fatal_errors:
                 self._error(f"ZIP error: {e}")
 
+    def _parse_unpack_statement(self):
+        '''
+        Create stand-alone variables from a hash.
+        '''
+        self._expect('UNPACK')
+        hash_variable = self._parse_expression()
+
+        if not isinstance(hash_variable, dict):
+            self._error("UNPACK statement requires a HASH variable.")
+
+        for key, value in hash_variable.items():
+            if value is None:
+                value = ""
+            var_name = str(key).strip()
+            
+            # Skip keys that are not valid variable names
+            if not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', var_name.rstrip('$')):
+                continue
+
+            # Strip any existing suffix to avoid duplication (e.g., name$$)
+            base_var_name = var_name.rstrip('$')
+
+            # Add the '$' suffix only if the value is a string
+            if isinstance(value, str):
+                final_var_name = f"{base_var_name}$"
+            else:
+                final_var_name = base_var_name
+            
+            # Use the existing helper to correctly create/overwrite the variable
+            self._set_variable_value(final_var_name, value)
+            
     def _parse_unzip_statement(self):
         """
         Parse and execute an UNZIP statement to extract an archive.
@@ -4771,6 +4997,67 @@ class Interpreter:
             header_counts[clean_header] = header_counts.get(clean_header, 0) + 1
             
         return final_headers
+
+    def _perform_batch_upsert(self, target_table, key_column, headers, data_iterator, batch_size=10000):
+        """
+        Performs a batch UPSERT using a temporary staging table with a highly-compatible
+        two-step UPDATE-then-INSERT approach.
+        """
+        cursor = self.db_cursor
+        
+        staging_table = f"__staging_{target_table}_{random.randint(1000, 9999)}"
+        quoted_headers = [self._quote_identifier(h) for h in headers]
+        quoted_target_table = self._quote_identifier(target_table)
+        quoted_staging_table = self._quote_identifier(staging_table)
+        quoted_key_column = self._quote_identifier(key_column)
+
+        cols_def = ', '.join([f"{h} TEXT" for h in quoted_headers])
+        cursor.execute(f"CREATE TEMP TABLE {quoted_staging_table} ({cols_def});")
+
+        try:
+            # Step 1: Load all data into the staging table (same as before)
+            insert_sql = f"INSERT INTO {quoted_staging_table} ({', '.join(quoted_headers)}) VALUES ({', '.join(['?'] * len(headers))});"
+            batch = []
+            total_rows_processed = 0
+            for row in data_iterator:
+                batch.append(row)
+                total_rows_processed += 1
+                if len(batch) >= batch_size:
+                    cursor.executemany(insert_sql, batch)
+                    batch = []
+            if batch:
+                cursor.executemany(insert_sql, batch)
+
+            # --- NEW, MORE COMPATIBLE LOGIC ---
+
+            # Step 2: UPDATE rows that already exist in the target table
+            update_set_clauses = [f"{h} = (SELECT {h} FROM {quoted_staging_table} WHERE {quoted_staging_table}.{quoted_key_column} = {quoted_target_table}.{quoted_key_column})"
+                                  for h in quoted_headers if h.lower() != quoted_key_column.lower()]
+            
+            if update_set_clauses: # Only run update if there are non-key columns
+                update_sql = (
+                    f"UPDATE {quoted_target_table} SET {', '.join(update_set_clauses)} "
+                    f"WHERE {quoted_key_column} IN (SELECT {quoted_key_column} FROM {quoted_staging_table})"
+                )
+                #print("DEBUG:", update_sql)
+                cursor.execute(update_sql)
+
+            # Step 3: INSERT rows that are new
+            insert_new_sql = (
+                f"INSERT INTO {quoted_target_table} ({', '.join(quoted_headers)}) "
+                f"SELECT {', '.join(quoted_headers)} FROM {quoted_staging_table} "
+                f"WHERE {quoted_key_column} NOT IN (SELECT {quoted_key_column} FROM {quoted_target_table})"
+            )
+            #print("DEBUG:", insert_new_sql)
+            cursor.execute(insert_new_sql)
+            
+            if self.db_engine == 'sqlite': self.db_connection.commit()
+            
+            return total_rows_processed
+
+        finally:
+            # Step 4: Clean up
+            cursor.execute(f"DROP TABLE IF EXISTS {quoted_staging_table};")
         
     def _parse_load_statement(self):
         peek = self._peek_token()
@@ -4804,6 +5091,7 @@ class Interpreter:
 
         csv_filename = self._parse_expression()
         destination_mode, destination_target, db_mode = None, None, None
+        key_column_name = None # Will hold the key for UPSERT
 
         if self._current_token() and self._current_token()[0] == 'CREATE':
             destination_mode = 'CREATE_TABLE'; self._next_token()
@@ -4813,10 +5101,22 @@ class Interpreter:
             destination_mode = 'INTO_TABLE'; self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
-                db_mode = self._current_token()[1]; self._next_token()
-            else: self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else: self._error("Expected CREATE TABLE, INTO TABLE clause.")
+            
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE', 'UPSERT']:
+                db_mode = self._current_token()[1]
+                self._next_token()
+                if db_mode == 'UPSERT':
+                    if not (self._current_token() and self._current_token()[0] == 'USING'):
+                        self._error("UPSERT mode requires a 'USING KEY' clause.")
+                    self._next_token() # Consume USING
+                    if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'KEY'):
+                        self._error("Expected KEY after USING.")
+                    self._next_token() # Consume KEY
+                    key_column_name = self._parse_expression()
+            else: 
+                self._error("Expected APPEND, TRUNCATE, or UPSERT for INTO TABLE clause.")
+        else: 
+            self._error("Expected CREATE TABLE or INTO TABLE clause.")
 
         options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 'trimall': False,
                    'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 
@@ -4831,7 +5131,7 @@ class Interpreter:
             for i, match in enumerate(key_matches):
                 key, start_pos = match.group(1).lower(), match.end()
                 end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',')
+                value = options_str[start_pos:end_pos].strip().strip(',').strip()
                 if value.startswith('"') and value.endswith('"'): value = value[1:-1]
                 temp_options[key] = value
 
@@ -4840,68 +5140,56 @@ class Interpreter:
                     options['header'] = value is None or value.lower() in ['true', 'y', '1']
                 elif key in ['skip', 'limit', 'batchsize']: 
                     options[key] = int(value)
-                elif 'linenum' in temp_options:
-                    add_line_num = temp_options['linenum'].lower() in ['true', 'y', '1']
+                elif key == 'linenum':
+                    add_line_num = value.lower() in ['true', 'y', '1']
                 else: 
                     options[key] = value
 
-            if options['process_by']:
+            if options.get('process_by'):
                 script_var_name = options['process_by']
                 if script_var_name not in self.variables or not isinstance(self.variables.get(script_var_name), str):
                     self._error(f"Script variable '{script_var_name}' for PROCESS_BY not found or not a string.")
-                process_script = self.variables[script_var_name] 
+                process_script = self.variables[script_var_name]
+
         transform_rules = {}
         if 'transform' in temp_options:
             for rule in temp_options['transform'].split(','):
                 parts = rule.strip().split(':')
                 if len(parts) == 2:
                     col_name, func_name = parts
-                    # Store as lowercase for case-insensitive matching
                     transform_rules[col_name.lower()] = func_name.lower()
                 elif len(parts) == 1:
-                    transform_rules[parts[0]] = True    # i.e. trimall       
-        #print("DEBUG11:", options)
-        #print("DEBUG22:", transform_rules)
-        #print("DEBUG destination_mode:", destination_mode)
+                    transform_rules[parts[0]] = True
+
         try:
             with open(csv_filename, 'r', newline='', encoding=options['encoding']) as infile:
                 original_headers = []
                 
-                # Apply skip option first
                 for _ in range(options['skip']): 
                     try:
                         next(infile)
                     except StopIteration:
-                        break # File is smaller than skip count
+                        break
 
                 if options['header']:
                     try:
-                        # Read just the header row
                         header_line = next(infile)
                         original_headers = next(csv.reader([header_line], delimiter=options['delimiter']))
                     except StopIteration:
-                        # File is empty or only contains skipped lines
-                        pass 
+                        pass
                 else:
-                    # No header: Peek at the first data row to get column count
-                    first_line = next(infile, None) # Read one line without crashing on empty file
+                    first_line = next(infile, None)
                     if first_line:
                         num_columns = len(next(csv.reader([first_line], delimiter=options['delimiter'])))
                         original_headers = [f"C{i + 1}" for i in range(num_columns)]
-                    
-                    # Rewind the file to the beginning to read all data rows in the main loop
                     infile.seek(0)
-                    # Re-apply the skip to position the reader correctly for the main loop
                     for _ in range(options['skip']): next(infile)
 
-                # --- The rest of the logic can now proceed ---
                 reader = csv.reader(infile, delimiter=options['delimiter'])
 
                 final_headers, column_map = original_headers, list(range(len(original_headers))) if original_headers else None
                 if options['fields']:
-                    #if not options['header']: self._error("FIELDS option requires header=true.")
                     field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
-
                     if field_specs[0].strip() == '*':
                         excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
                         final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
@@ -4910,96 +5198,91 @@ class Interpreter:
                         header_lookup = {h.lower(): i for i, h in enumerate(original_headers)}
                         new_headers, new_map = [], []
                         for spec in field_specs:
-                            match = re.match(r'\[([^\]]*)\](?:\s+as\s+(\w+))?', spec.strip())
+                            match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
                             if not match: self._error(f"Invalid FIELDS specification: {spec}")
                             original_name, new_name = match.groups()
                             if original_name.lower() not in header_lookup:
                                 self._error(f"Field '{original_name}' not found in CSV header.")
                             new_map.append(header_lookup[original_name.lower()])
                             if self.hash_keys_mode == 'IGNORE_CASE':
-                                final_field_name = new_name.upper() if new_name else original_name.upper()
+                                final_field_name = (new_name or original_name).upper()
                             else:
-                                final_field_name = new_name if new_name else original_name
+                                final_field_name = new_name or original_name
                             new_headers.append(final_field_name)
                         final_headers, column_map = new_headers, new_map
 
-                if destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
-                    cursor = self.db_cursor
-                    #print("DEBUG:","INSIDE CREATE_TABLE AND INTO_TABLE")
-                    if add_line_num:
-                        final_headers.append('_linenum') 
-                    if destination_mode == 'CREATE_TABLE':
-                        cols_def = ', '.join([f"[{h}] {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in final_headers])
-                        cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
-                        cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
-                    if db_mode == 'REPLACE': 
+                if add_line_num:
+                    final_headers.append('_linenum')
+
+                cursor = self.db_cursor
+                if destination_mode == 'CREATE_TABLE':
+                    if self._table_exists(destination_target):
+                        self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... TRUNCATE to overwrite its contents.")
+                    cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in final_headers])
+                    cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
+
+                # --- NEW, CORRECTED EXECUTION LOGIC ---
+                if db_mode == 'UPSERT':
+                    if not key_column_name: self._error("Key column name not provided for UPSERT.")
+                    if key_column_name not in final_headers: self._error(f"Key column '{key_column_name}' not found in source file headers.")
+                    
+                    def data_iterator(reader, column_map):
+                        for row in reader:
+                            if not row: continue
+                            yield [row[i] for i in column_map if i < len(row)]
+                    
+                    total_rows_processed = self._perform_batch_upsert(destination_target, key_column_name, final_headers, data_iterator(reader, column_map))
+                    print(f"{total_rows_processed} records upserted into table {destination_target}")
+                else: # Handle APPEND and TRUNCATE
+                    if db_mode == 'TRUNCATE': 
                         cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
                     
                     insert_sql, batch, total_rows_processed = None, [], 0
                     self.db_connection.execute('BEGIN TRANSACTION;')
                     try:
-                        line_counter = 1 # Initialize the counter here
+                        line_counter = 1
                         for row in reader:
                             if column_map is None: column_map = list(range(len(row)))
                             if not row: continue
                             processed_row = [row[i] for i in column_map if i < len(row)]
-                            # --- Apply PROCESSING SCRIPT if it exists ---
+                            
                             if process_script:
-                                # 1. Create a 'rec' hash for the current row
                                 rec_hash = dict(zip(final_headers, processed_row))
                                 self.variables['rec'] = rec_hash
-
-                                # 2. Execute the user's script
                                 self._execute_basic_string(process_script)
-
-                                # 3. Retrieve the modified 'rec' hash and check validation flag
                                 updated_rec = self.variables.get('rec', {})
                                 if updated_rec.get('is_valid', -1.0) == 0.0:
-                                    del self.variables['rec'] # Clean up global variable
-                                    continue # Skip this row
-
-                                # 4. Rebuild the ordered row from the (potentially modified) hash
-                                processed_row = [updated_rec.get(h) for h in final_headers]
-                                del self.variables['rec'] # Clean up global variable
+                                    del self.variables['rec']
+                                    continue
+                                processed_row = [updated_rec.get(h) for h in final_headers if h != '_linenum']
+                                del self.variables['rec']
 
                             if transform_rules:
-                                for i, header_name in enumerate(final_headers):
+                                data_headers = [h for h in final_headers if h != '_linenum']
+                                for i, header_name in enumerate(data_headers):
                                     rule = transform_rules.get(header_name.lower())
                                     if rule and i < len(processed_row):
-                                        original_value = str(processed_row[i]) # Ensure it's a string
-                                        if rule == 'upper':
-                                            processed_row[i] = original_value.upper()
-                                        elif rule == 'lower':
-                                            processed_row[i] = original_value.lower()
-                                        elif rule == 'proper':
-                                            processed_row[i] = original_value.title()
-                                        elif rule == 'trim':
-                                            processed_row[i] = original_value.strip()
-                                # Check global options
-                                if transform_rules.get('trimall'):
-                                    processed_row = [str(field).strip() for field in processed_row]
-                                if transform_rules.get('upperall'):
-                                    processed_row = [str(field).upper() for field in processed_row]
-                                if transform_rules.get('lowerall'):
-                                    processed_row = [str(field).lower() for field in processed_row] 
-                                if transform_rules.get('properall'):
-                                    processed_row = [str(field).title() for field in processed_row]                                    
+                                        original_value = str(processed_row[i])
+                                        if rule == 'upper': processed_row[i] = original_value.upper()
+                                        elif rule == 'lower': processed_row[i] = original_value.lower()
+                                        elif rule == 'proper': processed_row[i] = original_value.title()
+                                        elif rule == 'trim': processed_row[i] = original_value.strip()
+                                if transform_rules.get('trimall'): processed_row = [str(field).strip() for field in processed_row]
+                                if transform_rules.get('upperall'): processed_row = [str(field).upper() for field in processed_row]
+                                if transform_rules.get('lowerall'): processed_row = [str(field).lower() for field in processed_row]
+                                if transform_rules.get('properall'): processed_row = [str(field).title() for field in processed_row]
+                            
                             if insert_sql is None:
-                                num_cols = len(final_headers)
-                                if num_cols == 0: continue
-                                placeholders = ', '.join(['?'] * num_cols)
-                                if final_headers:
-                                    quoted_headers = ", ".join([f'[{h}]' for h in final_headers])
-                                    if add_line_num:
-                                       final_headers.append('_linenum') 
-                                    insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
-                                else:
-                                    insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} VALUES ({placeholders});'
+                                placeholders = ', '.join(['?'] * len(final_headers))
+                                quoted_headers = ", ".join([self._quote_identifier(h) for h in final_headers])
+                                insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
+                            
                             if add_line_num:
                                 processed_row.append(line_counter)
+                            
                             batch.append(processed_row)
                             total_rows_processed += 1
-                            line_counter += 1 # Increment for the next row
+                            line_counter += 1
                             if len(batch) >= options['batchsize']:
                                 cursor.executemany(insert_sql, batch); batch = []
                         
@@ -5008,15 +5291,12 @@ class Interpreter:
                         print(f"{total_rows_processed} records loaded into table {destination_target}")
                     except Exception as e:
                         self.db_connection.execute('ROLLBACK;'); raise e
-        except FileNotFoundError as e:
-            print("DEBUG1",e)
-            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+        except FileNotFoundError:
             self._error(f"File not found: {csv_filename}")
         except Exception as e:
-            print("DEBUG2",e)
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"CSV load error: {e}"
             self._error(f"An error occurred during CSV load: {e}")
-
+            
     def _parse_load_fixed_statement(self):
         """
         Parse and execute LOAD FIXED for fixed-width files.
@@ -5040,7 +5320,7 @@ class Interpreter:
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
                 db_mode = self._current_token()[1]
                 self._next_token()
             else:
@@ -5070,12 +5350,14 @@ class Interpreter:
         try:
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
+                if self._table_exists(destination_target):
+                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
+                            
                 field_names = [f['name'] for f in field_definitions]
                 cols_def = ', '.join([f'[{name}] TEXT' for name in field_names])
-                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)}')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def})')
 
-            if db_mode == 'REPLACE':
+            if db_mode == 'TRUNCATE':
                 cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)}')
             
             field_names = [f['name'] for f in field_definitions]
@@ -5189,7 +5471,7 @@ class Interpreter:
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
                 db_mode = self._current_token()[1]
                 self._next_token()
             else:
@@ -5333,11 +5615,12 @@ class Interpreter:
             if destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
                 cursor = self.db_cursor
                 if destination_mode == 'CREATE_TABLE':
+                    if self._table_exists(destination_target):
+                        self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
                     cols_def = ', '.join([f'[{h}] {"INTEGER" if h == "_linenum" else "TEXT"}' for h in final_headers])
-                    cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                     cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
                 
-                if db_mode == 'REPLACE': 
+                if db_mode == 'TRUNCATE': 
                     cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
                 placeholders = ', '.join(['?'] * len(final_headers))
@@ -5563,7 +5846,7 @@ class Interpreter:
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
                 db_mode = self._current_token()[1]
                 self._next_token()
             else:
@@ -5669,11 +5952,12 @@ class Interpreter:
             # --- Database Operations ---
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
+                if self._table_exists(destination_target):
+                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
                 cols_def = ', '.join([f'{self._quote_identifier(h)} {col_types.get(header_key_map.get(h, h), "TEXT")}' for h in final_headers])
-                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
-            if db_mode == 'REPLACE':
+            if db_mode == 'TRUNCATE':
                 cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
             placeholders = ', '.join(['?'] * len(final_headers))
@@ -5774,7 +6058,7 @@ class Interpreter:
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
                 db_mode = self._current_token()[1]
                 self._next_token()
             else:
@@ -5884,12 +6168,12 @@ class Interpreter:
             # --- Database Operations ---
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
-                # This DDL generation now automatically includes the _linenum column
+                if self._table_exists(destination_target):
+                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
                 cols_def = ', '.join([f'[{h}] {col_types.get(h, "TEXT")}' for h in final_headers]) 
-                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
-            if db_mode == 'REPLACE':
+            if db_mode == 'TRUNCATE':
                 cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
             placeholders = ', '.join(['?'] * len(final_headers))
@@ -5979,13 +6263,26 @@ class Interpreter:
         self._expect('TEXT')
 
         text_filename = self._parse_expression()
-        destination_target = None
+        destination_mode, destination_target, db_mode = None, None, None
+
         if self._current_token() and self._current_token()[0] == 'CREATE':
+            destination_mode = 'CREATE_TABLE'
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_table_name()
+        elif self._current_token() and self._current_token()[0] == 'INTO':
+            destination_mode = 'INTO_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
+            destination_target = self._parse_table_name()
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
+                db_mode = self._current_token()[1]
+                self._next_token()
+            else:
+                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
         else:
-            self._error("Expected CREATE TABLE clause for LOAD TEXT.")
+            self._error("Expected CREATE TABLE or INTO TABLE clause for LOAD TEXT.")
+        # --- END MODIFICATION ---
 
         options = {
             'linenum': False, 'trimall': False, 'upperall': False,
@@ -6015,45 +6312,61 @@ class Interpreter:
                 headers.append('_linenum')
             
             cursor = self.db_cursor
-            cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in headers])
-            cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
-            cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
-            
-            with open(text_filename, 'r', encoding='utf-8', errors='replace') as infile:
-                batch = []
-                line_counter = 1
-                for line in infile:
-                    line_content = line.rstrip('\n\r')
 
-                    if options['trimall']:
-                        line_content = line_content.strip()
-                    
-                    if options['skipblank'] and not line_content:
-                        line_counter += 1
-                        continue
-
-                    if options['upperall']:
-                        line_content = line_content.upper()
-                    elif options['lowerall']:
-                        line_content = line_content.lower()
-                    elif options['properall']:
-                        line_content = line_content.title()
-
-                    row_data = [line_content]
-                    if options['linenum']:
-                        row_data.append(line_counter)
-                    
-                    batch.append(row_data)
-                    line_counter += 1
-            
-            if batch:
-                placeholders = ', '.join(['?'] * len(headers))
-                quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
-                insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
+            # --- MODIFICATION: Added safer CREATE and new REPLACE/APPEND logic ---
+            if destination_mode == 'CREATE_TABLE':
+                if self._table_exists(destination_target):
+                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
                 
-                cursor.executemany(insert_sql, batch)
-                self.db_connection.commit()
-                print(f"{len(batch)} lines loaded into table {destination_target}")
+                cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in headers])
+                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
+
+            if db_mode == 'TRUNCATE':
+                cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
+            # --- END MODIFICATION ---
+            
+            batch = []
+            total_rows_processed = 0
+            
+            self.db_connection.execute('BEGIN TRANSACTION;')
+            try:
+                with open(text_filename, 'r', encoding='utf-8', errors='replace') as infile:
+                    line_counter = 1
+                    for line in infile:
+                        line_content = line.rstrip('\n\r')
+
+                        if options['trimall']:
+                            line_content = line_content.strip()
+                        
+                        if options['skipblank'] and not line_content:
+                            line_counter += 1
+                            continue
+
+                        if options['upperall']: line_content = line_content.upper()
+                        elif options['lowerall']: line_content = line_content.lower()
+                        elif options['properall']: line_content = line_content.title()
+
+                        row_data = [line_content]
+                        if options['linenum']:
+                            row_data.append(line_counter)
+                        
+                        batch.append(row_data)
+                        total_rows_processed += 1
+                        line_counter += 1
+                
+                if batch:
+                    placeholders = ', '.join(['?'] * len(headers))
+                    quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
+                    insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
+                    
+                    cursor.executemany(insert_sql, batch)
+                
+                self.db_connection.execute('COMMIT;')
+                print(f"{total_rows_processed} lines loaded into table {destination_target}")
+
+            except Exception as e:
+                self.db_connection.execute('ROLLBACK;')
+                raise e
 
         except FileNotFoundError:
             self._error(f"File not found: {text_filename}")
@@ -6162,9 +6475,9 @@ class Interpreter:
             
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
+                if self._table_exists(destination_target):
+                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
                 cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in clean_headers])
-                
-                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
             # --- 5. PREPARE AND INSERT DATA ---
@@ -6221,7 +6534,7 @@ class Interpreter:
             self._next_token()
             if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
             destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'REPLACE']:
+            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
                 db_mode = self._current_token()[1]
                 self._next_token()
             else:
@@ -6321,11 +6634,12 @@ class Interpreter:
             # --- 5. Database Setup ---
             cursor = self.db_cursor
             if destination_mode == 'CREATE_TABLE':
+                if self._table_exists(destination_target):
+                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
                 cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
-                cursor.execute(f'DROP TABLE IF EXISTS {self._quote_identifier(destination_target)};')
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
-            if db_mode == 'REPLACE':
+            if db_mode == 'TRUNCATE':
                 cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
 
             # --- 6. Stream and Load Data ---
@@ -7460,13 +7774,14 @@ class Interpreter:
         order_clause = ""
         search_config = {'enabled': False, 'fields': []}
         lookup_definitions = {}
+        is_readonly = False
         
         while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
             token = self._current_token()
             if token[0] == 'ID' and token[1].upper() == 'FIELDS':
                 self._next_token()
                 temp_columns = []
-                if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'SEARCH', 'WHERE', 'ORDER']:
+                if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'SEARCH', 'WHERE', 'ORDER', 'READONLY', 'LOOKUP']:
                     while True:
                         field_name_expr = self._parse_expression()
                         temp_columns.append(str(field_name_expr))
@@ -7492,7 +7807,7 @@ class Interpreter:
                 if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'ON':
                     self._next_token()
                     temp_search_cols = []
-                    if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'FIELDS', 'WHERE', 'ORDER']:
+                    if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'FIELDS', 'WHERE', 'ORDER', 'READONLY', 'LOOKUP']:
                         while True:
                             col_name_expr = self._parse_expression()
                             temp_search_cols.append(str(col_name_expr))
@@ -7512,6 +7827,9 @@ class Interpreter:
                     self._next_token()
                     display_col = self._parse_table_name()
                 lookup_definitions[lookup_field] = {"query": query, "returns": returns_col, "display": display_col} 
+            elif token[0] == 'READONLY':
+                self._next_token()
+                is_readonly = True
             else:
                 break
 
@@ -7521,149 +7839,188 @@ class Interpreter:
         column_types = metadata['types']
         numeric_types = {'INTEGER', 'REAL', 'NUMERIC', 'INT', 'BIGINT', 'FLOAT', 'DOUBLE', 'DECIMAL'}
         
-        # --- START OF FIX for column ordering ---
-        
-        # Determine which columns to show in the grid view. Order is preserved from user input or schema.
+        if pk_column and pk_column.lower() not in [c.lower() for c in all_column_names]:
+            all_column_names.insert(0, pk_column)
+
         display_columns = user_columns if user_columns else [col for col in all_column_names if col.lower() != 'rowid']
 
-        # Build the final list of columns for the SELECT statement, preserving order and avoiding duplicates.
-        # This list determines the order in the returned dataset and thus the form.
         select_cols_ordered = []
         seen_cols = set()
-
-        # Helper to add a column to our ordered list if it hasn't been added yet.
         def add_col_if_new(col_name):
             if col_name and col_name.lower() not in seen_cols:
                 select_cols_ordered.append(col_name)
                 seen_cols.add(col_name.lower())
 
-        # 1. Always add the primary key first to ensure it's available.
         add_col_if_new(pk_column)
-
-        # 2. Add all columns from the table in their natural schema order.
-        #    This ensures all data is fetched for the edit form in a consistent order.
         for col in all_column_names:
             add_col_if_new(col)
         
-        # Now, `select_cols_ordered` contains all necessary columns in a consistent, logical order.
-        final_select_list = [f"{self._quote_identifier(table_name)}.{self._quote_identifier(col)}" for col in select_cols_ordered]
-        # --- END OF FIX ---
-        
+        # Build elements for the EDIT form (PK is readonly)
         entry_form_elements = []
-        # The TUI form already uses the correctly ordered `all_column_names` list.
         for col in all_column_names:
-            field_def = { "type": "FIELD", "name": col, "label": f"{col.replace('_', ' ').title()}", "readonly": (col.lower() == pk_column.lower()) }
+            field_def = { 
+                "type": "FIELD", "name": col, "label": f"{col.replace('_', ' ').title()}", 
+                "readonly": is_readonly or (col.lower() == pk_column.lower()) 
+            }
             if col in lookup_definitions: 
                 field_def["lookup"] = lookup_definitions[col]
             entry_form_elements.append(field_def)
+        
+        # Build elements for the NEW form (PK is editable)
+        new_form_elements = []
+        for col in all_column_names:
+            is_pk = (col.lower() == pk_column.lower())
+            pk_is_autogen = False
+
+            # Check for the conditions that indicate an auto-generated key
+            if is_pk:
+                pk_type = column_types.get(pk_column.upper(), '')
+                # It's auto-generated if it's the implicit 'rowid' OR
+                # if it's an INTEGER PRIMARY KEY in SQLite (which is an alias for rowid).
+                if pk_column.lower() == 'rowid' or ('INTEGER' in pk_type and self.db_engine == 'sqlite'):
+                    pk_is_autogen = True
+
+            field_def = { 
+                "type": "FIELD", "name": col, "label": f"{col.replace('_', ' ').title()}", 
+                # The field is readonly ONLY if it is the PK AND it is auto-generated
+                "readonly": is_pk and pk_is_autogen
+            }
+            if col in lookup_definitions: 
+                field_def["lookup"] = lookup_definitions[col]
+            new_form_elements.append(field_def)
+        # --- END MODIFICATION ---
             
+        entry_buttons = [{"name": "OK", "action": "CANCEL"}] if is_readonly else [{"name": "Save", "action": "UPDATE"}, {"name": "Cancel", "action": "CANCEL"}]
+        
         entry_form_def = {
-            "name": f"{table_name}_entry", "title": f"Editing: {table_name}", "elements": entry_form_elements, 
-            "buttons": [{"name": "Save", "action": "UPDATE"}, {"name": "Cancel", "action": "CANCEL"}]
+            "name": f"{table_name}_entry", 
+            "title": f"Viewing: {table_name}" if is_readonly else f"Editing: {table_name}", 
+            "elements": entry_form_elements, # Use edit-specific elements
+            "buttons": entry_buttons
         }
         
         new_form_def = {
-             "name": f"{table_name}_new", "title": f"New Record for {table_name}", "elements": entry_form_elements, 
+             "name": f"{table_name}_new", "title": f"New Record for {table_name}", 
+             "elements": new_form_elements, # Use new-specific elements
              "buttons": [{"name": "Create", "action": "INSERT"}, {"name": "Cancel", "action": "CANCEL"}]
         }
 
-        # --- Main Application Loop ---
         current_search_term = ""
         while True:
+            quoted_base_table = self._quote_identifier(table_name)
+            
+            final_select_list = []
+            for col in select_cols_ordered:
+                if col in lookup_definitions:
+                    config = lookup_definitions[col]
+                    from_match = re.search(r'\bFROM\s+([a-zA-Z0-9_"]+)', config['query'], re.IGNORECASE)
+                    if not from_match: self._error(f"Could not parse table name from LOOKUP query: {config['query']}")
+                    lookup_table = from_match.group(1)
+                    subquery = (f"(SELECT {self._quote_identifier(config['display'])} FROM {lookup_table} "
+                                f"WHERE {self._quote_identifier(config['returns'])} = {quoted_base_table}.{self._quote_identifier(col)})")
+                    final_select_list.append(f"{subquery} AS {self._quote_identifier(col)}")
+                else:
+                    final_select_list.append(f"{quoted_base_table}.{self._quote_identifier(col)}")
+
             final_where_clause, params = base_where_clause, []
             if search_config['enabled'] and current_search_term:
                 search_on_cols = search_config['fields'] or display_columns
-                search_conditions = [f"LOWER(CAST({self._quote_identifier(table_name)}.{self._quote_identifier(col)} AS TEXT)) LIKE ?" for col in search_on_cols if col in all_column_names]
+                search_conditions = []
+                for col in search_on_cols:
+                    if col in lookup_definitions:
+                        config = lookup_definitions[col]
+                        from_match = re.search(r'\bFROM\s+([a-zA-Z0-9_"]+)', config['query'], re.IGNORECASE)
+                        if not from_match: continue
+                        lookup_table = from_match.group(1)
+                        subquery = (f"(SELECT {self._quote_identifier(config['display'])} FROM {lookup_table} "
+                                    f"WHERE {self._quote_identifier(config['returns'])} = {quoted_base_table}.{self._quote_identifier(col)})")
+                        search_conditions.append(f"LOWER(CAST({subquery} AS TEXT)) LIKE ?")
+                    elif col in all_column_names:
+                        search_conditions.append(f"LOWER(CAST({quoted_base_table}.{self._quote_identifier(col)} AS TEXT)) LIKE ?")
+
                 if search_conditions:
                     search_sql_part = f"({' OR '.join(search_conditions)})"
                     final_where_clause = f"{base_where_clause} AND {search_sql_part}" if base_where_clause else f" WHERE {search_sql_part}"
                     params.extend([f"%{current_search_term.lower()}%"] * len(search_conditions))
 
             quoted_select_list_str = ', '.join(final_select_list)
-            grid_query = f"SELECT {quoted_select_list_str} FROM {self._quote_identifier(table_name)}{final_where_clause}{order_clause}"
+            grid_query = f"SELECT {quoted_select_list_str} FROM {quoted_base_table}{final_where_clause}{order_clause}"
             
             rows = self._execute_sql(grid_query, is_query=True, params=params)
             headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
             initial_grid_data = {"headers": headers, "rows": rows}
             
+            grid_buttons = [{"name": "View", "action": "EDIT"}, {"name": "Close", "action": "CLOSE"}] if is_readonly else [{"name": "Edit", "action": "EDIT"}, {"name": "New", "action": "NEW"}, {"name": "Delete", "action": "DELETE"}, {"name": "Close", "action": "CLOSE"}]
+            
             grid_form_def = {
-                'name': f'{table_name}_grid', 'title': f'Editing: {table_name}',
-                'buttons': [{"name": "Edit", "action": "EDIT"}, {"name": "New", "action": "NEW"}, 
-                            {"name": "Delete", "action": "DELETE"}, {"name": "Close", "action": "CLOSE"}],
-                'elements': [{"type": "FIELD", "name": col, 'label': col.title()} for col in display_columns]
+                'name': f'{table_name}_grid', 'title': f'Viewing: {table_name}' if is_readonly else f'Editing: {table_name}',
+                'buttons': grid_buttons, 'elements': [{"type": "FIELD", "name": col, 'label': col.title()} for col in display_columns]
             }
-
-            if g_ui_mode == 'WEB':
-                list_runner = WebFormRunner(
-                    form_def=grid_form_def, initial_data=initial_grid_data, view_mode='grid', 
-                    pk_column_name=pk_column, search_config=search_config, current_search_term=current_search_term
-                )
-            else: # TUI
-                list_runner = FormRunner(
-                    form_def=grid_form_def, initial_data=initial_grid_data, view_mode='grid', 
-                    pk_column_name=pk_column, search_config=search_config, current_search_term=current_search_term
-                )
+            
+            list_runner = FormRunner(
+                form_def=grid_form_def, initial_data=initial_grid_data, view_mode='grid', 
+                pk_column_name=pk_column, search_config=search_config, current_search_term=current_search_term
+            )
                  
             list_results = list_runner.run()
             
             action, current_search_term, selected_id = list_results.get("action", "").upper(), list_results.get("search_term", ""), list_results.get("selected_id")
             
-            if action in ["UPDATE", "INSERT"]:
+            if action in ["UPDATE", "INSERT"] and not is_readonly:
                 form_data = list_results.get("data", {})
                 if not form_data:
                     continue
 
                 if action == "UPDATE":
-                    pk_value = None
-                    for k, v in form_data.items():
-                        if k.lower() == pk_column.lower():
-                            pk_value = v
-                            break
+                    # This entire block should be replaced by the final, correct logic from the previous step
+                    # For clarity, I'm pasting the correct, final "UPDATE" logic here.
+                    pk_value = selected_id
                     
-                    if not pk_value:
-                        print(f"Warning: Could not determine primary key '{pk_column}' from submitted form data. Update failed.")
-                        continue
-
-                    self.variables['GRIDEDIT_ID_TEMP'] = pk_value
-                    single_query = f"SELECT * FROM {self._quote_identifier(table_name)} WHERE {self._quote_identifier(pk_column)} = :GRIDEDIT_ID_TEMP"
-                    row_data_list = self._execute_sql(single_query, is_query=True)
-                    if not row_data_list:
-                        print(f"Warning: Original record with PK {pk_value} not found. Update failed.")
-                        continue
+                    raw_select_list_for_update = [f"{quoted_base_table}.{self._quote_identifier(col)}" for col in select_cols_ordered]
+                    quoted_raw_select_list_for_update = ', '.join(raw_select_list_for_update)
+                    single_query_raw_for_update = f"SELECT {quoted_raw_select_list_for_update} FROM {quoted_base_table} WHERE {quoted_base_table}.{self._quote_identifier(pk_column)} = ?"
                     
-                    original_db_data = dict(zip(all_column_names, row_data_list[0]))
+                    original_row_data_list = self._execute_sql(single_query_raw_for_update, is_query=True, params=[selected_id])
+                    original_db_data = dict(zip(select_cols_ordered, original_row_data_list[0])) if original_row_data_list else {}
+                    
+                    initial_display_data_snapshot = list_runner.get_initial_display_data()
 
-                    changed_data = {}
-                    for key, new_value in form_data.items():
-                        if key not in all_column_names or key.lower() == pk_column.lower():
-                            continue
+                    data_to_save = {}
+                    for key in all_column_names:
+                        if key.lower() == pk_column.lower(): continue
+                        
+                        submitted_value = form_data.get(key)
+                        
+                        if key in lookup_definitions:
+                            initial_display_value = initial_display_data_snapshot.get(key)
+                            if str(submitted_value) != str(initial_display_value):
+                                data_to_save[key] = submitted_value
+                            else:
+                                data_to_save[key] = original_db_data.get(key)
+                        else:
+                            data_to_save[key] = submitted_value
+
+                    final_changed_data = {}
+                    for key, new_value in data_to_save.items():
                         original_value = original_db_data.get(key)
-                        original_str = str(original_value) if original_value is not None else ""
-                        new_str = str(new_value) if new_value is not None else ""
-
-                        if original_str != new_str:
+                        if str(new_value) != str(original_value):
                             final_value = new_value
-                            col_type = column_types.get(key.upper(), 'TEXT')
                             if new_value == "":
-                                if any(num_type in col_type for num_type in numeric_types):
-                                    final_value = None
-                                else:
-                                    setting_key = f"{table_name}.{key}".upper()
-                                    handling_rule = g_null_handling_settings.get(setting_key, g_null_handling_default)
-                                    if handling_rule == 'CONVERT_EMPTY_TO_NULL':
-                                        final_value = None
-                            changed_data[key] = final_value
+                                col_type = column_types.get(key.upper(), 'TEXT')
+                                if any(num_type in col_type for num_type in numeric_types): final_value = None
+                            final_changed_data[key] = final_value
                     
-                    if changed_data:
-                        set_clauses = [f"{self._quote_identifier(k)} = ?" for k in changed_data.keys()]
-                        update_params = list(changed_data.values())
+                    if final_changed_data:
+                        set_clauses = [f"{self._quote_identifier(k)} = ?" for k in final_changed_data.keys()]
+                        update_params = list(final_changed_data.values())
                         update_params.append(pk_value)
                         update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
                         self._execute_sql(update_sql, False, update_params)
                         if self.db_engine == 'sqlite': self.db_connection.commit()
 
                 elif action == "INSERT":
-                    insert_columns = [col for col in all_column_names if col.lower() != pk_column.lower() and col in form_data and form_data[col] != '']
+                    # --- MODIFICATION: Allow PK to be included in INSERT ---
+                    insert_columns = [col for col in all_column_names if col in form_data and form_data[col] != '']
                     if insert_columns:
                         column_placeholders = ', '.join(['?'] * len(insert_columns))
                         quoted_columns = ', '.join([self._quote_identifier(col) for col in insert_columns])
@@ -7688,18 +8045,17 @@ class Interpreter:
                 if selected_id is None: continue
                 self.variables['GRIDEDIT_ID'] = selected_id
                 
-                single_query = f"SELECT * FROM {self._quote_identifier(table_name)} WHERE {self._quote_identifier(pk_column)} = :GRIDEDIT_ID"
+                quoted_select_list_str = ', '.join(final_select_list)
+                single_query = f"SELECT {quoted_select_list_str} FROM {quoted_base_table} WHERE {quoted_base_table}.{self._quote_identifier(pk_column)} = :GRIDEDIT_ID"
+                
                 row_data_list = self._execute_sql(single_query, is_query=True)
                 if not row_data_list: continue
                 
                 current_headers = [desc[0] for desc in self.db_cursor.description]
                 initial_entry_data = dict(zip(current_headers, row_data_list[0]))
                 
-                if g_ui_mode == 'WEB':
-                    list_runner.set_edit_context(entry_form_def, initial_entry_data)
-                    continue 
-
-                original_db_data = initial_entry_data.copy()
+                # Snapshot of the data as it was first displayed
+                initial_display_data_snapshot = initial_entry_data.copy()
                 
                 while True:
                     entry_runner = FormRunner(entry_form_def, initial_data=initial_entry_data, view_mode='single', pk_column_name=pk_column)
@@ -7726,55 +8082,66 @@ class Interpreter:
                                     if return_col in header_map: initial_entry_data[lookup_field_name] = selected_row[header_map[return_col]]
                                     if display_col in header_map and display_col != return_col: initial_entry_data[display_col] = selected_row[header_map[display_col]]
                         except Exception as e:
-                            print(f"DEBUG: Query failed: {e}")
+                            print(f"DEBUG: Query failed: {e}", file=sys.stderr)
                         continue
                     
-                    if entry_results.get("action") == "UPDATE":
-                        #print("DEBUG: UPDATE 1:", entry_results.get("data", {}))
+                    if entry_results.get("action") == "UPDATE" and not is_readonly:
                         updated_data_from_form = entry_results.get("data", {})
-                        changed_data = {}
-                        for key, new_value in updated_data_from_form.items():
-                            if key not in all_column_names or key.lower() == pk_column.lower(): continue
+
+                        raw_select_list_for_update = [f"{quoted_base_table}.{self._quote_identifier(col)}" for col in select_cols_ordered]
+                        quoted_raw_select_list_for_update = ', '.join(raw_select_list_for_update)
+                        single_query_raw_for_update = f"SELECT {quoted_raw_select_list_for_update} FROM {quoted_base_table} WHERE {quoted_base_table}.{self._quote_identifier(pk_column)} = ?"
+                        
+                        original_row_data_list = self._execute_sql(single_query_raw_for_update, is_query=True, params=[selected_id])
+                        original_db_data = dict(zip(select_cols_ordered, original_row_data_list[0])) if original_row_data_list else {}
+
+                        data_to_save = {}
+                        for key in all_column_names:
+                            if key.lower() == pk_column.lower(): continue
+                            
+                            submitted_value = updated_data_from_form.get(key)
+                            
+                            if key in lookup_definitions:
+                                initial_display_value = initial_display_data_snapshot.get(key)
+                                if str(submitted_value) != str(initial_display_value):
+                                    data_to_save[key] = submitted_value
+                                else:
+                                    data_to_save[key] = original_db_data.get(key)
+                            else:
+                                data_to_save[key] = submitted_value
+
+                        final_changed_data = {}
+                        for key, new_value in data_to_save.items():
                             original_value = original_db_data.get(key)
-                            original_str = str(original_value) if original_value is not None else ""
-                            new_str = str(new_value) if new_value is not None else ""
-                            if original_str != new_str:
+                            if str(new_value) != str(original_value):
                                 final_value = new_value
-                                col_type = column_types.get(key.upper(), 'TEXT')
                                 if new_value == "":
+                                    col_type = column_types.get(key.upper(), 'TEXT')
                                     if any(num_type in col_type for num_type in numeric_types): final_value = None
-                                    else:
-                                        setting_key = f"{table_name}.{key}".upper()
-                                        handling_rule = g_null_handling_settings.get(setting_key, g_null_handling_default)
-                                        if handling_rule == 'CONVERT_EMPTY_TO_NULL': final_value = None
-                                changed_data[key] = final_value
-                        #print("DEBUG: UPDATE 2:", changed_data)
-                        if changed_data:
-                            set_clauses = [f"{self._quote_identifier(k)} = ?" for k in changed_data.keys()]
-                            update_params = list(changed_data.values())
-                            pk_value = original_db_data.get(pk_column)
+                                final_changed_data[key] = final_value
+                        
+                        if final_changed_data:
+                            set_clauses = [f"{self._quote_identifier(k)} = ?" for k in final_changed_data.keys()]
+                            update_params = list(final_changed_data.values())
+                            pk_value = selected_id
                             update_params.append(pk_value)
                             update_sql = f"UPDATE {self._quote_identifier(table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = ?"
-                            #print("DEBUG: UPDATE 3",update_sql)
-                            #print("DEBUG: UPDATE 4:", update_params)
-                            result = self._execute_sql(update_sql, False, update_params)
+                            self._execute_sql(update_sql, False, update_params)
                             if self.db_engine == 'sqlite': self.db_connection.commit()
-                            original_db_data.update(changed_data)
                     break
 
-            elif action == "NEW":
-                initial_entry_data = {col: "" for col in all_column_names if col.lower() != pk_column.lower()}
-                
-                if g_ui_mode == 'WEB':
-                    list_runner.set_edit_context(new_form_def, initial_entry_data)
-                    continue
+            elif action == "NEW" and not is_readonly:
+                initial_entry_data = {col: "" for col in all_column_names}
 
                 while True:
-                    entry_runner = FormRunner(new_form_def, initial_data=initial_entry_data, view_mode='single', pk_column_name=pk_column)
+                    print("DEBUG:",new_form_def)
+                    print("DEBUG:",pk_column)
+                    entry_runner = FormRunner(new_form_def, initial_data=initial_entry_data, 
+                                              view_mode='single', pk_column_name=pk_column)
                     entry_results = entry_runner.run()
                     if entry_results.get("action") == "RUN_LOOKUP":
                         lookup_field_name = entry_results.get("lookup_field")
-                        field_def = next((e for e in entry_form_elements if e.get("name") == lookup_field_name), None)
+                        field_def = next((e for e in new_form_elements if e.get("name") == lookup_field_name), None)
                         if field_def and field_def.get("lookup"):
                             lookup_config = field_def["lookup"]
                             try:
@@ -7798,7 +8165,7 @@ class Interpreter:
 
                     if entry_results.get("action") == "INSERT":
                         new_data = entry_results.get("data", {})
-                        insert_columns = [col for col in all_column_names if col.lower() != pk_column.lower() and col in new_data and new_data[col] != '']
+                        insert_columns = [col for col in all_column_names if col in new_data and new_data[col] != '']
                         if insert_columns:
                             column_placeholders = ', '.join(['?'] * len(insert_columns))
                             quoted_columns = ', '.join([self._quote_identifier(col) for col in insert_columns])
@@ -7816,7 +8183,7 @@ class Interpreter:
                             if self.db_engine == 'sqlite': self.db_connection.commit()
                     break
 
-            elif action == "DELETE":
+            elif action == "DELETE" and not is_readonly:
                 if selected_id is None: continue
                 delete_sql = f"DELETE FROM {self._quote_identifier(table_name)} WHERE {self._quote_identifier(pk_column)} = ?"
                 self._execute_sql(delete_sql, False, [selected_id])
@@ -8079,10 +8446,7 @@ class Interpreter:
                     headers = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
                     current_data = {"headers": headers, "rows": rows}
 
-                if g_ui_mode == 'WEB':
-                    runner = WebFormRunner(form_def, current_data, nav_info=nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
-                else:
-                    runner = FormRunner(form_def, current_data, nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
+                runner = FormRunner(form_def, current_data, nav_info, view_mode=current_view_mode, pk_column_name=pk_column_name)
                 results = runner.run()
                 action = results.get("action")
                 
@@ -8148,15 +8512,7 @@ class Interpreter:
             if record_id is not None:
                  self._error(f"USING clause is only valid for forms with a SOURCE clause.")
 
-            if g_ui_mode == 'WEB':
-                runner = WebFormRunner(
-                    form_def,
-                    initial_data={},
-                    view_mode='single',
-                    pk_column_name='id'
-                )
-            else: # TUI
-                runner = FormRunner(
+            runner = FormRunner(
                     form_def,
                     initial_data={},
                     nav_info={},
@@ -8541,86 +8897,115 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during XML analysis: {e}")
 
+    '''
+    SHOW TABLES;
+    SHOW INDEXES [ON table_name];
+    SHOW CREATE TABLE [table_name];
+    '''
     def _parse_show_statement(self):
         self._expect('SHOW')
         if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'TABLES':
             self._next_token()
-            
-            # Optional: consume semicolon if present
             if self._current_token() and self._current_token()[0] == 'SEMICOLON':
                 self._next_token()
-                              
             results = self._get_table_list()
             if results:
                 for row in results:
-                    print(row[0])
+                    print(row)
             else:
                 print("No tables found.")
-        # INDEXES
+        
         elif self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'INDEXES':
-            self._next_token()
+            self._next_token() # Consume INDEXES
             
-            # Optional: consume semicolon if present
+            on_table = None
+            if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'ON':
+                self._next_token() # Consume ON
+                on_table = self._parse_table_name()
+
             if self._current_token() and self._current_token()[0] == 'SEMICOLON':
                 self._next_token()
-                
+
+            all_results = []
             if self.db_engine == 'duckdb':
-                sql = """
-SELECT sql FROM duckdb_indexes()
-UNION ALL
--- Primary keys and unique constraints
-SELECT 
-    'ALTER TABLE "' || tc.table_name || '" ADD CONSTRAINT "' || tc.constraint_name || 
-    '" ' || tc.constraint_type || ' (' || 
-    string_agg('"' || kcu.column_name || '"', ', ' ORDER BY kcu.ordinal_position) || ');' AS sql
-FROM information_schema.table_constraints tc
-JOIN information_schema.key_column_usage kcu
-    ON tc.constraint_name = kcu.constraint_name
-    AND tc.table_name = kcu.table_name
-WHERE tc.constraint_type IN ('PRIMARY KEY', 'UNIQUE')
-GROUP BY tc.table_name, tc.constraint_name, tc.constraint_type
-ORDER BY 1
-"""
+                # DuckDB logic would go here
+                pass
+            else: # SQLite
+                if on_table:
+                    # Query for a single, specific table (now includes PK as ALTER TABLE)
+                    sql = """
+                        SELECT sql, NULL FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL AND tbl_name = ?
+                        UNION ALL
+                        SELECT '-- UNIQUE constraint implemented by index: ' || il.name,
+                               'CREATE UNIQUE INDEX ' || il.name || ' ON ' || ? || ' (' || group_concat(p.name, ', ') || ');'
+                        FROM pragma_index_list(?) AS il JOIN pragma_index_info(il.name) AS p
+                        WHERE il.origin = 'u' GROUP BY il.name
+                        UNION ALL
+                        SELECT 'ALTER TABLE ' || ? || ' ADD CONSTRAINT ' || il.name || ' PRIMARY KEY (' || group_concat(p.name, ', ') || ');', NULL
+                        FROM pragma_index_list(?) AS il JOIN pragma_index_info(il.name) AS p
+                        WHERE il.origin = 'pk' GROUP BY il.name
+                    """
+                    params = [on_table, on_table, on_table, on_table, on_table]
+                    results = self._execute_sql(sql, is_query=True, params=params)
+                    if results: all_results.extend(results)
+                else:
+                    # Query for ALL tables (now includes PK as ALTER TABLE)
+                    sql_explicit = "SELECT sql, NULL FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL"
+                    explicit_indexes = self._execute_sql(sql_explicit, is_query=True)
+                    if explicit_indexes: all_results.extend(explicit_indexes)
+                    
+                    all_tables = self._get_table_list()
+                    for table_name in all_tables:
+                        sql_constraints = """
+                            SELECT '-- UNIQUE constraint on table ' || ? || ' implemented by index: ' || il.name,
+                                   'CREATE UNIQUE INDEX ' || il.name || ' ON ' || ? || ' (' || group_concat(p.name, ', ') || ');'
+                            FROM pragma_index_list(?) AS il JOIN pragma_index_info(il.name) AS p
+                            WHERE il.origin = 'u' GROUP BY il.name
+                            UNION ALL
+                            SELECT 'ALTER TABLE ' || ? || ' ADD CONSTRAINT ' || il.name || ' PRIMARY KEY (' || group_concat(p.name, ', ') || ');', NULL
+                            FROM pragma_index_list(?) AS il JOIN pragma_index_info(il.name) AS p
+                            WHERE il.origin = 'pk' GROUP BY il.name
+                        """
+                        constraint_indexes = self._execute_sql(sql_constraints, is_query=True, params=[table_name, table_name, table_name, table_name, table_name])
+                        if constraint_indexes: all_results.extend(constraint_indexes)
 
-            else:  # SQLite
-                sql = """
-SELECT sql FROM sqlite_master 
-WHERE type = 'index' AND sql IS NOT NULL
-
-UNION ALL
-
-SELECT 
-    'ALTER TABLE "' || m.name || '" ADD CONSTRAINT "pk_' || m.name || 
-    '" PRIMARY KEY (' || group_concat('"' || p.name || '"', ', ') || ');' AS sql
-FROM sqlite_master m
-JOIN pragma_table_info(m.name) p
-    ON m.name IS NOT NULL
-WHERE p.pk > 0
-GROUP BY m.name
-HAVING COUNT(p.pk) > 0
-
-UNION ALL
-
-SELECT 
-    'ALTER TABLE "' || m.name || '" ADD CONSTRAINT "unique_' || m.name || '_' || group_concat(p.name, '_') || 
-    '" UNIQUE (' || group_concat('"' || p.name || '"', ', ') || ');' AS sql
-FROM sqlite_master m
-JOIN pragma_index_list(m.name) il ON m.name IS NOT NULL
-JOIN pragma_index_info(il.name) p ON il.name = p.name
-WHERE il.origin = 'u'
-GROUP BY m.name, il.name
-
-ORDER BY 1
-"""
-                
-            results = self._execute_sql(sql, is_query=True)
-            if results:
-                for row in results:
-                    print(row[0])
+            if all_results:
+                for row in all_results:
+                    for col in row:
+                        if col:
+                            print(col if col.endswith(';') else col + ";")
             else:
-                print("No indexes found.")
+                print(f"No indexes found{' on table ' + on_table if on_table else ''}.")
+
+        elif self._current_token() and self._current_token()[0] == 'CREATE':
+            self._next_token() 
+            if not (self._current_token() and self._current_token()[0] == 'TABLE'):
+                self._error("Expected TABLE after SHOW CREATE")
+            self._next_token()
+
+            table_names_to_show = []
+            if self._current_token() and self._current_token()[0] not in ['SEMICOLON', 'NEWLINE', 'END']:
+                table_name = self._parse_table_name()
+                table_names_to_show.append(table_name)
+            else:
+                table_names_to_show = self._get_table_list()
+            
+            if self._current_token() and self._current_token()[0] == 'SEMICOLON':
+                self._next_token()
+
+            for name in table_names_to_show:
+                if self.db_engine == 'duckdb':
+                    sql = f"SELECT sql FROM duckdb_tables() WHERE table_name = '{name}'"
+                else: # SQLite
+                    sql = f"SELECT sql FROM sqlite_master WHERE type='table' AND name = '{name}'"
+                
+                results = self._execute_sql(sql, is_query=True)
+                if results and results[0] and results[0][0]:
+                    print(results[0][0] + ";\n")
+                else:
+                    print(f"-- Table '{name}' not found or has no CREATE statement.\n")
         else:
-            self._error("Expected TABLES after SHOW")
+            self._error("Expected TABLES, INDEXES, or CREATE TABLE after SHOW")
             
     def _parse_describe_statement(self):
         self._expect('DESCRIBE')
@@ -8916,6 +9301,7 @@ def main():
         base_dir = os.path.dirname(os.path.abspath(filepath))
 
     processed_source_code = preprocess_includes(source_code, base_path=base_dir)
+    #print("DEBUG:","MAIN",processed_source_code)
     
     # This line will no longer fail because processed_source_code will be a string.
     new_source_code = preprocess_continuations(processed_source_code)
