@@ -305,7 +305,7 @@ class _EntryScreen(App):
                     if action in ['VIEW_SINGLE', 'EDIT', 'NEW', 'DELETE', 'REFRESH', 'EDIT_DETAILS', 'SELECT']:
                         contextual_buttons.append(button)
                 elif current_view_mode == 'single':
-                    if action in ['VIEW_GRID', 'UPDATE', 'SAVE', 'SUBMIT', 'CANCEL', 'DELETE', 'BACK_TO_GRID']:
+                    if action in ['INSERT', 'VIEW_GRID', 'UPDATE', 'SAVE', 'SUBMIT', 'CANCEL', 'DELETE', 'BACK_TO_GRID']:
                         contextual_buttons.append(button)
         return contextual_buttons    
 
