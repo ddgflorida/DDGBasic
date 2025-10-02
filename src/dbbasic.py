@@ -322,6 +322,7 @@ def preprocess_echo_statements(source_code):
         
 class Lexer:
     def __init__(self, source_code):
+        source_code = source_code.replace('\r\n', '\n')
         lines = source_code.splitlines()
         numbered = [f"{i+1}: {line}" for i, line in enumerate(lines)]
         self.raw_source_code = source_code # "\n".join(numbered)
@@ -2978,7 +2979,7 @@ class Interpreter:
             return
 
         # Define character sets based on the 'box_style' option
-        style = options.get('box_style', 'BOX').upper()
+        style = options.get('box_style', 'ASCII').upper()
         
         BOX_CHARS = {'h': '─', 'v': '│', 'tl': '┌', 'tc': '┬', 'tr': '┐', 'ml': '├', 'mc': '┼', 'mr': '┤', 'bl': '└', 'bc': '┴', 'br': '┘'}
         ASCII_CHARS = {'h': '-', 'v': '|', 'tl': '+', 'tc': '+', 'tr': '+', 'ml': '+', 'mc': '+', 'mr': '+', 'bl': '+', 'bc': '+', 'br': '+'}
@@ -3063,19 +3064,22 @@ class Interpreter:
     
     def _write_as_html(self, results, headers, stream, options={}):
         """Writes query results as a basic HTML table."""
-        stream.write("<!DOCTYPE html>\n")
-        stream.write("<html>\n<head>\n<title>Query Result</title>\n")
-        stream.write("<style>\n")
-        stream.write("  body { font-family: sans-serif; }\n")
-        stream.write("  table { border-collapse: collapse; width: 80%; margin: 20px auto; }\n")
-        stream.write("  th, td { border: 1px solid #cccccc; padding: 8px; text-align: left; }\n")
-        stream.write("  thead { background-color: #f2f2f2; font-weight: bold; }\n")
-        stream.write("  tr:nth-child(even) { background-color: #f9f9f9; }\n")
-        stream.write("</style>\n</head>\n<body>\n")
-        stream.write("<h1>Query Result</h1>\n")
-        
+        is_full = options.get('full', '')
+        if is_full:
+            stream.write("<!DOCTYPE html>\n")
+            stream.write("<html>\n<head>\n<title>Query Result</title>\n")
+            stream.write("<style>\n")
+            stream.write("  body { font-family: sans-serif; }\n")
+            stream.write("  table { border-collapse: collapse; width: 80%; margin: 20px auto; }\n")
+            stream.write("  th, td { border: 1px solid #cccccc; padding: 8px; text-align: left; }\n")
+            stream.write("  thead { background-color: #f2f2f2; font-weight: bold; }\n")
+            stream.write("  tr:nth-child(even) { background-color: #f9f9f9; }\n")
+            stream.write("</style>\n</head>\n<body>\n")
+            stream.write("<h1>Query Result</h1>\n")
+         
         if not results:
-            stream.write("<p>(0 rows returned)</p>\n")
+            if is_full:
+                stream.write("<p>(0 rows returned)</p>\n")
         else:
             stream.write("<table>\n")
             stream.write("  <thead>\n    <tr>\n")
@@ -3093,9 +3097,11 @@ class Interpreter:
                 stream.write("    </tr>\n")
             stream.write("  </tbody>\n")
             stream.write("</table>\n")
-            stream.write(f"<p style='text-align: center; font-style: italic;'>({len(results)} rows returned)</p>\n")
+            if is_full:
+                stream.write(f"<p style='text-align: center; font-style: italic;'>({len(results)} rows returned)</p>\n")
 
-        stream.write("</body>\n</html>\n")
+        if is_full:
+            stream.write("</body>\n</html>\n")
         
     def _write_as_fixed(self, results, headers, stream, options={}):
         """Writes query results as a fixed-width text file without headers."""
@@ -4601,7 +4607,7 @@ class Interpreter:
             eval_interpreter.run()
 
         except Exception as e:
-            self._error(f"Error during dynamic execution: {e}")
+            self._error(f"Error during dynamic execution: {e}, code: {processed_code}")
             
     def _parse_zip_statement(self):
         """
@@ -5226,6 +5232,7 @@ class Interpreter:
                     if not key_column_name: self._error("Key column name not provided for UPSERT.")
                     if key_column_name not in final_headers: self._error(f"Key column '{key_column_name}' not found in source file headers.")
                     
+                    # This code currently does not use process_script and the transform_rules... TO DO 
                     def data_iterator(reader, column_map):
                         for row in reader:
                             if not row: continue
@@ -5241,7 +5248,7 @@ class Interpreter:
                     self.db_connection.execute('BEGIN TRANSACTION;')
                     try:
                         line_counter = 1
-                        for row in reader:
+                        for row_num,row in enumerate(reader):
                             if column_map is None: column_map = list(range(len(row)))
                             if not row: continue
                             processed_row = [row[i] for i in column_map if i < len(row)]
@@ -5249,6 +5256,8 @@ class Interpreter:
                             if process_script:
                                 rec_hash = dict(zip(final_headers, processed_row))
                                 self.variables['rec'] = rec_hash
+                                self.variables['physical_line_num'] = reader.line_num
+                                self.variables['logical_line_num'] = row_num+1
                                 self._execute_basic_string(process_script)
                                 updated_rec = self.variables.get('rec', {})
                                 if updated_rec.get('is_valid', -1.0) == 0.0:
