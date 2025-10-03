@@ -4166,6 +4166,62 @@ class Interpreter:
             except Exception as e:
                 self._error(f"An error occurred during file search: {e}")              
 
+    def _parse_for_statement(self):
+        start_index = self.token_index
+        self._expect('FOR')
+        var = self._expect('ID')[1]
+        self._expect('ASSIGN')
+        start_val = self._parse_expression()
+        self._expect('TO')
+        end_val = self._parse_expression()
+        step_val = 1.0
+        if self._current_token() and self._current_token()[0] == 'STEP':
+            self._next_token()
+            step_val = self._parse_expression()
+        
+        self.variables[var] = start_val
+        body_start_index = self.token_index
+
+        try:
+            while True:
+                current_val = self.variables.get(var)
+                
+                if (step_val > 0 and current_val > end_val) or \
+                   (step_val < 0 and current_val < end_val):
+                    # --- Normal Completion Path ---
+                    self.token_index = body_start_index
+                    self._skip_block('FOR', 'NEXT')
+                    
+                    # --- START OF FIX ---
+                    # _skip_block leaves us ON the token after NEXT. Consume it.
+                    if self._current_token() and self._current_token()[0] == 'ID':
+                        self._next_token()
+                    # --- END OF FIX ---
+                    return
+
+                # --- Execute One Iteration ---
+                self.token_index = body_start_index
+                if self._current_token() and self._current_token()[0] == 'NEWLINE':
+                    self._next_token()
+                
+                self.run_block(end_tokens={'NEXT'})
+                
+                self._expect('NEXT')
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token()
+                
+                self.variables[var] += step_val
+
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                # --- EXIT FOR Path ---
+                self._skip_block('FOR', 'NEXT')
+                if self._current_token() and self._current_token()[0] == 'ID':
+                    self._next_token()
+                return
+            else:
+                raise e
+                
     def _parse_for_in_files_loop(self):
         """Parses a FOR...IN FILES(...) loop to iterate over file paths, with optional keywords."""
         self._expect('FOR')
@@ -5065,18 +5121,6 @@ class Interpreter:
             # Step 4: Clean up
             cursor.execute(f"DROP TABLE IF EXISTS {quoted_staging_table};")
         
-    def _parse_load_statement(self):
-        peek = self._peek_token()
-        if peek and peek[0] == 'CSV': self._parse_load_csv_statement()
-        elif peek and peek[0] == 'EXCEL': self._parse_load_excel_statement()
-        elif peek and peek[0] == 'FIXED': self._parse_load_fixed_statement()
-        elif peek and peek[0] == 'JSON': self._parse_load_json_statement()
-        elif peek and peek[0] == 'JSONL': self._parse_load_jsonl_statement()
-        elif peek and peek[0] == 'XML': self._parse_load_xml_statement()
-        elif peek and peek[0] == 'HTML': self._parse_load_html_statement()
-        elif peek and peek[0] == 'TEXT': self._parse_load_text_statement()
-        else: self._error("Expected CSV, JSON, JSONL, FIXED, or EXCEL after LOAD")
-
     def _parse_table_name(self):
         """Parses a table name, accepting either an unquoted ID or a quoted STRING."""
         token = self._current_token()
@@ -5089,657 +5133,827 @@ class Interpreter:
             # Strip the surrounding quotes from the string token
             return name.strip('"')
         return name  
-        
-    def _parse_load_csv_statement(self):
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('CSV')
+   
+    def _parse_load_destination_clause(self):
+        """
+        Parses the destination clause (CREATE TABLE or INTO TABLE) for a LOAD statement.
+        Returns a dictionary containing the destination mode, target table,
+        database mode (APPEND/TRUNCATE/UPSERT), and the key column for upserts.
+        """
+        dest_info = {
+            'mode': None, 
+            'target': None, 
+            'db_mode': None, 
+            'key_column': None
+        }
 
-        csv_filename = self._parse_expression()
-        destination_mode, destination_target, db_mode = None, None, None
-        key_column_name = None # Will hold the key for UPSERT
+        token = self._current_token()
+        if not token:
+            self._error("Expected CREATE TABLE or INTO TABLE clause after filename.")
 
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'; self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-        elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'; self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-            
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE', 'UPSERT']:
-                db_mode = self._current_token()[1]
+        if token[0] == 'CREATE':
+            dest_info['mode'] = 'CREATE_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE':
                 self._next_token()
-                if db_mode == 'UPSERT':
+            dest_info['target'] = self._parse_table_name()
+
+        elif token[0] == 'INTO':
+            dest_info['mode'] = 'INTO_TABLE'
+            self._next_token()
+            if self._current_token() and self._current_token()[0] == 'TABLE':
+                self._next_token()
+            dest_info['target'] = self._parse_table_name()
+            
+            mode_token = self._current_token()
+            if mode_token and mode_token[0] in ['APPEND', 'TRUNCATE', 'UPSERT']:
+                dest_info['db_mode'] = mode_token[1].upper()
+                self._next_token()
+
+                if dest_info['db_mode'] == 'UPSERT':
                     if not (self._current_token() and self._current_token()[0] == 'USING'):
                         self._error("UPSERT mode requires a 'USING KEY' clause.")
                     self._next_token() # Consume USING
                     if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'KEY'):
                         self._error("Expected KEY after USING.")
                     self._next_token() # Consume KEY
-                    key_column_name = self._parse_expression()
+                    dest_info['key_column'] = self._parse_expression()
             else: 
                 self._error("Expected APPEND, TRUNCATE, or UPSERT for INTO TABLE clause.")
         else: 
-            self._error("Expected CREATE TABLE or INTO TABLE clause.")
+            self._error("Expected CREATE TABLE or INTO TABLE clause after filename.")
 
-        options = {'header': False, 'skip': 0, 'limit': None, 'encoding': 'utf-8', 'trimall': False,
-                   'delimiter': ',', 'transform': '', 'format': 'CSV', 'batchsize': 10000, 
-                   'fields': '', 'process_by': None}
-        temp_options = {}
-        add_line_num = False
-        process_script = None
-        if self._current_token() and self._current_token()[0].upper() == 'OPTIONS':
-            self._next_token()
-            options_str = self._parse_expression()
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key, start_pos = match.group(1).lower(), match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',').strip()
-                if value.startswith('"') and value.endswith('"'): value = value[1:-1]
-                temp_options[key] = value
+        return dest_info
 
-            for key, value in temp_options.items():
-                if key == 'header': 
-                    options['header'] = value is None or value.lower() in ['true', 'y', '1']
-                elif key in ['skip', 'limit', 'batchsize']: 
-                    options[key] = int(value)
-                elif key == 'linenum':
-                    add_line_num = value.lower() in ['true', 'y', '1']
-                else: 
-                    options[key] = value
+    def _parse_load_options(self):
+        """
+        Parses an optional OPTIONS "key=value, key2=value2" clause.
+        Returns a dictionary of the parsed options with lowercase keys.
+        If no OPTIONS clause is present, returns an empty dictionary.
+        """
+        parsed_options = {}
+        if not (self._current_token() and self._current_token()[0] == 'OPTIONS'):
+            return parsed_options # No options clause, return empty dict
 
-            if options.get('process_by'):
-                script_var_name = options['process_by']
-                if script_var_name not in self.variables or not isinstance(self.variables.get(script_var_name), str):
-                    self._error(f"Script variable '{script_var_name}' for PROCESS_BY not found or not a string.")
-                process_script = self.variables[script_var_name]
+        self._next_token() # Consume OPTIONS
+        options_str = self._parse_expression()
+        
+        if not isinstance(options_str, str):
+            self._error("Argument for OPTIONS must be a string.")
 
-        transform_rules = {}
-        if 'transform' in temp_options:
-            for rule in temp_options['transform'].split(','):
-                parts = rule.strip().split(':')
-                if len(parts) == 2:
-                    col_name, func_name = parts
-                    transform_rules[col_name.lower()] = func_name.lower()
-                elif len(parts) == 1:
-                    transform_rules[parts[0]] = True
-
-        try:
-            with open(csv_filename, 'r', newline='', encoding=options['encoding']) as infile:
-                original_headers = []
+        # Use regex to find all "key=" patterns to correctly split values
+        key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+        for i, match in enumerate(key_matches):
+            key = match.group(1).lower()
+            start_pos = match.end()
+            
+            # The value is everything from the end of the current match to the start of the next one
+            end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+            
+            # Clean up the extracted value
+            value = options_str[start_pos:end_pos].strip().strip(',')
+            if value.startswith('"') and value.endswith('"'):
+                value = value[1:-1].replace('""', '"')
+            elif value.startswith("'") and value.endswith("'"):
+                value = value[1:-1].replace("''", "'")
                 
-                for _ in range(options['skip']): 
-                    try:
-                        next(infile)
-                    except StopIteration:
-                        break
+            parsed_options[key] = value
 
-                if options['header']:
-                    try:
-                        header_line = next(infile)
-                        original_headers = next(csv.reader([header_line], delimiter=options['delimiter']))
-                    except StopIteration:
-                        pass
-                else:
-                    first_line = next(infile, None)
-                    if first_line:
-                        num_columns = len(next(csv.reader([first_line], delimiter=options['delimiter'])))
-                        original_headers = [f"C{i + 1}" for i in range(num_columns)]
+        return parsed_options
+     
+    def _csv_extractor(self, filename, options):
+        """
+        Extractor for CSV files. Yields headers first, then a dict for each data row.
+        """
+        with open(filename, 'r', newline='', encoding=options.get('encoding', 'utf-8')) as infile:
+            # Handle delimiter sniffing
+            delimiter = options.get('delimiter', 'auto')
+            if delimiter == 'auto':
+                try:
+                    sample = infile.read(8192)
                     infile.seek(0)
-                    for _ in range(options['skip']): next(infile)
+                    delimiter = csv.Sniffer().sniff(sample).delimiter
+                except csv.Error:
+                    delimiter = ',' # Default if sniffing fails
 
-                reader = csv.reader(infile, delimiter=options['delimiter'])
+            # Handle skipping initial lines
+            skip = int(options.get('skip', 0))
+            for _ in range(skip):
+                try:
+                    next(infile)
+                except StopIteration:
+                    break
 
-                final_headers, column_map = original_headers, list(range(len(original_headers))) if original_headers else None
-                if options['fields']:
-                    field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
-                    if field_specs[0].strip() == '*':
-                        excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
-                        final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
-                        column_map = [i for i, h in enumerate(original_headers) if h.lower() not in excluded_fields]
-                    else:
-                        header_lookup = {h.lower(): i for i, h in enumerate(original_headers)}
-                        new_headers, new_map = [], []
-                        for spec in field_specs:
-                            match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
-                            if not match: self._error(f"Invalid FIELDS specification: {spec}")
-                            original_name, new_name = match.groups()
-                            if original_name.lower() not in header_lookup:
-                                self._error(f"Field '{original_name}' not found in CSV header.")
-                            new_map.append(header_lookup[original_name.lower()])
-                            if self.hash_keys_mode == 'IGNORE_CASE':
-                                final_field_name = (new_name or original_name).upper()
-                            else:
-                                final_field_name = new_name or original_name
-                            new_headers.append(final_field_name)
-                        final_headers, column_map = new_headers, new_map
+            reader = csv.reader(infile, delimiter=delimiter)
 
-                if add_line_num:
-                    final_headers.append('_linenum')
+            # Determine and yield headers
+            headers = []
+            header_option = options.get('header', 'auto')
+            has_header = False
+            if header_option == 'auto':
+                try:
+                    sample = ""
+                    for i, line in enumerate(infile):
+                        if i >= 5: break
+                        sample += line
+                    infile.seek(0) # Rewind fully after sampling
+                    # Re-skip lines
+                    for _ in range(skip): next(infile)
+                    has_header = csv.Sniffer().has_header(sample)
+                except csv.Error:
+                    has_header = False
+            else:
+                has_header = str(header_option).lower() in ['true', '1', 'y']
 
-                cursor = self.db_cursor
-                if destination_mode == 'CREATE_TABLE':
-                    if self._table_exists(destination_target):
-                        self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... TRUNCATE to overwrite its contents.")
-                    cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in final_headers])
-                    cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
+            if has_header:
+                try:
+                    headers = next(reader)
+                except StopIteration:
+                    pass # Handle empty file
+            else:
+                # If no header, we must peek at the first data row to find column count
+                try:
+                    first_row = next(reader)
+                    headers = [f"C{i+1}" for i in range(len(first_row))]
+                    # Since we consumed the first row, we need to manually yield it later
+                    # A cleaner way is to combine generators, but this is simpler for now.
+                    # We'll reset and re-read, which is slightly inefficient but robust.
+                    infile.seek(0)
+                    for _ in range(skip): next(infile)
+                    reader = csv.reader(infile, delimiter=delimiter)
+                except StopIteration:
+                    pass
 
-                # --- NEW, CORRECTED EXECUTION LOGIC ---
-                if db_mode == 'UPSERT':
-                    if not key_column_name: self._error("Key column name not provided for UPSERT.")
-                    if key_column_name not in final_headers: self._error(f"Key column '{key_column_name}' not found in source file headers.")
-                    
-                    # This code currently does not use process_script and the transform_rules... TO DO 
-                    def data_iterator(reader, column_map):
-                        for row in reader:
-                            if not row: continue
-                            yield [row[i] for i in column_map if i < len(row)]
-                    
-                    total_rows_processed = self._perform_batch_upsert(destination_target, key_column_name, final_headers, data_iterator(reader, column_map))
-                    print(f"{total_rows_processed} records upserted into table {destination_target}")
-                else: # Handle APPEND and TRUNCATE
-                    if db_mode == 'TRUNCATE': 
-                        cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
-                    
-                    insert_sql, batch, total_rows_processed = None, [], 0
-                    self.db_connection.execute('BEGIN TRANSACTION;')
-                    try:
-                        line_counter = 1
-                        for row_num,row in enumerate(reader):
-                            if column_map is None: column_map = list(range(len(row)))
-                            if not row: continue
-                            processed_row = [row[i] for i in column_map if i < len(row)]
-                            
-                            if process_script:
-                                rec_hash = dict(zip(final_headers, processed_row))
-                                self.variables['rec'] = rec_hash
-                                self.variables['physical_line_num'] = reader.line_num
-                                self.variables['logical_line_num'] = row_num+1
-                                self._execute_basic_string(process_script)
-                                updated_rec = self.variables.get('rec', {})
-                                if updated_rec.get('is_valid', -1.0) == 0.0:
-                                    del self.variables['rec']
-                                    continue
-                                processed_row = [updated_rec.get(h) for h in final_headers if h != '_linenum']
-                                del self.variables['rec']
+            yield {'type': 'headers', 'data': headers}
 
-                            if transform_rules:
-                                data_headers = [h for h in final_headers if h != '_linenum']
-                                for i, header_name in enumerate(data_headers):
-                                    rule = transform_rules.get(header_name.lower())
-                                    if rule and i < len(processed_row):
-                                        original_value = str(processed_row[i])
-                                        if rule == 'upper': processed_row[i] = original_value.upper()
-                                        elif rule == 'lower': processed_row[i] = original_value.lower()
-                                        elif rule == 'proper': processed_row[i] = original_value.title()
-                                        elif rule == 'trim': processed_row[i] = original_value.strip()
-                                if transform_rules.get('trimall'): processed_row = [str(field).strip() for field in processed_row]
-                                if transform_rules.get('upperall'): processed_row = [str(field).upper() for field in processed_row]
-                                if transform_rules.get('lowerall'): processed_row = [str(field).lower() for field in processed_row]
-                                if transform_rules.get('properall'): processed_row = [str(field).title() for field in processed_row]
-                            
-                            if insert_sql is None:
-                                placeholders = ', '.join(['?'] * len(final_headers))
-                                quoted_headers = ", ".join([self._quote_identifier(h) for h in final_headers])
-                                insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
-                            
-                            if add_line_num:
-                                processed_row.append(line_counter)
-                            
-                            batch.append(processed_row)
-                            total_rows_processed += 1
-                            line_counter += 1
-                            if len(batch) >= options['batchsize']:
-                                cursor.executemany(insert_sql, batch); batch = []
-                        
-                        if batch: cursor.executemany(insert_sql, batch)
-                        self.db_connection.execute('COMMIT;')
-                        print(f"{total_rows_processed} records loaded into table {destination_target}")
-                    except Exception as e:
-                        self.db_connection.execute('ROLLBACK;'); raise e
-        except FileNotFoundError:
-            self._error(f"File not found: {csv_filename}")
-        except Exception as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"CSV load error: {e}"
-            self._error(f"An error occurred during CSV load: {e}")
-            
-    def _parse_load_fixed_statement(self):
+            # --- Yield each data row ---
+            row_num = 0
+            limit = int(options.get('limit', -1))
+            for row in reader:
+                if limit != -1 and row_num >= limit:
+                    break
+                
+                yield {
+                    'type': 'data',
+                    'data': row,
+                    'physical_line_num': reader.line_num,
+                    'logical_line_num': row_num + 1
+                }
+                row_num += 1
+ 
+    def _excel_extractor(self, filename, options):
         """
-        Parse and execute LOAD FIXED for fixed-width files.
-        Refactored to stream the file and use explicit transactions.
+        Extractor for Excel files (.xls, .xlsx). Yields headers, then a dict for each data row.
         """
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('FIXED')
-        
-        filename = self._parse_expression()
-        
-        destination_mode, destination_target, db_mode = None, None, None
-        
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-        elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
-                db_mode = self._current_token()[1]
-                self._next_token()
-            else:
-                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else:
-            self._error("Expected CREATE TABLE or INTO TABLE clause.")
-        
-        if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'FIELDS'):
-            self._error("LOAD FIXED requires a FIELDS specification.")
-        
-        self._next_token()
-        fields_spec = self._parse_expression()
-
-        field_definitions = []
-        for field_def in fields_spec.split(','):
-            field_def = field_def.strip()
-            if ':' not in field_def: self._error(f"Invalid field specification: {field_def}")
-            field_name, positions = field_def.split(':', 1)
-            if '-' not in positions: self._error(f"Invalid position specification: {positions}")
-            start_pos, end_pos = positions.split('-', 1)
-            try:
-                start_pos = int(start_pos.strip()) - 1
-                end_pos = int(end_pos.strip())
-                field_definitions.append({'name': field_name.strip(), 'start': start_pos, 'end': end_pos})
-            except ValueError: self._error(f"Invalid position numbers: {positions}")
-        
         try:
-            cursor = self.db_cursor
-            if destination_mode == 'CREATE_TABLE':
-                if self._table_exists(destination_target):
-                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
-                            
-                field_names = [f['name'] for f in field_definitions]
-                cols_def = ', '.join([f'[{name}] TEXT' for name in field_names])
-                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def})')
-
-            if db_mode == 'TRUNCATE':
-                cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)}')
-            
-            field_names = [f['name'] for f in field_definitions]
-            placeholders = ', '.join(['?'] * len(field_names))
-            quoted_fields = ', '.join([f'[{name}]' for name in field_names])
-            insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_fields}) VALUES ({placeholders})'
-
-            batch, total_rows_processed = [], 0
-            batch_size = 10000
-
-            self.db_connection.execute('BEGIN TRANSACTION;')
-            try:
-                with open(filename, 'r', encoding='utf-8') as infile:
-                    for line in infile:
-                        line = line.rstrip('\n\r')
-                        record = [line[f['start']:f['end']].strip() if f['start'] < len(line) else "" for f in field_definitions]
-                        
-                        if not any(record): continue
-
-                        batch.append(record)
-                        total_rows_processed += 1
-                        if len(batch) >= batch_size:
-                            cursor.executemany(insert_sql, batch); batch = []
-                
-                if batch: cursor.executemany(insert_sql, batch)
-                self.db_connection.execute('COMMIT;')
-                print(f"Loaded {total_rows_processed} records into table {destination_target}")
-
-            except Exception as e:
-                self.db_connection.execute('ROLLBACK;'); raise e
-        
-        except FileNotFoundError as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-            self._error(f"File not found: {filename}")
-        except Exception as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
-            self._error(f"LOAD FIXED error: {e}")
-
-        
-    def _parse_for_statement(self):
-        start_index = self.token_index
-        self._expect('FOR')
-        var = self._expect('ID')[1]
-        self._expect('ASSIGN')
-        start_val = self._parse_expression()
-        self._expect('TO')
-        end_val = self._parse_expression()
-        step_val = 1.0
-        if self._current_token() and self._current_token()[0] == 'STEP':
-            self._next_token()
-            step_val = self._parse_expression()
-        
-        self.variables[var] = start_val
-        body_start_index = self.token_index
-
-        try:
-            while True:
-                current_val = self.variables.get(var)
-                
-                if (step_val > 0 and current_val > end_val) or \
-                   (step_val < 0 and current_val < end_val):
-                    # --- Normal Completion Path ---
-                    self.token_index = body_start_index
-                    self._skip_block('FOR', 'NEXT')
-                    
-                    # --- START OF FIX ---
-                    # _skip_block leaves us ON the token after NEXT. Consume it.
-                    if self._current_token() and self._current_token()[0] == 'ID':
-                        self._next_token()
-                    # --- END OF FIX ---
-                    return
-
-                # --- Execute One Iteration ---
-                self.token_index = body_start_index
-                if self._current_token() and self._current_token()[0] == 'NEWLINE':
-                    self._next_token()
-                
-                self.run_block(end_tokens={'NEXT'})
-                
-                self._expect('NEXT')
-                if self._current_token() and self._current_token()[0] == 'ID':
-                    self._next_token()
-                
-                self.variables[var] += step_val
-
-        except LoopExit as e:
-            if e.args[0] == 'FOR':
-                # --- EXIT FOR Path ---
-                self._skip_block('FOR', 'NEXT')
-                if self._current_token() and self._current_token()[0] == 'ID':
-                    self._next_token()
-                return
-            else:
-                raise e
-                
-    def _parse_load_excel_statement(self):
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('EXCEL')
-
-        excel_filename = self._parse_expression()
-        destination_mode, destination_target, db_mode = None, None, None
-
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-        elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
-                db_mode = self._current_token()[1]
-                self._next_token()
-            else:
-                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else: 
-            self._error("Expected CREATE TABLE or INTO TABLE clause.")
-
-        # Enhanced options with full CSV feature parity
-        options = {
-            'header': True, 'sheetname': None, 'sheetindex': 0, 'batchsize': 10000,
-            'limit': None, 'skip': 0, 'fields': '', 'transform': '', 'encoding': 'utf-8',
-            'trimall': False, 'process_by': None
-        }
-        temp_options = {}
-        add_line_num = False
-        process_script = None
-
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token()
-            options_str = self._parse_expression()
-            
-            # Use the same robust OPTIONS parser as CSV
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key = match.group(1).lower()
-                start_pos = match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',').strip()
-                if value.startswith('"') and value.endswith('"'): 
-                    value = value[1:-1]
-                temp_options[key] = value
-
-            # Process all options with full CSV compatibility
-            for key, value in temp_options.items():
-                if key == 'header': 
-                    options['header'] = value is None or value.lower() in ['true', '1', 'y']
-                elif key in ['sheetindex', 'batchsize', 'limit', 'skip']: 
-                    options[key] = int(value)
-                elif key == 'linenum':
-                    add_line_num = value is None or value.lower() in ['true', 'y', '1']
-                elif key in ('trimall', 'upperall', 'lowerall', 'properall'):
-                    options[key] = value is None or value.lower() in ['true', 'y', '1']
-                else: 
-                    options[key] = value
-
-            # Handle processing script like CSV
-            if options['process_by']:
-                script_var_name = options['process_by']
-                if script_var_name not in self.variables or not isinstance(self.variables.get(script_var_name), str):
-                    self._error(f"Script variable '{script_var_name}' for PROCESS_BY not found or not a string.")
-                process_script = self.variables[script_var_name]
-
-        # Parse transform rules like CSV
-        transform_rules = {}
-        if options.get('transform'):
-            for rule in options['transform'].split(','):
-                parts = rule.strip().split(':')
-                if len(parts) == 2:
-                    col_name, func_name = parts
-                    transform_rules[col_name.lower()] = func_name.lower()
-                elif len(parts) == 1:
-                    transform_rules[parts[0].lower()] = True
-
-        try:
-            workbook = xlrd3.open_workbook(excel_filename)
+            workbook = xlrd3.open_workbook(filename)
             sheet = None
-            
-            # Sheet selection logic
-            if options['sheetname']:
-                target_sheet_name = options['sheetname'].lower()
+
+            # --- 1. Select the correct sheet ---
+            sheet_name_opt = options.get('sheetname')
+            if sheet_name_opt:
+                # Find sheet by name, case-insensitively
+                target_sheet_name = sheet_name_opt.lower()
                 sheet_names_lower = [name.lower() for name in workbook.sheet_names()]
                 if target_sheet_name in sheet_names_lower:
                     sheet = workbook.sheet_by_index(sheet_names_lower.index(target_sheet_name))
-                else: 
-                    self._error(f"No sheet named '{options['sheetname']}'.")
-            else: 
-                sheet = workbook.sheet_by_index(options['sheetindex'])
-
-            # Apply skip option (similar to CSV)
-            start_row = options['skip']
-            
-            # Header processing with robust column name generation
-            original_headers = []
-            if options['header'] and start_row < sheet.nrows:
-                # Read the header row
-                raw_headers = [str(sheet.cell_value(start_row, col)) for col in range(sheet.ncols)]
-                start_row += 1
-                
-                # Clean up header names and generate fallbacks for empty cells
-                for i, header in enumerate(raw_headers):
-                    cleaned_header = header.strip() if header and header != 'None' else ""
-                    if not cleaned_header:
-                        cleaned_header = f"C{i + 1}"
-                    original_headers.append(cleaned_header)
-            else:
-                # No header row - generate column names
-                if sheet.ncols > 0:
-                    original_headers = [f"C{i + 1}" for i in range(sheet.ncols)]
-
-            if not original_headers:
-                print("0 records loaded (Excel file is empty or has no data).")
-                return
-
-            # Field selection logic (same as CSV)
-            final_headers, column_map = original_headers, list(range(len(original_headers)))
-            
-            if options['fields']:
-                field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
-
-                if field_specs[0].strip() == '*':
-                    # Exclude specified fields
-                    excluded_fields = {spec.strip()[2:-1].lower() for spec in field_specs[1:] if spec.strip().startswith('-[')}
-                    final_headers = [h for h in original_headers if h.lower() not in excluded_fields]
-                    column_map = [i for i, h in enumerate(original_headers) if h.lower() not in excluded_fields]
                 else:
-                    # Include only specified fields with optional renaming
+                    self._error(f"Excel file '{filename}' does not have a sheet named '{sheet_name_opt}'.")
+            else:
+                # Default to the sheet index specified, or the very first sheet
+                sheet_index = int(options.get('sheetindex', 0))
+                if sheet_index >= workbook.nsheets:
+                    self._error(f"Excel sheet index {sheet_index} is out of bounds.")
+                sheet = workbook.sheet_by_index(sheet_index)
+
+            # --- 2. Determine and yield headers ---
+            start_row = int(options.get('skip', 0))
+            has_header = str(options.get('header', 'true')).lower() in ['true', '1', 'y']
+            
+            headers = []
+            if has_header:
+                if start_row < sheet.nrows:
+                    # Clean up header names and generate fallbacks for empty cells
+                    raw_headers = [str(sheet.cell_value(start_row, col)) for col in range(sheet.ncols)]
+                    for i, header in enumerate(raw_headers):
+                        cleaned_header = header.strip()
+                        headers.append(cleaned_header if cleaned_header else f"C{i+1}")
+                    start_row += 1 # Move to the first data row
+                # If file is empty or only has skipped rows, headers will be empty
+            else:
+                # No header row, so generate default column names
+                if sheet.ncols > 0:
+                    headers = [f"C{i+1}" for i in range(sheet.ncols)]
+            
+            yield {'type': 'headers', 'data': headers}
+
+            # --- 3. Yield each data row ---
+            row_num = 0
+            limit = int(options.get('limit', -1))
+            for row_idx in range(start_row, sheet.nrows):
+                if limit != -1 and row_num >= limit:
+                    break
+
+                # Convert all cell values to strings, handling different types from xlrd3
+                data_row = []
+                for col_idx in range(sheet.ncols):
+                    cell_value = sheet.cell_value(row_idx, col_idx)
+                    # Convert floats that are whole numbers (e.g., 123.0) to clean integers
+                    if isinstance(cell_value, float) and cell_value.is_integer():
+                        data_row.append(str(int(cell_value)))
+                    else:
+                        data_row.append(str(cell_value) if cell_value is not None else "")
+                
+                yield {
+                    'type': 'data',
+                    'data': data_row,
+                    'physical_line_num': row_idx + 1, # Excel rows are 1-based for users
+                    'logical_line_num': row_num + 1
+                }
+                row_num += 1
+
+        except FileNotFoundError:
+            self._error(f"File not found: {filename}")
+        except xlrd3.biffh.XLRDError as e:
+            self._error(f"Error reading Excel file '{filename}': {e}")
+            
+    def _fixed_extractor(self, filename, options):
+        """
+        Extractor for fixed-width text files. Yields headers, then data rows.
+        Requires a 'fields' option specifying column names and positions (e.g., "ID:1-5,Name:6-20").
+        """
+        fields_spec = options.get('fields')
+        if not fields_spec:
+            self._error("LOAD FIXED requires a 'fields' option specifying column positions.")
+
+        field_definitions = []
+        try:
+            for field_def in fields_spec.split(','):
+                name, positions = field_def.strip().split(':', 1)
+                start, end = positions.split('-', 1)
+                # Convert from 1-based inclusive to 0-based exclusive for Python slicing
+                start_pos = int(start.strip()) - 1
+                end_pos = int(end.strip())
+                field_definitions.append({'name': name.strip(), 'start': start_pos, 'end': end_pos})
+        except ValueError as e:
+            self._error(f"Invalid 'fields' specification for LOAD FIXED: {e}")
+
+        # --- 1. Yield headers from the parsed field definitions ---
+        headers = [field['name'] for field in field_definitions]
+        yield {'type': 'headers', 'data': headers}
+
+        # --- 2. Open file and yield each data row ---
+        try:
+            with open(filename, 'r', encoding=options.get('encoding', 'utf-8')) as infile:
+                skip = int(options.get('skip', 0))
+                for _ in range(skip):
+                    next(infile)
+
+                row_num = 0
+                limit = int(options.get('limit', -1))
+                
+                # Use enumerate to get the physical line number
+                for i, line in enumerate(infile, start=skip + 1):
+                    if limit != -1 and row_num >= limit:
+                        break
+                    
+                    line = line.rstrip('\n\r')
+                    
+                    # Skip blank lines in the source file
+                    if not line.strip():
+                        continue
+
+                    record = [line[field['start']:field['end']].strip() for field in field_definitions]
+                    
+                    yield {
+                        'type': 'data',
+                        'data': record,
+                        'physical_line_num': i,
+                        'logical_line_num': row_num + 1
+                    }
+                    row_num += 1
+        except FileNotFoundError:
+            self._error(f"File not found: {filename}")
+           
+    def _jsonl_extractor(self, filename, options):
+        """
+        Extractor for JSON Lines files (.jsonl). Yields headers, then a dict for each data row.
+        Headers are inferred by sampling the first N records.
+        """
+        try:
+            # --- 1. Infer headers by sampling the file ---
+            sample_size = int(options.get('samplesize', 1000))
+            headers = []
+            seen_keys = set()
+            with open(filename, 'r', encoding=options.get('encoding', 'utf-8')) as infile:
+                for i, line in enumerate(infile):
+                    if i >= sample_size:
+                        break
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        record = json.loads(line)
+                        if isinstance(record, dict):
+                            for key in record:
+                                if key not in seen_keys:
+                                    seen_keys.add(key)
+                                    headers.append(key)
+                    except json.JSONDecodeError:
+                        continue # Ignore invalid JSON in the sample
+
+            yield {'type': 'headers', 'data': headers}
+
+            # --- 2. Open file again and yield each data row ---
+            with open(filename, 'r', encoding=options.get('encoding', 'utf-8')) as infile:
+                skip = int(options.get('skip', 0))
+                for _ in range(skip):
+                    next(infile)
+
+                row_num = 0
+                limit = int(options.get('limit', -1))
+                
+                for i, line in enumerate(infile, start=skip + 1):
+                    if limit != -1 and row_num >= limit:
+                        break
+                    
+                    line = line.strip()
+                    if not line:
+                        continue
+
+                    try:
+                        record = json.loads(line)
+                        if not isinstance(record, dict):
+                            print(f"Warning: Skipping non-object JSON on line {i}", file=sys.stderr)
+                            continue
+                        
+                        # Build the row in the same order as the inferred headers
+                        data_row = []
+                        for h in headers:
+                            val = record.get(h)
+                            if isinstance(val, float) and val.is_integer():
+                                data_row.append(str(int(val)))
+                            elif isinstance(val, (dict, list)):
+                                data_row.append(json.dumps(val))
+                            else:
+                                data_row.append(str(val) if val is not None else "")
+
+                        yield {
+                            'type': 'data',
+                            'data': data_row,
+                            'physical_line_num': i,
+                            'logical_line_num': row_num + 1
+                        }
+                        row_num += 1
+
+                    except json.JSONDecodeError:
+                        print(f"Warning: Skipping invalid JSON on line {i}", file=sys.stderr)
+                        continue
+
+        except FileNotFoundError:
+            self._error(f"File not found: {filename}")
+
+    def _text_extractor(self, filename, options):
+        """
+        Extractor for plain text files. Yields a single-column record for each line.
+        """
+        try:
+            # --- 1. Determine headers ---
+            add_line_num = str(options.get('linenum', 'false')).lower() in ['true', '1', 'y']
+            headers = ['line_text']
+            if add_line_num:
+                headers.append('_linenum')
+            
+            yield {'type': 'headers', 'data': headers}
+
+            # --- 2. Open file and yield each data row ---
+            with open(filename, 'r', encoding=options.get('encoding', 'utf-8'), errors='replace') as infile:
+                skip = int(options.get('skip', 0))
+                for _ in range(skip):
+                    next(infile)
+
+                skip_blank = str(options.get('skipblank', 'false')).lower() in ['true', '1', 'y']
+                row_num = 0
+                limit = int(options.get('limit', -1))
+
+                for i, line in enumerate(infile, start=skip + 1):
+                    if limit != -1 and row_num >= limit:
+                        break
+                    
+                    line_content = line.rstrip('\n\r')
+
+                    # Handle skipping blank lines within the extractor
+                    if skip_blank and not line_content.strip():
+                        continue
+
+                    data_row = [line_content]
+                    if add_line_num:
+                        data_row.append(i)
+                    
+                    yield {
+                        'type': 'data',
+                        'data': data_row,
+                        'physical_line_num': i,
+                        'logical_line_num': row_num + 1
+                    }
+                    row_num += 1
+
+        except FileNotFoundError:
+            self._error(f"File not found: {filename}")
+ 
+    def _html_extractor(self, filename, options):
+        """
+        Extractor for HTML files. Can extract tables, links, or images.
+        Uses the 'element_type' option ('TABLES', 'LINKS', 'IMAGES').
+        """
+        try:
+            with open(filename, 'r', encoding=options.get('encoding', 'utf-8')) as infile:
+                soup = BeautifulSoup(infile, 'lxml')
+
+            element_type = options.get('element_type', 'TABLES').upper()
+            source_url = options.get('source_url', filename)
+            
+            add_line_num = str(options.get('linenum', 'false')).lower() in ['true', '1', 'y']
+
+            if element_type == 'TABLES':
+                tables = soup.find_all('table')
+                table_index = int(options.get('table_index', 0))
+                if table_index >= len(tables):
+                    self._error(f"HTML table index {table_index} is out of bounds.")
+                
+                target_table = tables[table_index]
+                headers = ['source']
+                has_header = str(options.get('header', 'true')).lower() in ['true', '1', 'y']
+                
+                rows = target_table.find_all('tr')
+                start_row_idx = 0
+                if has_header and rows:
+                    header_cells = rows[0].find_all(['th', 'td'])
+                    headers.extend([cell.get_text(strip=True) for cell in header_cells])
+                    start_row_idx = 1
+
+                # --- FIX: Add _linenum to headers if requested ---
+                if add_line_num:
+                    headers.append('_linenum')
+
+                yield {'type': 'headers', 'data': self._clean_and_deduplicate_headers(headers)}
+
+                for i, row_element in enumerate(rows[start_row_idx:]):
+                    cells = row_element.find_all('td')
+                    data_row = [source_url] + [cell.get_text(strip=True) for cell in cells]
+                    
+                    # --- FIX: Append the line number to the data row ---
+                    if add_line_num:
+                        data_row.append(i + 1)
+
+                    yield {'type': 'data', 'data': data_row, 'physical_line_num': 0, 'logical_line_num': i + 1}
+
+            elif element_type == 'LINKS':
+                headers = ['source', 'text', 'href']
+                if add_line_num: headers.append('_linenum')
+                yield {'type': 'headers', 'data': headers}
+                
+                links = soup.find_all('a', href=True)
+                for i, link in enumerate(links):
+                    data_row = [source_url, link.get_text(strip=True), link.get('href')]
+                    if add_line_num: data_row.append(i + 1)
+                    yield {'type': 'data', 'data': data_row, 'physical_line_num': 0, 'logical_line_num': i + 1}
+
+            elif element_type == 'IMAGES':
+                headers = ['source', 'src', 'alt', 'title']
+                if add_line_num: headers.append('_linenum')
+                yield {'type': 'headers', 'data': headers}
+
+                images = soup.find_all('img', src=True)
+                for i, img in enumerate(images):
+                    data_row = [source_url, img.get('src'), img.get('alt', ''), img.get('title', '')]
+                    if add_line_num: data_row.append(i + 1)
+                    yield {'type': 'data', 'data': data_row, 'physical_line_num': 0, 'logical_line_num': i + 1}
+            else:
+                self._error(f"Unsupported 'element_type' for LOAD HTML: {element_type}")
+
+        except FileNotFoundError:
+            self._error(f"File not found: {filename}")
+            
+    def _execute_load_pipeline(self, filename, dest_info, options, extractor_func):
+        """
+        Handles the generic TRANSFORM and LOAD parts of the ETL process.
+        """
+        try:
+            extractor = extractor_func(filename, options)
+
+            # --- Get headers from the first yield of the extractor ---
+            header_info = next(extractor)
+            original_headers = header_info['data']
+
+            # --- 1. Parse Transform and Validate Rules from Options ---
+            transform_rules = {}
+            transform_spec = options.get('transform')
+            if transform_spec:
+                for rule in transform_spec.split(';'):
+                    parts = rule.strip().split(':')
+                    if len(parts) == 2:
+                        col_name = parts[0].strip().strip('[]')
+                        func_def = parts[1].strip()
+                        transform_rules[col_name.lower()] = func_def
+                    elif len(parts) == 1:
+                        transform_rules[parts[0].lower()] = True
+
+            validation_rules = {}
+            validate_spec = options.get('validate')
+            if validate_spec:
+                for rule_group in validate_spec.split(';'):
+                    parts = rule_group.strip().split(':', 1)
+                    if len(parts) == 2:
+                        col_name, rule_defs = parts[0].strip('[]'), parts[1]
+                        validation_rules[col_name] = rule_defs.split(':')
+
+            # --- 2. Generic Field Mapping (`FIELDS` clause) ---
+            final_headers, column_map = original_headers, list(range(len(original_headers)))
+
+            if dest_info['load_type'] in ['CSV', 'EXCEL', 'JSONL']: 
+                fields_spec = options.get('fields')
+                if fields_spec:
+                    field_specs = fields_spec.split(',')
                     header_lookup = {h.lower(): i for i, h in enumerate(original_headers)}
                     new_headers, new_map = [], []
+
                     for spec in field_specs:
-                        match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
-                        if not match: 
-                            self._error(f"Invalid FIELDS specification: {spec}")
-                        
-                        original_name, new_name = match.groups()
+                        spec = spec.strip()
+                        original_name = spec
+                        new_name = spec
+
+                        if ':' in spec:
+                            original_name, new_name = spec.split(':', 1)
+                            original_name = original_name.strip()
+                            new_name = new_name.strip()
+
                         if original_name.lower() not in header_lookup:
-                            self._error(f"Field '{original_name}' not found in Excel header.")
-                        
+                            self._error(f"Field '{original_name}' not found in source headers.")
+
                         new_map.append(header_lookup[original_name.lower()])
-                        if self.hash_keys_mode == 'IGNORE_CASE':
-                            final_field_name = (new_name or original_name).upper()
-                        else:
-                            final_field_name = new_name or original_name
-                        new_headers.append(final_field_name)
+                        new_headers.append(new_name)
+                    
                     final_headers, column_map = new_headers, new_map
+            
+            # --- Prepare script from options ---
+            process_script = None
+            if options.get('process_by'):
+                script_var = options['process_by']
+                if script_var not in self.variables or not isinstance(self.variables.get(script_var), str):
+                    self._error(f"PROCESS_BY variable '{script_var}' not found or not a string.")
+                process_script = self.variables[script_var]
 
-            # Add line number column if requested
-            if add_line_num:
-                final_headers.append('_linenum')
+            # --- Generic Database Setup ---
+            cursor = self.db_cursor
+            if dest_info['mode'] == 'CREATE_TABLE':
+                if self._table_exists(dest_info['target']):
+                    self._error(f"Table '{dest_info['target']}' already exists. Use INTO TABLE ... TRUNCATE to overwrite.")
+                cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in final_headers])
+                cursor.execute(f"CREATE TABLE {self._quote_identifier(dest_info['target'])} ({cols_def});")
+            
+            if dest_info.get('db_mode') == 'TRUNCATE':
+                cursor.execute(f"DELETE FROM {self._quote_identifier(dest_info['target'])};")
 
-            # Database setup
-            if destination_mode in ['CREATE_TABLE', 'INTO_TABLE']:
-                cursor = self.db_cursor
-                if destination_mode == 'CREATE_TABLE':
-                    if self._table_exists(destination_target):
-                        self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
-                    cols_def = ', '.join([f'[{h}] {"INTEGER" if h == "_linenum" else "TEXT"}' for h in final_headers])
-                    cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
-                
-                if db_mode == 'TRUNCATE': 
-                    cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
+            # --- Reusable Row Processing Generator ---
+            def process_rows(row_extractor):
+                for row_info in row_extractor:
+                    raw_row = row_info['data']
+                    processed_row = [raw_row[i] for i in column_map if i < len(raw_row)]
 
-                placeholders = ', '.join(['?'] * len(final_headers))
-                quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
-                insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
+                    # --- 3. Apply TRANSFORM Rules ---
+                    if transform_rules:
+                        if transform_rules.get('trimall'):
+                            processed_row = [str(field).strip() if field is not None else '' for field in processed_row]
+                        if transform_rules.get('upperall'):
+                            processed_row = [str(field).upper() if field is not None else '' for field in processed_row]
+
+                        if transform_rules.get('lowerall'):
+                            processed_row = [str(field).lower() if field is not None else '' for field in processed_row]
+
+                        if transform_rules.get('properall'):
+                            processed_row = [str(field).title() if field is not None else '' for field in processed_row]
+
+                        for i, header_name in enumerate(final_headers):
+                            rule = transform_rules.get(header_name.lower())
+                            if rule and i < len(processed_row):
+                                val = str(processed_row[i]) if processed_row[i] is not None else ''
+                                #print("DEBUG:",header_name.lower(),rule,val)
+                                # --- NEW: Logic for the FORMAT AND ROUND rule ---
+                                format_match = re.match(r"format\((.*)\)", str(rule), re.IGNORECASE)
+                                round_match = re.match(r"round\((\d+)\)", str(rule), re.IGNORECASE)
+
+                                if format_match:
+                                    format_mask = format_match.group(1)
+                                    # (The quote-stripping logic remains here)
+                                    if (format_mask.startswith("'") and format_mask.endswith("'")) or \
+                                       (format_mask.startswith('"') and format_mask.endswith('"')):
+                                        format_mask = format_mask[1:-1]
+
+                                    # First, try to treat the value as a number
+                                    try:
+                                        value_to_format = float(val.strip())
+                                    except (ValueError, TypeError):
+                                        # If it's not a number, use the original string
+                                        value_to_format = val
+                                    
+                                    # Now, call the formatter with the correctly typed value
+                                    formatted_val = Formatter.format(format_mask, [value_to_format])
+                                    processed_row[i] = formatted_val.strip()
+                                elif round_match:
+                                    num_decimals = int(round_match.group(1))
+                                    try:
+                                        # Treat empty or whitespace-only strings as 0.0
+                                        numeric_val = float(val.strip()) if val.strip() else 0.0
+                                        # Use a simple f-string for clean numeric formatting
+                                        processed_row[i] = f"{numeric_val:.{num_decimals}f}"
+                                    except (ValueError, TypeError):
+                                        # If it's not a number (e.g., "N/A"), default to a formatted zero
+                                        processed_row[i] = f"{0.0:.{num_decimals}f}"
+
+                                elif rule is True: # Handles global rules like trimall
+                                    pass
+                                elif rule == 'upper': processed_row[i] = val.upper()
+                                elif rule == 'lower': processed_row[i] = val.lower()
+                                elif rule == 'trim': processed_row[i] = val.strip()
+                                elif rule == 'proper': processed_row[i] = val.title()
+
+                                
+                    # --- 4. Apply Validation Rules ---
+                    is_row_valid = True
+                    if validation_rules:
+                        # Create a dictionary of the current row's data for easy lookup by column name
+                        row_dict = dict(zip(final_headers, processed_row))
+                        
+                        for col_name, rules in validation_rules.items():
+                            if col_name in row_dict:
+                                val = str(row_dict[col_name]) # Ensure value is a string for checks
+                                
+                                for rule in rules:
+                                    # Use regex to parse rules like "MINLENGTH(10)" into name and argument
+                                    match = re.match(r'(\w+)(?:\((.*)\))?', rule.strip())
+                                    if not match: continue
+                                    
+                                    rule_name, rule_arg = match.groups()
+                                    rule_name = rule_name.upper()
+                                    
+                                    # The REQUIRED rule is the only one that checks empty strings
+                                    if rule_name == 'REQUIRED':
+                                        if not val.strip():
+                                            print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' is REQUIRED but is empty.", file=sys.stderr)
+                                            is_row_valid = False
+                                    
+                                    # Other rules should only apply to non-empty values
+                                    elif val.strip():
+                                        if rule_name == 'ISINTEGER':
+                                            try:
+                                                int(val)
+                                            except ValueError:
+                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' is not an integer.", file=sys.stderr)
+                                                is_row_valid = False
+                                        
+                                        elif rule_name == 'ISNUMERIC':
+                                            try:
+                                                float(val)
+                                            except ValueError:
+                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' is not a number.", file=sys.stderr)
+                                                is_row_valid = False
+
+                                        elif rule_name == 'MINLENGTH':
+                                            if len(val) < int(rule_arg):
+                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' (length {len(val)}) is shorter than min length {rule_arg}.", file=sys.stderr)
+                                                is_row_valid = False
+
+                                        elif rule_name == 'MAXLENGTH':
+                                            if len(val) > int(rule_arg):
+                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' (length {len(val)}) is longer than max length {rule_arg}.", file=sys.stderr)
+                                                is_row_valid = False
+
+                                        elif rule_name == 'IN':
+                                            valid_values = {item.strip() for item in rule_arg.split(',')}
+                                            if val not in valid_values:
+                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' is not in the allowed set {valid_values}.", file=sys.stderr)
+                                                is_row_valid = False
+
+                                        elif rule_name == 'REGEX':
+                                            if not re.match(rule_arg, val):
+                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' does not match pattern '{rule_arg}'.", file=sys.stderr)
+                                                is_row_valid = False
+                                    
+                                    # If any rule for this column fails, stop checking other rules for it
+                                    if not is_row_valid:
+                                        break
+                            
+                            # If any column has failed, stop checking other columns for this row
+                            if not is_row_valid:
+                                break
+                    
+                    # If the row is invalid, skip it entirely
+                    if not is_row_valid:
+                        continue
+
+                    # --- 5. Apply PROCESS_BY Script ---
+                    if process_script:
+                        rec_hash = dict(zip(final_headers, processed_row))
+                        self.variables['rec'] = rec_hash
+                        self.variables['physical_line_num'] = float(row_info['physical_line_num'])
+                        self.variables['logical_line_num'] = float(row_info['logical_line_num'])
+                        self._execute_basic_string(process_script)
+                        updated_rec = self.variables.get('rec', {})
+                        del self.variables['rec'], self.variables['physical_line_num'], self.variables['logical_line_num']
+
+                        if updated_rec.get('is_valid', -1.0) == 0.0:
+                            continue
+                        processed_row = [updated_rec.get(h) for h in final_headers]
+
+                    yield processed_row
+            
+            # --- Generic Database Loading ---
+            row_iterator = process_rows(extractor)
+            
+            if dest_info.get('db_mode') == 'UPSERT':
+                key_column = dest_info['key_column']
+                if not key_column: self._error("UPSERT mode requires a 'key_column' to be specified.")
+                if key_column not in final_headers: self._error(f"UPSERT key column '{key_column}' not found in final headers.")
                 
-                batch, total_rows_processed = [], 0
-                limit = options.get('limit')
-                line_counter = start_row + 1  # Track actual Excel row numbers
-                
+                total_rows = self._perform_batch_upsert(dest_info['target'], key_column, final_headers, row_iterator)
+                print(f"{total_rows} records upserted into table {dest_info['target']}")
+
+            else: # APPEND or TRUNCATE logic
+                batchsize = int(options.get('batchsize', 10000))
+                insert_sql = f"INSERT INTO {self._quote_identifier(dest_info['target'])} ({', '.join([self._quote_identifier(h) for h in final_headers])}) VALUES ({', '.join(['?'] * len(final_headers))})"
+                batch = []
+                total_rows = 0
                 self.db_connection.execute('BEGIN TRANSACTION;')
                 try:
-                    for row_idx in range(start_row, sheet.nrows):
-                        if limit is not None and total_rows_processed >= limit: 
-                            break
-                        
-                        # Extract raw row data using column mapping
-                        raw_row = []
-                        for col_idx in column_map:
-                            if col_idx < sheet.ncols:
-                                cell_value = sheet.cell_value(row_idx, col_idx)
-                                # Convert Excel numbers to appropriate Python types
-                                if isinstance(cell_value, float) and cell_value.is_integer():
-                                    cell_value = int(cell_value)
-                                raw_row.append(str(cell_value) if cell_value is not None else "")
-                            else:
-                                raw_row.append("")
-                        
-                        processed_row = raw_row[:]
-
-                        # Apply processing script if specified
-                        if process_script:
-                            # Create 'rec' hash for the current row (excluding _linenum)
-                            data_headers = [h for h in final_headers if h != '_linenum']
-                            rec_hash = dict(zip(data_headers, processed_row))
-                            self.variables['rec'] = rec_hash
-
-                            # Execute the user's script
-                            self._execute_basic_string(process_script)
-
-                            # Check validation and retrieve modified data
-                            updated_rec = self.variables.get('rec', {})
-                            if updated_rec.get('is_valid', -1.0) == 0.0:
-                                del self.variables['rec']
-                                line_counter += 1
-                                continue  # Skip this row
-
-                            # Rebuild row from modified hash
-                            processed_row = [updated_rec.get(h, "") for h in data_headers]
-                            del self.variables['rec']
-
-                        # Apply transform rules
-                        if transform_rules:
-                            data_headers = [h for h in final_headers if h != '_linenum']
-                            
-                            # Global transforms
-                            if transform_rules.get('trimall'):
-                                processed_row = [str(field).strip() for field in processed_row]
-                            if transform_rules.get('upperall'):
-                                processed_row = [str(field).upper() for field in processed_row]
-                            if transform_rules.get('lowerall'):
-                                processed_row = [str(field).lower() for field in processed_row]
-                            if transform_rules.get('properall'):
-                                processed_row = [str(field).title() for field in processed_row]
-
-                            # Field-specific transforms
-                            for i, header_name in enumerate(data_headers):
-                                if i < len(processed_row):
-                                    rule = transform_rules.get(header_name.lower())
-                                    if rule and isinstance(rule, str):
-                                        original_value = str(processed_row[i])
-                                        if rule == 'upper': 
-                                            processed_row[i] = original_value.upper()
-                                        elif rule == 'lower': 
-                                            processed_row[i] = original_value.lower()
-                                        elif rule == 'proper': 
-                                            processed_row[i] = original_value.title()
-                                        elif rule == 'trim': 
-                                            processed_row[i] = original_value.strip()
-
-                        # Add line number if requested
-                        if add_line_num:
-                            processed_row.append(line_counter)
-
+                    for processed_row in row_iterator:
                         batch.append(processed_row)
-                        total_rows_processed += 1
-                        line_counter += 1
-                        
-                        if len(batch) >= options['batchsize']:
+                        total_rows += 1
+                        if len(batch) >= batchsize:
                             cursor.executemany(insert_sql, batch)
                             batch = []
                     
-                    if batch: 
-                        cursor.executemany(insert_sql, batch)
+                    if batch: cursor.executemany(insert_sql, batch)
                     self.db_connection.execute('COMMIT;')
-                    print(f"{total_rows_processed} records loaded into table {destination_target}")
-                    
+                    print(f"{total_rows} records loaded into table {dest_info['target']}")
                 except Exception as e:
                     self.db_connection.execute('ROLLBACK;')
                     raise e
-
-        except FileNotFoundError: 
-            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, f"File not found: {excel_filename}"
-            self._error(f"File not found: {excel_filename}")
-        except xlrd3.biffh.XLRDError as e: 
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"Excel file error: {e}"
-            self._error(f"Excel file error: {e}")
-        except Exception as e: 
+            
+        except FileNotFoundError:
+            self._error(f"File not found: {filename}")
+        except Exception as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
-            self._error(f"An error occurred during Excel load: {e}")
+            self._error(f"An error occurred during the LOAD operation: {e}")
+
+    def _parse_load_statement(self):
+        """
+        New master function to handle all LOAD commands.
+        """
+        self._expect('LOAD')
+        token = self._current_token()
+        valid_load_types = {'CSV', 'EXCEL', 'FIXED', 'JSON', 'JSONL', 'XML', 'HTML', 'TEXT'}
+
+        if not token or token[0] not in valid_load_types:
+            self._error(f"Expected a valid LOAD type (e.g., CSV, EXCEL) but got '{token[0] if token else 'None'}'.")
+        
+        load_type = token[1].upper()
+        self._next_token() # Consume the type token (e.g., CSV)
+
+        refactored_types = {'CSV', 'EXCEL', 'FIXED', 'JSONL', 'TEXT', 'HTML'}
+        if load_type in refactored_types:
+            # Define which extractor to use for each file type
+            extractor_map = {
+                'CSV': self._csv_extractor,
+                'EXCEL': self._excel_extractor,
+                'FIXED': self._fixed_extractor,
+                'JSONL': self._jsonl_extractor,
+                'TEXT': self._text_extractor,
+                'HTML': self._html_extractor,
+                # Add xxxxx: self._xxxxxx_extractor, etc. here
+            }
+
+            if load_type not in extractor_map:
+                self._error(f"Unsupported LOAD type: {load_type}")
+
+            # --- All common parsing happens here ---
+            filename = self._parse_expression()
+            
+            # You can move the destination and options parsing into helper methods
+            dest_info = self._parse_load_destination_clause() 
+            dest_info['load_type'] = load_type 
+            options = self._parse_load_options()
+
+            # Get the correct extractor function for the specified file type
+            extractor_func = extractor_map[load_type]
+
+            # --- Hand off to the unified pipeline ---
+            self._execute_load_pipeline(filename, dest_info, options, extractor_func)
+        else:
+            if load_type == 'JSON':
+                self._parse_load_json_statement()
+            elif load_type == 'XML':
+                self._parse_load_xml_statement()           
 
     def _parse_load_json_normalize(self, json_filename, root_table='main'):
         """Normalizes JSON data into multiple related tables."""
@@ -5838,30 +6052,18 @@ class Interpreter:
     def _parse_load_json_statement(self):
         """Loads a JSON file (array of objects) into a database table with data type inference."""
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('JSON')
+        #self._expect('LOAD')
+        #self._expect('JSON')
 
         # --- 1. PARSE CLAUSES ---
         json_filename = self._parse_expression()
         destination_mode, destination_target, db_mode = None, None, None
 
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-        elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
-                db_mode = self._current_token()[1]
-                self._next_token()
-            else:
-                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else:
-            self._error("Expected CREATE TABLE or INTO TABLE clause.")
+        dest_info = self._parse_load_destination_clause()
+        destination_mode = dest_info["mode"]
+        destination_target = dest_info["target"]
+        db_mode = dest_info["db_mode"]
+        key_column = dest_info["key_column"]
 
         if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'NORMALIZE':
             self._next_token()
@@ -6048,508 +6250,21 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"An error occurred during JSON load: {e}"
             self._error(f"An error occurred during JSON load: {e}")
 
-    def _parse_load_jsonl_statement(self):
-        """Loads a JSON Lines file line-by-line into a database table."""
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('JSONL')
-
-        jsonl_filename = self._parse_expression()
-        destination_mode, destination_target, db_mode = None, None, None
-
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-        elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
-                db_mode = self._current_token()[1]
-                self._next_token()
-            else:
-                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else:
-            self._error("Expected CREATE TABLE or INTO TABLE clause.")
-
-        options = {'batchsize': 10000, 'sample_size': 1000, 'fields': ''} 
-        # --- NEW: Initialize a flag for the linenum feature ---
-        add_line_num = False
-        transform_rules = {}
-        
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token()
-            options_str = self._parse_expression()
-            
-            # --- Using the more robust OPTIONS parser ---
-            temp_options = {}
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key, start_pos = match.group(1).lower(), match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',')
-                if value.startswith('"') and value.endswith('"'): value = value[1:-1]
-                temp_options[key] = value
-
-            for key, value in temp_options.items():
-                if key in ['batchsize', 'sample_size']:
-                    options[key] = int(value)
-                elif key == 'linenum':
-                    add_line_num = value is None or value.lower() in ['true', 'y', '1']
-                elif key == 'fields':
-                    options['fields'] = value
-                elif key == 'transform':
-                    for rule in value.split(','):
-                        parts = rule.strip().split(':')
-                        if len(parts) == 2:
-                            col_name, func_name = parts
-                            transform_rules[col_name.lower()] = func_name.lower()
-                        elif len(parts) == 1:
-                            transform_rules[parts[0].lower()] = True # e.g., trimall, upperall
-
-
-        try:
-            # --- Schema Inference (from a sample) ---
-            headers, seen_keys, col_types = [], set(), {}
-            sample_size = options['sample_size']
-            
-            with open(jsonl_filename, 'r', encoding='utf-8') as infile:
-                for i, line in enumerate(infile):
-                    if i >= sample_size: break
-                    line = line.strip()
-                    if not line: continue
-                    
-                    record = json.loads(line)
-                    if not isinstance(record, dict): self._error(f"Line {i+1} is not a JSON object.")
-                    
-                    for key, value in record.items():
-                        if key not in seen_keys:
-                            seen_keys.add(key)
-                            headers.append(key)
-                            col_types[key] = 'INTEGER'
-                        
-                        current_type = col_types[key]
-                        if value is None or current_type == 'TEXT': continue
-                        if isinstance(value, str): col_types[key] = 'TEXT'
-                        elif isinstance(value, float): col_types[key] = 'REAL'
-                        elif not isinstance(value, int): col_types[key] = 'TEXT'
-
-            if not headers:
-                print("0 records loaded (JSONL file is empty or contains no objects).")
-                return
-
-            original_headers = headers 
-            final_headers = original_headers
-            # This map links the final column name to the original JSON key
-            header_key_map = {h: h for h in original_headers}
-
-            if options['fields']:
-                field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
-                # A lookup for finding original keys case-insensitively
-                header_lookup = {h.lower(): h for h in original_headers}
-                new_headers = []
-                new_key_map = {}
-                for spec in field_specs:
-                    match = re.match(r'\[([^\]]*)\](?:\s+as\s+([\w\d_]+))?', spec.strip(), re.IGNORECASE)
-                    if not match: self._error(f"Invalid FIELDS specification: {spec}")
-                    
-                    original_name, new_name = match.groups()
-                    if original_name.lower() not in header_lookup:
-                        self._error(f"Field '{original_name}' not found in sampled JSONL keys.")
-                    
-                    original_key_cased = header_lookup[original_name.lower()]
-                    final_field_name = new_name or original_key_cased
-                    
-                    new_headers.append(final_field_name)
-                    new_key_map[final_field_name] = original_key_cased
-                
-                final_headers = new_headers
-                header_key_map = new_key_map
-                
-            # --- NEW: Add the _linenum column to the schema if requested ---
-            if add_line_num:
-                headers.append('_linenum')
-                col_types['_linenum'] = 'INTEGER'
-
-            # --- Database Operations ---
-            cursor = self.db_cursor
-            if destination_mode == 'CREATE_TABLE':
-                if self._table_exists(destination_target):
-                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
-                cols_def = ', '.join([f'[{h}] {col_types.get(h, "TEXT")}' for h in final_headers]) 
-                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
-
-            if db_mode == 'TRUNCATE':
-                cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
-
-            placeholders = ', '.join(['?'] * len(final_headers))
-            quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
-            insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
-            
-            # --- Full File Processing (Streaming) ---
-            self.db_connection.execute('BEGIN TRANSACTION;')
-            try:
-                batch = []
-                total_rows_processed = 0
-                # --- NEW: Initialize the line counter ---
-                line_counter = 1
-                
-                with open(jsonl_filename, 'r', encoding='utf-8') as infile:
-                    for line in infile:
-                        line = line.strip()
-                        if not line: 
-                            line_counter += 1
-                            continue
-                        
-                        record = json.loads(line)
-                        # The original headers list (without _linenum) is used to extract data
-                        row = []
-                        for h in final_headers:
-                            if h == '_linenum': continue
-                            original_key = header_key_map[h]
-                            value = record.get(original_key)
-                            if isinstance(value, (dict, list)):
-                                value = json.dumps(value)
-                            row.append(value)
-                            
-                        if transform_rules.get('trimall'):
-                            row = [str(field).strip() for field in row]
-                        if transform_rules.get('upperall'):
-                            row = [str(field).upper() for field in row]
-                        if transform_rules.get('lowerall'):
-                            row = [str(field).lower() for field in row]
-                        if transform_rules.get('properall'):
-                            row = [str(field).title() for field in row]
-                                
-                        if transform_rules:
-                            for i, header_name in enumerate(original_headers):
-                                rule = transform_rules.get(header_name.lower())
-                                if rule and i < len(row):
-                                    original_value = str(row[i])
-                                    if rule == 'upper': row[i] = original_value.upper()
-                                    elif rule == 'lower': row[i] = original_value.lower()
-                                    elif rule == 'proper': row[i] = original_value.title()
-                                    elif rule == 'trim': row[i] = original_value.strip()
-                                    
-                        
-                        # --- NEW: Append the line number to the row data ---
-                        if add_line_num:
-                            row.append(line_counter)
-                        
-                        batch.append(row)
-                        total_rows_processed += 1
-                        line_counter += 1
-                        
-                        if len(batch) >= options['batchsize']:
-                            cursor.executemany(insert_sql, batch)
-                            batch = []
-                
-                if batch: cursor.executemany(insert_sql, batch)
-                self.db_connection.execute('COMMIT;')
-                print(f"{total_rows_processed} records loaded into table {destination_target}")
-
-            except Exception as e:
-                self.db_connection.execute('ROLLBACK;')
-                raise e
-
-        except FileNotFoundError as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-            self._error(f"File not found: {jsonl_filename}")
-        except json.JSONDecodeError as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"JSONL parsing error: {e}"
-            self._error(f"JSONL parsing error: {e}")
-        except Exception as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"An error occurred during JSONL load: {e}"
-            self._error(f"An error occurred during JSONL load: {e}")
-
-    def _parse_load_text_statement(self):
-        """Loads a plain text file line-by-line into a single-column table."""
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('TEXT')
-
-        text_filename = self._parse_expression()
-        destination_mode, destination_target, db_mode = None, None, None
-
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-        elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
-                db_mode = self._current_token()[1]
-                self._next_token()
-            else:
-                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else:
-            self._error("Expected CREATE TABLE or INTO TABLE clause for LOAD TEXT.")
-        # --- END MODIFICATION ---
-
-        options = {
-            'linenum': False, 'trimall': False, 'upperall': False,
-            'lowerall': False, 'properall': False, 'skipblank': False
-        }
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token()
-            options_str = self._parse_expression()
-            temp_options = {}
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key = match.group(1).lower()
-                start_pos = match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',').strip()
-                if value.startswith('"') and value.endswith('"'):
-                    value = value[1:-1]
-                temp_options[key] = value
-            
-            for key, value in temp_options.items():
-                if key in options:
-                    options[key] = value is None or value.lower() in ['true', '1', 'y']
-
-        try:
-            headers = ['line_text']
-            if options['linenum']:
-                headers.append('_linenum')
-            
-            cursor = self.db_cursor
-
-            # --- MODIFICATION: Added safer CREATE and new REPLACE/APPEND logic ---
-            if destination_mode == 'CREATE_TABLE':
-                if self._table_exists(destination_target):
-                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
-                
-                cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in headers])
-                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
-
-            if db_mode == 'TRUNCATE':
-                cursor.execute(f'DELETE FROM {self._quote_identifier(destination_target)};')
-            # --- END MODIFICATION ---
-            
-            batch = []
-            total_rows_processed = 0
-            
-            self.db_connection.execute('BEGIN TRANSACTION;')
-            try:
-                with open(text_filename, 'r', encoding='utf-8', errors='replace') as infile:
-                    line_counter = 1
-                    for line in infile:
-                        line_content = line.rstrip('\n\r')
-
-                        if options['trimall']:
-                            line_content = line_content.strip()
-                        
-                        if options['skipblank'] and not line_content:
-                            line_counter += 1
-                            continue
-
-                        if options['upperall']: line_content = line_content.upper()
-                        elif options['lowerall']: line_content = line_content.lower()
-                        elif options['properall']: line_content = line_content.title()
-
-                        row_data = [line_content]
-                        if options['linenum']:
-                            row_data.append(line_counter)
-                        
-                        batch.append(row_data)
-                        total_rows_processed += 1
-                        line_counter += 1
-                
-                if batch:
-                    placeholders = ', '.join(['?'] * len(headers))
-                    quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
-                    insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
-                    
-                    cursor.executemany(insert_sql, batch)
-                
-                self.db_connection.execute('COMMIT;')
-                print(f"{total_rows_processed} lines loaded into table {destination_target}")
-
-            except Exception as e:
-                self.db_connection.execute('ROLLBACK;')
-                raise e
-
-        except FileNotFoundError:
-            self._error(f"File not found: {text_filename}")
-        except Exception as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
-            self._error(f"An error occurred during TEXT load: {e}")
-            
-    def _parse_load_html_statement(self):
-        # Note: This method requires 'from bs4 import BeautifulSoup' at the top of your file.
-
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('HTML')
-
-        # --- 1. PARSE THE COMMAND SYNTAX ---
-        element_type = 'TABLES' # Default to TABLES for backward compatibility
-        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() in ['TABLES', 'LINKS', 'IMAGES']:
-            element_type = self._current_token()[1].upper()
-            self._next_token()
-            # Check for an optional 'FROM' keyword and consume it if it exists.
-            if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'FROM':
-                self._next_token() 
-        
-        html_filename = self._parse_expression()
-        destination_mode, destination_target = 'CREATE_TABLE', None
-
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-        else:
-            self._error("Expected CREATE TABLE clause for LOAD HTML.")
-
-        # --- 2. PARSE THE OPTIONS CLAUSE ---
-        options = {'header': True, 'table_index': 0, 'source_url': None}
-        add_line_num = False
-        
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token() 
-            options_str = self._parse_expression()
-            
-            temp_options = {}
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key, start_pos = match.group(1).lower(), match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',')
-                if value.startswith('"') and value.endswith('"'): value = value[1:-1]
-                temp_options[key] = value
-
-            for key, value in temp_options.items():
-                if key == 'header':
-                    options['header'] = value is None or value.lower() in ['true', 'y', '1']
-                elif key == 'table_index':
-                    options['table_index'] = int(value)
-                elif key == 'linenum':
-                    add_line_num = value is None or value.lower() in ['true', 'y', '1']
-                elif key == 'source_url':
-                    options['source_url'] = value
-        
-        try:
-            # --- 3. EXTRACT DATA FROM HTML ---
-            with open(html_filename, 'r', encoding='utf-8') as infile:
-                soup = BeautifulSoup(infile, 'lxml')
-
-            source_value = options.get('source_url') or html_filename
-            headers = []
-            data_rows = []
-
-            if element_type == 'TABLES':
-                headers.append('source')
-                tables = soup.find_all('table')
-                if not tables: self._error("No <table> elements found in the HTML file.")
-                if options['table_index'] >= len(tables): self._error(f"Error: table_index is out of bounds.")
-                
-                target_table = tables[options['table_index']]
-                table_headers = []
-                for i, row_element in enumerate(target_table.find_all('tr')):
-                    cells = row_element.find_all(['th', 'td'])
-                    row_data = [cell.get_text(strip=True) for cell in cells]
-                    if i == 0 and options['header']:
-                        table_headers = row_data
-                    else:
-                        data_rows.append([source_value] + row_data)
-                headers.extend(table_headers)
-
-            elif element_type == 'LINKS':
-                headers = ['source', 'text', 'href']
-                for link in soup.find_all('a'):
-                    text = link.get_text(strip=True)
-                    href = link.get('href', '')
-                    if href: data_rows.append([source_value, text, href])
-
-            elif element_type == 'IMAGES':
-                headers = ['source', 'src', 'alt', 'title']
-                for img in soup.find_all('img'):
-                    src = img.get('src', '')
-                    alt = img.get('alt', '')
-                    title = img.get('title', '')
-                    if src: data_rows.append([source_value, src, alt, title])
-            
-            # --- 4. PREPARE SCHEMA AND DATABASE TABLE ---
-            clean_headers = self._clean_and_deduplicate_headers(headers)
-            if add_line_num:
-                clean_headers.append('_linenum')
-            
-            cursor = self.db_cursor
-            if destination_mode == 'CREATE_TABLE':
-                if self._table_exists(destination_target):
-                    self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
-                cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in clean_headers])
-                cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
-
-            # --- 5. PREPARE AND INSERT DATA ---
-            if not data_rows:
-                print(f"Warning: No data records found for {element_type}. An empty table was created.")
-                return
-
-            num_final_cols = len(clean_headers)
-            num_data_cols = len(headers)
-            line_counter = 1
-            prepared_data = []
-
-            for row in data_rows:
-                prepared_row = row[:num_data_cols]
-                prepared_row.extend([''] * (num_data_cols - len(prepared_row)))
-                if add_line_num:
-                    prepared_row.append(line_counter)
-                prepared_data.append(prepared_row)
-                line_counter += 1
-
-            if prepared_data:
-                placeholders = ', '.join(['?'] * num_final_cols)
-                quoted_headers = ', '.join([self._quote_identifier(h) for h in clean_headers])
-                insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
-                
-                cursor.executemany(insert_sql, prepared_data)
-                self.db_connection.commit()
-                print(f"{len(prepared_data)} records loaded from HTML {element_type} into {destination_target}")
-
-        except FileNotFoundError:
-            self._error(f"File not found: {html_filename}")
-        except Exception as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
-            self._error(f"An error occurred during HTML load: {e}")
         
     def _parse_load_xml_statement(self):
         """Loads data from an XML file into a database table using a streaming parser."""
         from collections import Counter # Local import for this specific function
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('LOAD')
-        self._expect('XML')
+        #self._expect('LOAD')
+        #self._expect('XML')
 
         # --- 1. Parse Clauses ---
         xml_filename = self._parse_expression()
-        destination_mode, destination_target, db_mode = None, None, None
-
-        if self._current_token() and self._current_token()[0] == 'CREATE':
-            destination_mode = 'CREATE_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-        elif self._current_token() and self._current_token()[0] == 'INTO':
-            destination_mode = 'INTO_TABLE'
-            self._next_token()
-            if self._current_token() and self._current_token()[0] == 'TABLE': self._next_token()
-            destination_target = self._parse_table_name()
-            if self._current_token() and self._current_token()[0] in ['APPEND', 'TRUNCATE']:
-                db_mode = self._current_token()[1]
-                self._next_token()
-            else:
-                self._error("Expected APPEND or REPLACE for INTO TABLE clause.")
-        else:
-            self._error("Expected CREATE TABLE or INTO TABLE clause.")
+        dest_info = self._parse_load_destination_clause()
+        destination_mode = dest_info["mode"]
+        destination_target = dest_info["target"]
+        db_mode = dest_info["db_mode"]
+        key_column = dest_info["key_column"]
 
         if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'NORMALIZE':
             self._next_token()
