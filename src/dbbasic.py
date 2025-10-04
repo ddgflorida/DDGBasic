@@ -14,6 +14,7 @@ import fnmatch
 import subprocess
 import requests
 import calendar
+from typing import Union
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
 import webbrowser
@@ -6033,6 +6034,14 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during the LOAD operation: {e}")
 
+    def _show_table_counts(self): 
+        tables = self._get_table_list()
+        print(f"  - Created {len(tables)} tables:")
+        for table in tables:
+            self.db_cursor.execute(f"SELECT COUNT(*) FROM {self._quote_identifier(table)}")
+            count = self.db_cursor.fetchone()[0]
+            print(f"    * {table}: {count} records")
+            
     def _parse_load_statement(self):
         """
         New master function to handle all LOAD commands.
@@ -6158,13 +6167,7 @@ class Interpreter:
 
             # Report tables and row counts
             self.db_connection.commit()
-            
-            tables = self._get_table_list()
-            print(f"  - Created {len(tables)} tables:")
-            for table in tables:
-                self.db_cursor.execute(f"SELECT COUNT(*) FROM {table}")
-                count = self.db_cursor.fetchone()[0]
-                print(f"    * {table}: {count} records")
+            self._show_table_counts()
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -6590,66 +6593,39 @@ class Interpreter:
         return node
         
 
-    def _parse_load_xml_normalize(self, xml_filename, root_table_name='main'):
-        """Converts an XML file to a list of dicts and uses the JSON normalizer."""
-        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        
-        from collections import Counter # Local import
-        
+    def _parse_load_xml_normalize(self, filename, root_table_name='main'):
+        """
+        Handles the special case for LOAD XML ... NORMALIZE.
+        This version processes the ENTIRE XML document from the root,
+        making the 'record_tag' option unnecessary.
+        """
+        print("Running full XML Normalization from root...")
         try:
-            tree = ET.parse(xml_filename)
+            tree = ET.parse(filename)
             root = tree.getroot()
 
-            if len(root) == 0:
-                self._error("Cannot normalize: XML file has an empty root or is not record-oriented.")
-            
-            # Heuristic: The most frequent tag directly under the root is the "record" tag.
-            child_tags = [child.tag for child in root]
-            tag_counts = Counter(child_tags)
-            record_tag, _ = tag_counts.most_common(1)[0]
-            print(f"Notice: Inferred record tag '<{record_tag}>' for normalization.", file=sys.stderr)
-
-            list_of_records = []
-            for record_element in root.findall(record_tag):
-                record_dict = self._xml_element_to_dict(record_element)
-                list_of_records.append(record_dict)
-
-            if not list_of_records:
-                print("0 records found to normalize.")
+            # Convert the entire XML tree from its root into a single dictionary.
+            # No need to find a 'record_tag'.
+            data_to_normalize = self._xml_element_to_dict(root)
+            if not data_to_normalize:
+                print("Warning: XML file appears to be empty. Normalization stopped.")
                 return
-            #print("DEBUG:","Running Normalizers on data", file=sys.stderr)
-            # --- Reuse the existing JSON Normalizer ---
-            normalizer = JSONToSQLiteNormalizer(
-                db_path=":memory:",
-                root_table=root_table_name or 'main',
-            )
-            if self.db_connection is not None:
-                normalizer.conn.close()
-                normalizer.conn = self.db_connection
-                normalizer.cursor = self.db_connection.cursor()
-            #print("DEBUG:", "Running load_json on data:", list_of_records, file=sys.stderr)
-            normalizer.load_json(list_of_records)
+
+            # Instantiate the normalizer, passing the main DB connection
+            normalizer = JSONToSQLiteNormalizer(db_path=":memory:", root_table=root_table_name)
+            normalizer.conn.close() 
+            normalizer.conn = self.db_connection
+            normalizer.cursor = self.db_connection.cursor()
             
-            # --- Reporting Logic (copied from JSON normalize) ---
-            print(f"XML normalization complete:")
-            print(f"  - Processed {len(list_of_records)} root records")
+            # Load the single, complete data structure
+            normalizer.load_json(data_to_normalize)
             self.db_connection.commit()
             
-            tables = self._get_table_list()
-            print(f"  - Created {len(tables)} tables:")
-            for table in tables:
-                self.db_cursor.execute(f"SELECT COUNT(*) FROM {self._quote_identifier(table)}")
-                count = self.db_cursor.fetchone()[0]
-                print(f"    * {table}: {count} records")
-
-        except FileNotFoundError as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-            self._error(f"File not found: {xml_filename}")
-        except ET.ParseError as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"XML parsing error: {e}"
-            self._error(f"XML parsing error: {e}")
+            print("XML normalization complete.")
+            self._show_table_counts()
+        except FileNotFoundError:
+            self._error(f"File not found: {filename}")
         except Exception as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during XML normalization: {e}")
             
     def _parse_for_each_statement(self):
@@ -8662,10 +8638,66 @@ class Interpreter:
                 # Recurse on the first instance of each unique child tag
                 self._describe_xml_node(child, indent + "  ")
                 processed_child_tags.add(child.tag)
+    
+    def _describe_xml_from_dict(self, node, tag_name, indent="", strip_ns=False):
+        """
+        Recursively builds a string representing the structure of a dictionary 
+        (converted from XML) in an XML-like, indented format.
+        """
+        output_lines = []
+        
+        # Conditionally clean the tag name before adding it to the list
+        display_tag = self._clean_tag(tag_name) if strip_ns else tag_name
+        output_lines.append(f"{indent}<{display_tag}>")
+
+        if not isinstance(node, dict):
+            return "\n".join(output_lines)
+
+        child_indent = indent + "  "
+
+        # Use a single, combined loop for attributes and child tags
+        for key, value in node.items():
+            display_key = self._clean_tag(key) if strip_ns else key
+
+            if key.startswith('@'):
+                output_lines.append(f"{child_indent}{display_key} (Attribute)")
+            elif key == '#text':
+                continue
+            elif isinstance(value, list) and value:
+                # Capture the string from the recursive call and add it
+                child_output = self._describe_xml_from_dict(value[0], display_key + " [*]", child_indent, strip_ns)
+                output_lines.append(child_output)
+            elif isinstance(value, dict):
+                # Capture the string from the recursive call and add it
+                child_output = self._describe_xml_from_dict(value, display_key, child_indent, strip_ns)
+                output_lines.append(child_output)
+            else:
+                # Handle the simple data tags (leaf nodes)
+                type_name = "(unknown)"
+                if isinstance(value, str): type_name = "(String)"
+                elif isinstance(value, (int, float)): type_name = "(Number)"
+                elif isinstance(value, bool): type_name = "(Boolean)"
+                elif value is None: type_name = "(Null)"
+                output_lines.append(f"{child_indent}<{display_key}> {type_name}")
+        
+        return "\n".join(output_lines)
+
                 
+    def _clean_tag(self, tag_name):
+        """
+        Helper function to strip the XML namespace, if present, from a tag name.
+        e.g., '{http://some.url/ns}MyTag' becomes 'MyTag'.
+        """
+        if '}' in str(tag_name):
+            return re.sub(r'\{.*\}', '', tag_name)
+        return tag_name            
+    
     def _parse_analyze_xml_statement(self):
-        """Analyzes an XML file to determine its structure."""
-        from collections import Counter # Local import for this specific function
+        """
+        Analyzes an XML file, provides a structural and heuristic report,
+        and optionally saves the report into a hash variable.
+        """
+        from collections import Counter # Local import
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ANALYZE XML')
         filename = self._parse_expression()
@@ -8675,62 +8707,73 @@ class Interpreter:
             self._next_token()
             into_hash_name = self._expect('ID')[1]
             if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
-        
+                self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+
         try:
-            report = {}
             tree = ET.parse(filename)
             root = tree.getroot()
 
-            report['ROOT_ELEMENT'] = root.tag
-            report['TOTAL_CHILD_ELEMENTS'] = len(root)
+            namespaces = set()
+            for element in root.iter():
+                if '}' in element.tag:
+                    ns = element.tag.split('}')[0][1:]
+                    namespaces.add(ns)
+                    
+            # --- NEW: More Intelligent Heuristic Analysis ---
+            report = {}
+            best_candidate = ""
+            record_count = 0
 
-            predominant_tag, record_count, inferred_fields = "N/A", 0, []
-
+            # Strategy 1: Check for a repeating tag directly under the root (for flat XML).
             if len(root) > 0:
-                child_tags = [child.tag for child in root]
-                tag_counts = Counter(child_tags)
-                all_tags_are_unique = all(count == 1 for count in tag_counts.values())
+                direct_child_tags = Counter(self._clean_tag(child.tag) for child in root)
+                predominant_tag, count = direct_child_tags.most_common(1)[0]
+                # If one tag repeats, it's almost certainly the record tag.
+                if count > 1:
+                    best_candidate = predominant_tag
+                    record_count = count
 
-                if all_tags_are_unique and len(child_tags) > 1:
-                    predominant_tag = root.tag
-                    record_count = 1
-                    inferred_fields = sorted(child_tags)
-                else:
-                    predominant_tag, record_count = tag_counts.most_common(1)[0]
-                    fields_set = set()
-                    sample_limit = 100 
-                    records_sampled = 0
-                    for child in root:
-                        if child.tag == predominant_tag:
-                            if records_sampled >= sample_limit: break
-                            for field in child: fields_set.add(field.tag)
-                            records_sampled += 1
-                    inferred_fields = sorted(list(fields_set))
+            # Strategy 2: If Strategy 1 failed (e.g., root has <header> and <programs> once each),
+            # check the next level down (for nested XML).
+            if not best_candidate and len(root) > 0:
+                second_level_tags = Counter()
+                for child in root:
+                    for grandchild in child:
+                        second_level_tags[self._clean_tag(grandchild.tag)] += 1
+                
+                if second_level_tags:
+                    best_candidate, record_count = second_level_tags.most_common(1)[0]
 
-            report['PREDOMINANT_RECORD_TAG'] = predominant_tag
+            report['ROOT_ELEMENT'] = self._clean_tag(root.tag)
+            report['TOTAL_CHILD_ELEMENTS'] = len(root)
+            report['PREDOMINANT_RECORD_TAG'] = best_candidate
             report['RECORD_COUNT'] = record_count
-            report['INFERRED_FIELDS'] = inferred_fields
-
+            report['NAMESPACES'] = list(namespaces)
+            # --- Full Structure Analysis Logic ---
+            # Convert the entire XML tree to a dictionary for full analysis
+            data_dict = self._xml_element_to_dict(root)
+            should_strip_ns = (len(namespaces) == 1)
+            report['STRUCTURE_TEXT'] = self._describe_xml_from_dict(data_dict, self._clean_tag(root.tag), strip_ns=should_strip_ns)
+            # Add the full structure to the report dictionary if saving to a variable
             if into_hash_name:
                 self.variables[into_hash_name] = self._python_to_basic_data(report)
-            else:
+            
+            # --- Output to Console ---
+            # If not saving to a variable, print both reports to the console.
+            if not into_hash_name:
                 print(f"--- XML Analysis Report for: {filename} ---")
                 print(f"  --- Heuristic Analysis ---")
                 print(f"  Root Element            : <{report['ROOT_ELEMENT']}>")
                 print(f"  Total Direct Children   : {report['TOTAL_CHILD_ELEMENTS']}")
-                print(f"  Inferred Record Tag     : <{report['PREDOMINANT_RECORD_TAG']}>")
-                print(f"  Record Count            : {report['RECORD_COUNT']}")
-                if report['INFERRED_FIELDS']:
-                    fields_str = ", ".join(f"<{f}>" for f in report['INFERRED_FIELDS'])
-                    print(f"  Inferred Record Fields  : {fields_str}")
-                else:
-                    print(f"  Inferred Record Fields  : (No child fields found in record tag)")
+                print(f"  Inferred Record Tag     : <{report['PREDOMINANT_RECORD_TAG']}> ({report['RECORD_COUNT']} instance(s))")
 
-                # --- NEW: Automatically print the structure map ---
+                if namespaces:
+                    print(f"\n  --- Namespaces Found ---")
+                    for ns in namespaces:
+                        print(f"  - {ns}")
+                        
                 print(f"\n  --- Simplified Structure ---")
-                self._describe_xml_node(root)
-
+                print(report['STRUCTURE_TEXT'])  # structure report
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -8902,24 +8945,28 @@ class Interpreter:
 
 class JSONToSQLiteNormalizer:
     SQL_RESERVED_WORDS = {
-            'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 'ATTACH', 'COPY',
-            'VIEW', 'INDEX', 'ORDER', 'GROUP', 'BY', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'SUMMARIZE', 'PRAGMA',
-            'OUTER', 'ON', 'AS', 'IN', 'IS', 'NULL', 'NOT', 'AND', 'OR', 'LIMIT', 'OFFSET'
-        }
-    def __init__(
-        self,
-        db_path: str,
-        root_table: str = 'main',
-        array_threshold: int = 2,
-        keep_objects: bool = False,
-        keep_arrays: bool = False,
-    ):
+        'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 'ATTACH', 'COPY',
+        'VIEW', 'INDEX', 'ORDER', 'GROUP', 'BY', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'SUMMARIZE', 'PRAGMA',
+        'OUTER', 'ON', 'AS', 'IN', 'IS', 'NULL', 'NOT', 'AND', 'OR', 'LIMIT', 'OFFSET'
+    }
+
+    @staticmethod
+    def _clean_tag(tag_name):
+        """Helper function to strip XML namespaces from tags."""
+        if '}' in str(tag_name):
+            return re.sub(r'\{.*\}', '', tag_name)
+        return tag_name
+        
+    def __init__(self, db_path: str, root_table: str = 'main', **kwargs):
         self.conn = sqlite3.connect(db_path)
         self.cursor = self.conn.cursor()
-        self.array_threshold = array_threshold
-        self.keep_objects = keep_objects
-        self.keep_arrays = keep_arrays
-        self.root_table = root_table or 'main'
+        self.root_table = root_table
+
+        # --- NEW: State for the two-pass system ---
+        # self.schemas will store the blueprint of all tables and columns
+        self.schemas = {}
+        # self.table_order will store the order in which to create tables
+        self.table_order = []
 
     def _quote_identifier(self, identifier: str, quote_style: str = '"') -> str:
             """
@@ -8947,129 +8994,188 @@ class JSONToSQLiteNormalizer:
             # Before quoting, remove any characters that would conflict with the quotes.
             safe_identifier = identifier_str.replace(open_quote, '').replace(close_quote, '')
             return f'{open_quote}{safe_identifier}{close_quote}'
-    
-    # --- HELPER: This was missing ---
-    def _infer_sql_type(self, value):
-        if isinstance(value, int): return 'INTEGER'
-        if isinstance(value, float): return 'REAL'
-        if isinstance(value, bool): return 'INTEGER'
-        return 'TEXT'
+            
+    def _update_column_type(self, table_name, column_name, value):
+        """Infers and promotes the data type for a given column."""
+        # Determine the type of the current value
+        current_type = 'TEXT' # Default
+        if isinstance(value, int):
+            current_type = 'INTEGER'
+        elif isinstance(value, float):
+            current_type = 'REAL'
+        
+        # Get the previously inferred type, if any
+        existing_type = self.schemas[table_name]['columns'].get(column_name, None)
 
-    def _ensure_table(self, table: str, schema: Dict[str, str], parent_table: Optional[str] = None):
-        pk_name = f"pk_{table}"
-        try:
-            # Check if table already exists
-            res = self.cursor.execute(f"PRAGMA table_info('{table}')")
-            existing_cols = {row[1] for row in res.fetchall()}
-        except (sqlite3.OperationalError, duckdb.Error):
-            existing_cols = set()
+        # Promote the type if necessary (TEXT > REAL > INTEGER)
+        if existing_type == 'TEXT':
+            return # Already the most general type
+        if current_type == 'TEXT':
+            self.schemas[table_name]['columns'][column_name] = 'TEXT'
+        elif existing_type == 'REAL':
+            return
+        elif current_type == 'REAL':
+            self.schemas[table_name]['columns'][column_name] = 'REAL'
+        else: # Both existing and current are INTEGER
+            self.schemas[table_name]['columns'][column_name] = 'INTEGER'
 
-        if not existing_cols:
-            # --- THIS IS THE FIX: Robustly build the list of columns ---
-            parts = [f"[{pk_name}] INTEGER PRIMARY KEY AUTOINCREMENT"]
-            if parent_table:
-                fk_name = f"{parent_table}_fk"
-                parts.append(f"[{fk_name}] INTEGER")
+    def _discover_schema_recursive(self, data, table_name, parent_name=None):
+        """
+        PASS 1: Recursively scans data to build a schema map in self.schemas.
+        """
+        if table_name not in self.schemas:
+            self.schemas[table_name] = {'columns': {}, 'parent': parent_name}
+            self.table_order.append(table_name)
 
-            if schema:
-                col_defs = [f"[{col}] {dtype}" for col, dtype in schema.items()]
+        if isinstance(data, dict):
+            for key, value in data.items():
+                clean_key = self._clean_tag(key) # Clean the key
+                if isinstance(value, (dict, list)):
+                    # Recurse into nested structures using the clean key for the new table name
+                    self._discover_schema_recursive(value, f"{table_name}_{clean_key}", parent_name=table_name)
+                else:
+                    # It's a simple value, update the column type using the clean key
+                    self._update_column_type(table_name, clean_key, value)
+        
+        elif isinstance(data, list):
+            for item in data:
+                self._discover_schema_recursive(item, table_name, parent_name)
+
+
+    def _create_all_tables(self):
+        """
+        PASS 2 (Part 1): Creates all tables using the schema discovered in Pass 1.
+        It creates tables in the order they were discovered to ensure parent tables
+        exist before child tables that reference them.
+        """
+        for table_name in self.table_order:
+            schema = self.schemas.get(table_name)
+            if not schema:
+                continue
+
+            pk_name = f"pk_{table_name}"
+            
+            # Start building the list of column definitions
+            parts = [f"{self._quote_identifier(pk_name)} INTEGER PRIMARY KEY"]
+            
+            # Add a foreign key column if this table has a parent
+            parent_name = schema.get('parent')
+            if parent_name:
+                fk_name = f"{parent_name}_fk"
+                parent_pk_name = f"pk_{parent_name}"
+                parts.append(f"{self._quote_identifier(fk_name)} INTEGER REFERENCES {self._quote_identifier(parent_name)} ({self._quote_identifier(parent_pk_name)})")
+
+            # Add all the data columns with their inferred types
+            if schema['columns']:
+                col_defs = [f"{self._quote_identifier(col)} {dtype}" for col, dtype in schema['columns'].items()]
                 parts.extend(col_defs)
 
-            ddl = f"CREATE TABLE {self._quote_identifier(table)} ({', '.join(parts)})"
+            # Assemble and execute the CREATE TABLE statement
+            ddl = f"CREATE TABLE {self._quote_identifier(table_name)} ({', '.join(parts)})"
             self.cursor.execute(ddl)
-            # --- END FIX ---
-        else:
-            # Alter table logic remains the same
-            for col, dtype in schema.items():
-                if col not in existing_cols:
-                    self.cursor.execute(f"ALTER TABLE {self._quote_identifier(table)} ADD COLUMN {self._quote_identifier(col)} {dtype}")
 
-    def _insert_row(self, table: str, parent_id: Optional[int], row: Dict[str, Any], parent_table: Optional[str] = None):
-        if not row and parent_id is None:
-            return None
+            # Create an index on the foreign key for better performance
+            if parent_name:
+                fk_name = f"{parent_name}_fk"
+                index_name = f"ix_{table_name}_{fk_name}"
+                index_ddl = f"CREATE INDEX {self._quote_identifier(index_name)} ON {self._quote_identifier(table_name)} ({self._quote_identifier(fk_name)})"
+                self.cursor.execute(index_ddl)
 
-        cols, vals = (), ()
-        if row:
-            cols, vals = zip(*row.items())
+    def _insert_row(self, table_name, parent_id, row_data):
+        """
+        Helper function to construct and execute an INSERT statement for a single row.
+        Returns the primary key of the newly inserted row.
+        """
+        # Get the schema to find the parent table's name
+        schema = self.schemas.get(table_name)
+        if not schema:
+            return None # Should not happen in pass 2
+
+        cols = list(row_data.keys())
+        vals = list(row_data.values())
+
+        # Add the foreign key column and value if a parent exists
+        parent_name = schema.get('parent')
+        if parent_name and parent_id is not None:
+            fk_name = f"{parent_name}_fk"
+            cols.append(fk_name)
+            vals.append(parent_id)
         
-        if parent_id is not None and parent_table:
-            fk_name = f"{parent_table}_fk"
-            cols = (fk_name,) + cols
-            vals = (parent_id,) + vals
-
         if not cols:
-             return None
+            # This can happen for junction tables that only have PK/FK
+            # We still need to insert a row to link the parent and child
+            if parent_name and parent_id is not None:
+                cols = [f"{parent_name}_fk"]
+                vals = [parent_id]
+            else:
+                return None # Nothing to insert
 
+        # Build and execute the SQL
         placeholders = ", ".join(["?"] * len(vals))
-        colnames = ", ".join([f"[{col}]" for col in cols])
-        sql = f"INSERT INTO {self._quote_identifier(table)} ({colnames}) VALUES ({placeholders})"
+        quoted_cols = ', '.join([self._quote_identifier(c) for c in cols])
+        sql = f"INSERT INTO {self._quote_identifier(table_name)} ({quoted_cols}) VALUES ({placeholders})"
+        
         self.cursor.execute(sql, vals)
         return self.cursor.lastrowid
 
-    def _normalize(self, data: Any, parent_id: Optional[int], table: str, parent_table: Optional[str] = None):
+    def _populate_tables_recursive(self, data, parent_id, table_name):
+        """
+        PASS 2 (Part 2): Recursively scans data again to INSERT into the created tables.
+        """
         if isinstance(data, dict):
-            row, schema = {}, {}
-            if self.keep_objects:
-                row[f"{table}_json"] = json.dumps(data)
-                schema[f"{table}_json"] = "TEXT"
-            else:
-                for k, v in data.items():
-                    if isinstance(v, (dict, list)):
-                        continue
-                    col = f"{table}_{k}"
-                    # --- FIX: Use data type inference ---
-                    schema[col] = self._infer_sql_type(v)
-                    row[col] = v
-            
-            # --- FIX: Pass parent_table to _ensure_table ---
-            self._ensure_table(table, schema, parent_table)
-            row_id = self._insert_row(table, parent_id, row, parent_table)
+            # 1. Extract the simple key-value pairs for this object's own row
+            row_data = {
+                self._clean_tag(key): value for key, value in data.items() 
+                if not isinstance(value, (dict, list))
+            }
 
-            if not self.keep_objects:
-                for k, v in data.items():
-                    if isinstance(v, (dict, list)):
-                        self._normalize(v, row_id, f"{table}_{k}", parent_table=table)
+            # 2. Insert this object's row and get its new primary key
+            current_row_id = self._insert_row(table_name, parent_id, row_data)
 
-        elif isinstance(data, list):
-            if self.keep_arrays:
-                schema = {f"{table}_json": "TEXT"}
-                row = {f"{table}_json": json.dumps(data)}
-                # --- FIX: Pass parent_table to helpers ---
-                self._ensure_table(table, schema, parent_table)
-                self._insert_row(table, parent_id, row, parent_table)
-            elif (len(data) < self.array_threshold and all(isinstance(x, (str, int, float, bool, type(None))) for x in data)):
-                row = {f"{table}_item{i+1}": v for i, v in enumerate(data)}
-                schema = {k: self._infer_sql_type(v) for k, v in row.items()}
-                # --- FIX: Pass parent_table to helpers ---
-                self._ensure_table(table, schema, parent_table)
-                self._insert_row(table, parent_id, row, parent_table)
-            else:
-                for item in data:
-                    self._normalize(item, parent_id, table, parent_table)
-        else: # Primitive value
-            schema = {f"{table}_value": self._infer_sql_type(data)}
-            row = {f"{table}_value": data}
-            # --- FIX: Pass parent_table to helpers ---
-            self._ensure_table(table, schema, parent_table)
-            self._insert_row(table, parent_id, row, parent_table)
-
-    def load_json(self, json_data: Union[str, List, Dict]):
-        if isinstance(json_data, str):
-            data = json.loads(json_data)
-        else:
-            data = json_data
-
-        root_table = self.root_table
-        if isinstance(data, list):
-            for item in data:
-                self._normalize(item, None, root_table)
-        elif isinstance(data, dict):
-            self._normalize(data, None, root_table)
-        else:
-            raise ValueError("Root must be object or array")
-        self.conn.commit()
+            # 3. Recurse into nested objects and lists, using cleaned keys
+            for key, value in data.items():
+                if isinstance(value, (dict, list)):
+                    clean_key = self._clean_tag(key)
+                    self._populate_tables_recursive(value, current_row_id, f"{table_name}_{clean_key}")
         
+        elif isinstance(data, list):
+            for item in data:
+                self._populate_tables_recursive(item, parent_id, table_name)         
 
+    def load_json(self, json_data: Union[list, dict]):
+        """
+        New orchestrator for the two-pass normalization process.
+        """
+        if not isinstance(json_data, (list, dict)):
+            print("Warning: NORMALIZE expects the root of the data to be a list or an object.", file=sys.stderr)
+            return
+
+        root_data = json_data
+        root_table_name = self.root_table
+        # Check for and collapse a single-key root object that is just a wrapper for a list.
+        if isinstance(root_data, dict) and len(root_data) == 1:
+            key, value = next(iter(root_data.items()))
+            if isinstance(value, list):
+                # This is a wrapper. Use the list inside as the root data.
+                # The table name will be based on the user's CREATE TABLE, which is what we want.
+                root_data = value
+                
+        print("Normalization Pass 1: Discovering schema...")
+        self._discover_schema_recursive(root_data, self.root_table)
+        # Explicitly start a transaction to override autocommit mode
+        self.cursor.execute("BEGIN TRANSACTION;")
+        try:
+            self._create_all_tables()
+            self._populate_tables_recursive(root_data, None, self.root_table)
+            
+            # This now commits the explicit transaction
+            self.conn.commit()
+        except Exception as e:
+            # If anything goes wrong, roll back all changes
+            self.conn.rollback()
+            raise e # Re-raise the original error
+        print("Normalization complete.")
+        
 
 TEST_PROGRAM_SOURCE = """
 REM --- Test complex IF statement ---
