@@ -444,7 +444,7 @@ class Lexer:
             ('SHIFT', r'\bSHIFT\b(?!\$)'), ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
             ('SPLICE', r'\bSPLICE\b(?!\$)'), ('REVERSE', r'\bREVERSE\b(?!\$)'),
             ('ID', r'(?!INTO\b)[a-zA-Z_][a-zA-Z0-9_]*\$?'),
-            ('OP', r"[+\*/-]"), ('CARET', r'\^'),
+            ('OP', r"[+\*/-]"), ('CARET', r'\^'), ('AMPERSAND', r'&'),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), 
             ('LBRACKET', r'\['), ('RBRACKET', r'\]'),('COMMA', r','),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('NEWLINE', r'\n'),
@@ -536,7 +536,6 @@ class Lexer:
             elif u_value == 'READFILE': kind, value = 'READ FILE', 'READ FILE' 
             elif u_value == 'TOFILE': kind, value = 'TO FILE', 'TO FILE'
             elif u_value == 'ENDFORM': kind, value = 'ENDFORM', 'END FORM'
-            #elif u_value == 'ENDLOOP': kind, value = 'END LOOP', 'END LOOP'
             elif u_value == 'FOREACH': kind, value = 'FOR EACH', 'FOR EACH'
             elif u_value == 'ENDTRANSACTION': kind, value = 'END TRANSACTION', 'END TRANSACTION'
             elif u_value == 'ANALYZECSV': kind, value = 'ANALYZE CSV', 'ANALYZE CSV'
@@ -764,13 +763,21 @@ class Interpreter:
 
     def _quote_identifier(self, identifier: str, quote_style: str = '"') -> str:
             """
-            Wraps a SQL identifier in quotes only if it's a reserved
+            Wraps a SQL identifier in quotes if it's a reserved
             keyword or contains characters that require quoting.
-            Supports different quoting styles ('"' or '[').
+            Supports different quoting styles ('"' or '[') and automatically
+            forces '"' if the engine is DuckDB.
             """
+            # --- NEW: Engine-aware safety check ---
+            # If the engine is DuckDB, it does not support bracket quoting.
+            # Force the quote style to double quotes, overriding any user preference.
+            if self.db_engine == 'duckdb' and quote_style == '[':
+                quote_style = '"'
+            # --- END NEW LOGIC ---
+
             identifier_str = str(identifier)
             
-            # Determine the quote characters based on the chosen style
+            # Determine the quote characters based on the (potentially overridden) style
             if quote_style == '[':
                 open_quote, close_quote = '[', ']'
             else:
@@ -2766,31 +2773,48 @@ class Interpreter:
         while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '*/':
             op = self._current_token()[1]
             self._next_token()
-            right = self._parse_power() # <-- This also needed to be changed
+            right = self._parse_power()
             try:
+                # --- FIX: Convert both operands to numbers before the operation ---
+                numeric_res = float(res)
+                numeric_right = float(right)
+
                 if op == '*':
-                    res *= right
+                    # --- FIX: Perform numeric multiplication ---
+                    res = numeric_res * numeric_right
                 elif op == '/':
-                    res /= right
+                    # --- FIX: Perform numeric division ---
+                    res = numeric_res / numeric_right
             except ZeroDivisionError:
                 raise RuntimeError("Division by zero")
-            except Exception as e:
-                raise RuntimeError(f"Arithmetic error: {e}")
+            except (ValueError, TypeError):
+                # --- FIX: Catch errors if a value can't be converted to a number ---
+                raise RuntimeError(f"Type mismatch: cannot perform arithmetic on '{res}' and '{right}'.")
         return res
         
     def _parse_expression(self):
         res = self._parse_term()
-        while self._current_token() and self._current_token()[0] == 'OP' and self._current_token()[1] in '+-':
-            op = self._current_token()[1]
+        while self._current_token() and ((self._current_token()[0] == 'OP' and self._current_token()[1] in '+-') or self._current_token()[0] == 'AMPERSAND'):
+            op_token = self._current_token()
+            op = op_token[1]
+            op_type = op_token[0]
             self._next_token()
             right = self._parse_term()
+            
             if op == '+':
+                # '+' is special: it means concatenation if either side is a string
                 res = self._to_string(res) + self._to_string(right) if isinstance(res, str) or isinstance(right, str) else res + right
-                #res = str(res) + str(right) if isinstance(res, str) or isinstance(right, str) else res + right
+            elif op_type == 'AMPERSAND':
+                # '&' ALWAYS concatenates strings
+                res = self._to_string(res) + self._to_string(right)
             elif op == '-':
-                if isinstance(res, str) or isinstance(right, str):
-                    raise RuntimeError("Type mismatch: Cannot subtract strings")
-                res -= right
+                # --- FIX: Subtraction should attempt numeric conversion ---
+                try:
+                    numeric_res = float(res)
+                    numeric_right = float(right)
+                    res = numeric_res - numeric_right
+                except (ValueError, TypeError):
+                    raise RuntimeError(f"Type mismatch: cannot perform subtraction on '{res}' and '{right}'.")
         return res
         
     def _parse_condition(self): return self._parse_or_condition()
@@ -2974,6 +2998,56 @@ class Interpreter:
             except IOError as e: self._error(f"Error writing to file: {e}")
 
     def _write_as_text(self, results, headers, stream, options={}):
+        if not results:
+            stream.write("(0 rows returned)\n")
+            return
+
+        style = options.get('box_style', 'ASCII').upper()
+        BOX_CHARS = {'h': '─', 'v': '│', 'tl': '┌', 'tc': '┬', 'tr': '┐', 'ml': '├', 'mc': '┼', 'mr': '┤', 'bl': '└', 'bc': '┴', 'br': '┘'}
+        ASCII_CHARS = {'h': '-', 'v': '|', 'tl': '+', 'tc': '+', 'tr': '+', 'ml': '+', 'mc': '+', 'mr': '+', 'bl': '+', 'bc': '+', 'br': '+'}
+        chars = BOX_CHARS if style == 'BOX' else ASCII_CHARS
+
+        # --- FIX: Two-Pass Approach ---
+        # --- Pass 1: Calculate column widths without storing data ---
+        widths = {h: len(h) for h in headers}
+        # The results object is a list of tuples, so we can iterate it multiple times
+        for row in results:
+            for i, h in enumerate(headers):
+                if i < len(row):
+                    cell_content = str(row[i]) if row[i] is not None else "NULL"
+                    max_line_len = max(len(line) for line in cell_content.splitlines()) if cell_content else len("NULL")
+                    widths[h] = max(widths[h], max_line_len)
+
+        # --- Pass 2: Print the table, streaming the data ---
+        def build_separator(left, join, right):
+            parts = [chars['h'] * (widths[h] + 2) for h in headers]
+            return f"{left}{join.join(parts)}{right}\n"
+
+        # Print top border and header
+        stream.write(build_separator(chars['tl'], chars['tc'], chars['tr']))
+        header_parts = [f" {h:^{widths[h]}} " for h in headers]
+        stream.write(f"{chars['v']}{chars['v'].join(header_parts)}{chars['v']}\n")
+        stream.write(build_separator(chars['ml'], chars['mc'], chars['mr']))
+
+        # Print data rows one by one
+        for row in results:
+            row_data = [(str(cell) if cell is not None else "NULL") for cell in row]
+            cell_lines = [cell.splitlines() for cell in row_data]
+            
+            # Ensure empty cells are handled correctly for multi-line output
+            for cell in cell_lines:
+                if not cell: cell.append("")
+
+            max_lines_in_row = max(len(lines) for lines in cell_lines) if any(cell_lines) else 1
+            for i in range(max_lines_in_row):
+                row_parts = [f" {(cell_lines[j][i] if i < len(cell_lines[j]) else ''):<{widths[h]}} " for j, h in enumerate(headers)]
+                stream.write(f"{chars['v']}{chars['v'].join(row_parts)}{chars['v']}\n")
+
+        # Print bottom border and row count
+        stream.write(build_separator(chars['bl'], chars['bc'], chars['br']))
+        stream.write(f"({len(results)} rows returned)\n")
+        
+    def _write_as_text_old(self, results, headers, stream, options={}):
         if not results:
             stream.write("(0 rows returned)\n")
             return
@@ -5658,7 +5732,7 @@ class Interpreter:
                         transform_rules[col_name.lower()] = func_def
                     elif len(parts) == 1:
                         transform_rules[parts[0].lower()] = True
-
+            #print("DEBUG: TRANSFORM RULES:", transform_rules)
             validation_rules = {}
             validate_spec = options.get('validate')
             if validate_spec:
@@ -5687,7 +5761,8 @@ class Interpreter:
                             original_name, new_name = spec.split(':', 1)
                             original_name = original_name.strip()
                             new_name = new_name.strip()
-
+                            if not new_name:
+                                new_name = original_name
                         if original_name.lower() not in header_lookup:
                             self._error(f"Field '{original_name}' not found in source headers.")
 
@@ -5696,6 +5771,18 @@ class Interpreter:
                     
                     final_headers, column_map = new_headers, new_map
             
+            if transform_rules:
+                # Get a lowercase set of all headers that will be in the final table
+                final_header_set = {h.lower() for h in final_headers}
+                
+                # Check each column mentioned in the transform rules
+                for col_name in transform_rules.keys():
+                    # The keys in transform_rules are already lowercase
+                    # Exclude global rules like 'trimall' from this check
+                    if col_name not in final_header_set and col_name not in ['trimall', 'upperall', 'lowerall', 'properall']:
+                        print(f"Warning: TRANSFORM rule for column '{col_name}' will have no effect because no such column exists in the final field list.", file=sys.stderr)
+
+
             # --- Prepare script from options ---
             process_script = None
             if options.get('process_by'):
@@ -5742,7 +5829,8 @@ class Interpreter:
                                 # --- NEW: Logic for the FORMAT AND ROUND rule ---
                                 format_match = re.match(r"format\((.*)\)", str(rule), re.IGNORECASE)
                                 round_match = re.match(r"round\((\d+)\)", str(rule), re.IGNORECASE)
-
+                                date_match = re.match(r"date\((.*),(.*)\)", str(rule), re.IGNORECASE)
+                                
                                 if format_match:
                                     format_mask = format_match.group(1)
                                     # (The quote-stripping logic remains here)
@@ -5760,6 +5848,7 @@ class Interpreter:
                                     # Now, call the formatter with the correctly typed value
                                     formatted_val = Formatter.format(format_mask, [value_to_format])
                                     processed_row[i] = formatted_val.strip()
+                                
                                 elif round_match:
                                     num_decimals = int(round_match.group(1))
                                     try:
@@ -5771,6 +5860,44 @@ class Interpreter:
                                         # If it's not a number (e.g., "N/A"), default to a formatted zero
                                         processed_row[i] = f"{0.0:.{num_decimals}f}"
 
+                                elif date_match: 
+                                    in_format_str = date_match.group(1).strip().upper()
+                                    out_format_str = date_match.group(2).strip().upper()
+                                    
+                                    format_map = {
+                                        'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d',
+                                        'HH': '%H', 'MI': '%M', 'SS': '%S'
+                                    }
+                                     # Define an explicit order to prevent incorrect substring replacement (e.g., 'YYYY' becoming '%y%y')
+                                    replace_order = ['YYYY', 'YY', 'MM', 'DD', 'HH', 'MI', 'SS']
+
+                                    py_in_format = in_format_str
+                                    py_out_format = out_format_str
+                                    for key in replace_order:
+                                        if key in format_map:
+                                            py_in_format = py_in_format.replace(key, format_map[key])
+                                            py_out_format = py_out_format.replace(key, format_map[key])
+                                    try:
+                                        if val.strip():
+                                            date_obj = None
+                                            # First, try to parse with the full format string
+                                            try:
+                                                date_obj = datetime.strptime(val.strip(), py_in_format)
+                                            except ValueError:
+                                                # If that fails, AND the format contains a time part (indicated by a space),
+                                                # try parsing again with just the date part of the format string.
+                                                if ' ' in in_format_str:
+                                                    date_part_format = py_in_format.split(' ')[0]
+                                                    try:
+                                                        date_obj = datetime.strptime(val.strip(), date_part_format)
+                                                    except ValueError:
+                                                        pass # If this also fails, we give up and leave the original value
+                                            
+                                            if date_obj:
+                                                processed_row[i] = date_obj.strftime(py_out_format)
+                                    except (TypeError):
+                                        pass
+                                
                                 elif rule is True: # Handles global rules like trimall
                                     pass
                                 elif rule == 'upper': processed_row[i] = val.upper()
@@ -5960,7 +6087,7 @@ class Interpreter:
 
         # Parse options (defaults)
         options = {
-            'max_depth': 3,
+            'max_depth': 5,
             'array_threshold': 5,
             'prefix': '',
             'drop_existing': True,
@@ -6075,30 +6202,18 @@ class Interpreter:
         }
         add_line_num = False
         process_script = None
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token()
-            options_str = self._parse_expression()
-            temp_options = {}
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key = match.group(1).lower()
-                start_pos = match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',').strip()
-                if value.startswith('"') and value.endswith('"'):
-                    value = value[1:-1]
-                temp_options[key] = value
-            options.update(temp_options)
+        temp_options = self._parse_load_options()
+        options.update(temp_options)
 
-            for key, value in temp_options.items():
-                if key in ['batchsize', 'skip', 'limit']:
-                    options[key] = int(value)
-                elif key == 'linenum':
-                    add_line_num = value is None or value.lower() in ['true', 'y', '1']
-                elif key in ('trimall', 'upperall', 'lowerall', 'properall'):
-                    options[key] = value is None or value.lower() in ['true', 'y', '1']
-                else:
-                    options[key] = value
+        for key, value in temp_options.items():
+            if key in ['batchsize', 'skip', 'limit']:
+                options[key] = int(value)
+            elif key == 'linenum':
+                add_line_num = value is None or value.lower() in ['true', 'y', '1']
+            elif key in ('trimall', 'upperall', 'lowerall', 'properall'):
+                options[key] = value is None or value.lower() in ['true', 'y', '1']
+            else:
+                options[key] = value
         # --- 2. READ AND PROCESS DATA ---
         try:
             with open(json_filename, 'r', encoding='utf-8') as infile:
@@ -6230,6 +6345,8 @@ class Interpreter:
 
                     batch.append(processed_row)
                     total_rows_processed += 1
+                    if options.get('limit', None) and total_rows_processed >= options.get('limit')*1:
+                            break
                     if len(batch) >= batch_size:
                         cursor.executemany(insert_sql, batch); batch = []
                 
@@ -6272,20 +6389,8 @@ class Interpreter:
 
         # --- 2. Parse Options ---
         options = {'record_tag': None, 'fields': None, 'batchsize': 10000, 'transform': ''}
-        if self._current_token() and self._current_token()[0] == 'OPTIONS':
-            self._next_token()
-            options_str = self._parse_expression()
-            temp_options = {}
-            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-            for i, match in enumerate(key_matches):
-                key = match.group(1).lower()
-                start_pos = match.end()
-                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                value = options_str[start_pos:end_pos].strip().strip(',').strip()
-                if value.startswith('"') and value.endswith('"'):
-                    value = value[1:-1]
-                temp_options[key] = value
-            options.update(temp_options)
+        temp_options = self._parse_load_options()
+        options.update(temp_options)
 
         try:
             # --- 3. Infer Structure (Record Tag and All Available Fields) ---
@@ -6320,9 +6425,12 @@ class Interpreter:
             if not options['fields']: print(f"Notice: 'fields' not specified, inferred columns: {', '.join(inferred_fields)}", file=sys.stderr)
 
             # --- 4. Process Fields and Transforms ---
-            original_headers = inferred_fields
-            final_headers = original_headers
-            header_key_map = {h: h for h in original_headers}
+            # 1. Create a map from the clean name to the original, full namespaced tag
+            header_key_map = {re.sub(r'\{.*\}', '', tag): tag for tag in inferred_fields}
+            
+            # 2. The final headers for the table are the clean keys from our new map
+            final_headers = list(header_key_map.keys())
+            original_headers = final_headers
 
             if options['fields']:
                 field_specs = re.split(r',\s*(?![^\[]*\])', options['fields'])
@@ -6360,7 +6468,9 @@ class Interpreter:
             if destination_mode == 'CREATE_TABLE':
                 if self._table_exists(destination_target):
                     self._error(f"Table '{destination_target}' already exists. Use INTO TABLE ... REPLACE to overwrite its contents.")
-                cols_def = ', '.join([f'[{h}] TEXT' for h in final_headers])
+                cols_def = ', '.join([f'{self._quote_identifier(h)} TEXT' for h in final_headers])
+                #print("DEBUG: LOAD XML, Table Name=", destination_target, "QUOTED:", self._quote_identifier(destination_target))
+                #print("DEBUG: LOAD XML, Column Names=", cols_def)
                 cursor.execute(f'CREATE TABLE {self._quote_identifier(destination_target)} ({cols_def});')
 
             if db_mode == 'TRUNCATE':
@@ -6368,7 +6478,7 @@ class Interpreter:
 
             # --- 6. Stream and Load Data ---
             placeholders = ', '.join(['?'] * len(final_headers))
-            quoted_headers = ', '.join([f'[{h}]' for h in final_headers])
+            quoted_headers = ', '.join([f'{self._quote_identifier(h)}' for h in final_headers])
             insert_sql = f'INSERT INTO {self._quote_identifier(destination_target)} ({quoted_headers}) VALUES ({placeholders});'
             
             self.db_connection.execute('BEGIN TRANSACTION;')
@@ -6380,9 +6490,21 @@ class Interpreter:
                     if element.tag == record_tag:
                         processed_row = []
                         for h in final_headers:
-                            original_tag = header_key_map[h]
-                            value = element.findtext(original_tag, default="")
+                            original_tag = header_key_map.get(h, h)
+                            child_element = element.find(original_tag)
+                            
+                            if child_element is not None:
+                                # If the element has children of its own, it's complex
+                                if len(child_element) > 0 or child_element.attrib:
+                                    # Serialize the complex element to a JSON string
+                                    value = json.dumps(self._xml_element_to_dict(child_element))
+                                else:
+                                    # Otherwise, it's a simple element, just get its text
+                                    value = child_element.text or ""
+                            else:
+                                value = "" # Handle missing tags
                             processed_row.append(value)
+
                         
                         if transform_rules.get('trimall'):
                             processed_row = [str(field).strip() for field in processed_row]
@@ -6404,7 +6526,8 @@ class Interpreter:
 
                         batch.append(processed_row)
                         total_rows_processed += 1
-
+                        if options.get('limit', None) and total_rows_processed >= options.get('limit')*1:
+                            break
                         if len(batch) >= options['batchsize']:
                             cursor.executemany(insert_sql, batch)
                             batch = []
@@ -6494,7 +6617,7 @@ class Interpreter:
             if not list_of_records:
                 print("0 records found to normalize.")
                 return
-
+            #print("DEBUG:","Running Normalizers on data", file=sys.stderr)
             # --- Reuse the existing JSON Normalizer ---
             normalizer = JSONToSQLiteNormalizer(
                 db_path=":memory:",
@@ -6504,7 +6627,7 @@ class Interpreter:
                 normalizer.conn.close()
                 normalizer.conn = self.db_connection
                 normalizer.cursor = self.db_connection.cursor()
-            
+            #print("DEBUG:", "Running load_json on data:", list_of_records, file=sys.stderr)
             normalizer.load_json(list_of_records)
             
             # --- Reporting Logic (copied from JSON normalize) ---
@@ -7858,8 +7981,6 @@ class Interpreter:
                 initial_entry_data = {col: "" for col in all_column_names}
 
                 while True:
-                    print("DEBUG:",new_form_def)
-                    print("DEBUG:",pk_column)
                     entry_runner = FormRunner(new_form_def, initial_data=initial_entry_data, 
                                               view_mode='single', pk_column_name=pk_column)
                     entry_results = entry_runner.run()
@@ -8104,7 +8225,7 @@ class Interpreter:
             self._error(f"Duplicate FORM definition: '{form_name}'")
         
         # This debug print is very helpful, you may want to keep it
-        print("DEBUG", form_def)
+        #print("DEBUG", form_def)
         self.form_definitions[form_name] = form_def
     
     def _parse_open_form_statement(self):
@@ -8725,7 +8846,7 @@ class Interpreter:
                 
                 results = self._execute_sql(sql, is_query=True)
                 if results and results[0] and results[0][0]:
-                    print(results[0][0] + ";\n")
+                    print(results[0][0].rstrip(';') + ";\n")
                 else:
                     print(f"-- Table '{name}' not found or has no CREATE statement.\n")
         else:
@@ -8736,24 +8857,31 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] == 'TABLE':
             self._next_token()
         
-        table_name = self._parse_expression()
+        table_name = self._parse_table_name()
         # Optional: consume semicolon if present
         if self._current_token() and self._current_token()[0] == 'SEMICOLON':
             self._next_token()
+        
         try:
+            # Execute the engine-specific command for describing table structure
             if self.db_engine == 'duckdb':
-                # DuckDB approach
-                sql = f"SELECT sql FROM duckdb_tables() WHERE table_name = '{table_name}'"
-            else:
-                # SQLite approach  
-                sql = f"SELECT sql FROM sqlite_master WHERE type='table' AND name = '{table_name}'"
+                sql = f"DESCRIBE {self._quote_identifier(table_name)};"
+            else: # SQLite
+                sql = f"PRAGMA table_info({self._quote_identifier(table_name)});"
             
+            # Use the standard output handler to display the results as a table
             results = self._execute_sql(sql, is_query=True)
-            
-            if results and results[0][0]:
-                print(results[0][0] + (';' if self.db_engine == 'sqlite' else ''))
+            if results:
+                column_names = [desc[0] for desc in self.db_cursor.description]
+                self._handle_output(results, column_names)
             else:
                 print(f"Table '{table_name}' not found.", file=sys.stderr)
+                
+        except Exception as e:
+            self.variables['ERR'] = 1.0
+            self.variables['ERRMSG$'] = str(e)
+            if self.sql_fatal_errors:
+                self._error(f"Error describing table: {e}")
                 
         except Exception as e:
             self.variables['ERR'] = 1.0
@@ -8830,24 +8958,28 @@ class JSONToSQLiteNormalizer:
     def _ensure_table(self, table: str, schema: Dict[str, str], parent_table: Optional[str] = None):
         pk_name = f"pk_{table}"
         try:
+            # Check if table already exists
             res = self.cursor.execute(f"PRAGMA table_info('{table}')")
             existing_cols = {row[1] for row in res.fetchall()}
         except (sqlite3.OperationalError, duckdb.Error):
             existing_cols = set()
 
         if not existing_cols:
-            fk_clause = ""
+            # --- THIS IS THE FIX: Robustly build the list of columns ---
+            parts = [f"[{pk_name}] INTEGER PRIMARY KEY AUTOINCREMENT"]
             if parent_table:
                 fk_name = f"{parent_table}_fk"
-                fk_clause = f"[{fk_name}] INTEGER,"
-            
-            cols = [f"[{col}] {dtype}" for col, dtype in schema.items()]
-            ddl = (
-                f"CREATE TABLE {self._quote_identifier(table)} "
-                f"([{pk_name}] INTEGER PRIMARY KEY AUTOINCREMENT, {fk_clause} {', '.join(cols)})"
-            )
+                parts.append(f"[{fk_name}] INTEGER")
+
+            if schema:
+                col_defs = [f"[{col}] {dtype}" for col, dtype in schema.items()]
+                parts.extend(col_defs)
+
+            ddl = f"CREATE TABLE {self._quote_identifier(table)} ({', '.join(parts)})"
             self.cursor.execute(ddl)
+            # --- END FIX ---
         else:
+            # Alter table logic remains the same
             for col, dtype in schema.items():
                 if col not in existing_cols:
                     self.cursor.execute(f"ALTER TABLE {self._quote_identifier(table)} ADD COLUMN {self._quote_identifier(col)} {dtype}")
