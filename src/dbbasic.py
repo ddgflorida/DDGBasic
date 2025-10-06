@@ -3,12 +3,14 @@ import re
 import math
 import random
 import os
+import tempfile
 import sqlite3
 import duckdb
 import csv
 import io
 import json
 import glob
+import base64
 import html
 import fnmatch
 import subprocess
@@ -25,7 +27,7 @@ from bs4 import BeautifulSoup
 from openpyxl.styles import Font, PatternFill, Alignment
 from tui_runner import FormRunner
 from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlparse, quote_plus
+from urllib.parse import urlparse, quote_plus, unquote_plus
 import xmltodict
 
 try:
@@ -359,7 +361,7 @@ class Lexer:
             r'\bWITH\s+FULLPATH\b': 'WITHFULLPATH',
             r'\bWITH\s+FOLDERSONLY\b': 'WITHFOLDERSONLY',
             r'\bWITH\s+FILESONLY\b': 'WITHFILESONLY', 
-            r'\bLIST\s+FIELDS\b': 'LISTFIELDS'
+            r'\bLIST\s+FIELDS\b': 'LISTFIELDS',
         }
         code = source_code_to_process
         for pattern, repl in replacements.items():
@@ -415,7 +417,7 @@ class Lexer:
             ('COPY', r'\bCOPY\b(?!\$)'),('ATTACH', r'\bATTACH\b(?!\$)'),
             ('WITHFULLPATH', r'\bWITHFULLPATH\b(?!\$)'), ('WITHDETAILS', r'\bWITHDETAILS\b(?!\$)'),
             ('WITHFOLDERSONLY', r'\bWITHFOLDERSONLY\b(?!\$)'), ('WITHFILESONLY', r'\bWITHFILESONLY\b(?!\$)'),
-            ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'),
+            ('WITH', r'\bWITH\b(?!\$)'), ('FETCH', r'\bFETCH\b(?!\$)'), ('CLEAR', r'\bCLEAR\b(?!\$)'),
             ('POST', r'\bPOST\b(?!\$)'), ('EXISTS', r'\bEXISTS\b(?!\$)'), ('ERROR', r'\bERROR\b(?!\$)'),
             ('XML', r'\bXML\b(?!\$)'), ('JSON', r'\bJSON\b(?!\$)'), ('JSONL', r'\bJSONL\b(?!\$)'),('SHOW', r'\bSHOW\b(?!\$)'), 
             ('PARSE', r'\bPARSE\b(?!\$)'), ('INTO', r'\bINTO\b(?!\$)'),('DUMP', r'\bDUMP\b(?!\$)'), 
@@ -445,6 +447,11 @@ class Lexer:
             ('PUSH', r'\bPUSH\b(?!\$)'), ('POP', r'\bPOP\b(?!\$)'),
             ('SHIFT', r'\bSHIFT\b(?!\$)'), ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
             ('SPLICE', r'\bSPLICE\b(?!\$)'), ('REVERSE', r'\bREVERSE\b(?!\$)'),
+            ('PROVIDER', r'\bPROVIDER\b(?!\$)'), 
+            ('APIKEY', r'\bAPIKEY\b(?!\$)'), ('EMAIL', r'\bEMAIL\b(?!\$)'),('SENDER', r'\bSENDER\b(?!\$)'),
+            ('SUBJECT', r'\bSUBJECT\b(?!\$)'), ('BODY', r'\bBODY\b(?!\$)'),('DOMAIN', r'\bDOMAIN\b(?!\$)'),
+            ('HTMLBODY', r'\bHTMLBODY\b(?!\$)'), ('CC', r'\bCC\b(?!\$)'), ('BCC', r'\bBCC\b(?!\$)'),
+            # Place new keywords above this line
             ('ID', r'(?!INTO\b)[a-zA-Z_][a-zA-Z0-9_]*\$?'),
             ('OP', r"[+\*/-]"), ('CARET', r'\^'), ('AMPERSAND', r'&'),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), 
@@ -675,6 +682,11 @@ class LegacyJsonNormalizer:
         self.table_dict = {}
         self._id_counter = 0
         self._table_parent_cache = {}
+        
+        # Parse rules upon initialization >>>
+        self.transform_rules = {}
+        self.validation_rules = {}
+        self._parse_processing_rules()
 
     def run(self):
         print("Running Legacy Normalizer Engine...")
@@ -706,6 +718,72 @@ class LegacyJsonNormalizer:
         self._insert_rows()
         print("Legacy Normalizer Engine finished.")
 
+    def _parse_processing_rules(self):
+        """Parses TRANSFORM and VALIDATE rules from the options string."""
+        self.transform_rules = {}
+        transform_spec = self.options.get('transform')
+        if transform_spec:
+            for rule in transform_spec.split(';'):
+                parts = rule.strip().split(':', 1)
+                if len(parts) == 2:
+                    col_name, func_def = parts[0].strip(), parts[1].strip()
+                    self.transform_rules[col_name.lower()] = func_def
+                elif len(parts) == 1:
+                    self.transform_rules[parts[0].lower()] = True # For global rules like 'trimall'
+
+        self.validation_rules = {}
+        validate_spec = self.options.get('validate')
+        if validate_spec:
+            for rule_group in validate_spec.split(';'):
+                parts = rule_group.strip().split(':', 1)
+                if len(parts) == 2:
+                    col_name, rule_defs = parts[0].strip(), parts[1]
+                    self.validation_rules[col_name] = []
+                    for rule in rule_defs.split(':'):
+                         match = re.match(r'(\w+)(?:\((.*)\))?', rule.strip())
+                         if match:
+                             rule_name, rule_arg = match.groups()
+                             self.validation_rules[col_name].append({'name': rule_name.upper(), 'arg': rule_arg})
+
+    def _process_row(self, row_data, table_name):
+        """Applies TRANSFORM and VALIDATE rules to a single row of data before insertion."""
+        # 1. Apply TRANSFORM rules
+        if self.transform_rules:
+            if self.transform_rules.get('trimall'):
+                row_data = {k: v.strip() if isinstance(v, str) else v for k, v in row_data.items()}
+            if self.transform_rules.get('upperall'):
+                row_data = {k: v.upper() if isinstance(v, str) else v for k, v in row_data.items()}
+            
+            
+            for col_name, value in row_data.items():
+                rule = self.transform_rules.get(col_name.lower())
+                if rule and isinstance(value, str):
+                    if rule == 'upper': row_data[col_name] = value.upper()
+                    elif rule == 'lower': row_data[col_name] = value.lower()
+                    elif rule == 'trim': row_data[col_name] = value.strip()
+                    elif rule == 'proper': row_data[col_name] = value.title()
+
+        # 2. Apply VALIDATE rules
+        if self.validation_rules:
+            for col_name, rules in self.validation_rules.items():
+                if col_name in row_data:
+                    val = str(row_data[col_name] or '')
+                    for rule in rules:
+                        is_valid = True
+                        rule_name, rule_arg = rule['name'], rule['arg']
+                        
+                        if rule_name == 'REQUIRED' and not val.strip():
+                            is_valid = False
+                        elif val.strip(): # Other rules only apply to non-empty values
+                            if rule_name == 'MINLENGTH' and len(val) < int(rule_arg): is_valid = False
+                            if rule_name == 'REGEX' and not re.match(rule_arg, val): is_valid = False
+                        
+                        if not is_valid:
+                            print(f"Validation failed for table '{table_name}': Column '{col_name}' value '{val}' failed rule '{rule_name}({rule_arg or ''})'. Skipping row.", file=sys.stderr)
+                            return None # Signal to skip this row
+        
+        return row_data
+            
     def _get_next_id(self):
         self._id_counter += 1
         return self._id_counter
@@ -939,12 +1017,19 @@ class LegacyJsonNormalizer:
                 
                 if v.get('type') == 'EndRow':
                     if row['data']:
-                        self._insert_single_row(short_name, table_name_path, row, last_fk_value, counter)
+                        # <<< MODIFIED: Process row before inserting >>>
+                        processed_data = self._process_row(row['data'], short_name)
+                        if processed_data: # Only insert if validation passes
+                           row['data'] = processed_data
+                           self._insert_single_row(short_name, table_name_path, row, last_fk_value, counter)
                     row = {"data": {}, "idx": counter}
                 elif v.get('type') not in ('Array', 'Object', 'BeginRow', 'EndArray'):
                     column_path = self._normalize_key(v.get('pathname', ''))
-                    column_name = self.table_dict[table_name_path]['columns'][column_path]['column_name']
-                    row['data'][column_name] = v.get('data')
+                    
+                    # Ensure the column exists in the schema before trying to add data
+                    if table_name_path in self.table_dict and column_path in self.table_dict[table_name_path]['columns']:
+                        column_name = self.table_dict[table_name_path]['columns'][column_path]['column_name']
+                        row['data'][column_name] = v.get('data')
             
             self.db_conn.commit()
 
@@ -1077,6 +1162,7 @@ class Interpreter:
         self.hash_keys_mode = 'PRESERVE_CASE'  # Default to preserve case
         self.run_stack = []
         self.last_sql_statement = ""
+        self.email_config = {}
                 
         # --- NEW: Error handling state ---
         self.error_handler_label = None
@@ -2132,6 +2218,10 @@ class Interpreter:
             self._error(f"Unexpected '{token[0]}'")
         elif token[0] == 'ID' and token[1].upper() == 'COPY':
             self._parse_copy_statement()
+        elif token[0] == 'CLEAR':                                 # Clear all variables
+            self._parse_clear_statement()
+        elif token[0] == 'EMAIL': #                               # Send emails via an email provider
+            self._parse_email_statement()
         elif token[0] == 'BELL':                                  # Ring a bell
             self._parse_bell_statement()
         elif token[0] == 'REDIRECT':
@@ -3165,7 +3255,12 @@ class Interpreter:
             for token in self.tokens:
                 print(token)
             print("--------------------\n")     
-            
+    def _parse_clear_statement(self):
+        """Parses and executes a CLEAR statement to reset all variables."""
+        self._expect('CLEAR')
+        self.variables = {}
+        #print("All variables have been cleared.") 
+        
     def _parse_power(self):
         res = self._parse_factor()
         while self._current_token() and self._current_token()[0] == 'CARET':
@@ -3292,7 +3387,25 @@ class Interpreter:
         self._expect('SET')
         token = self._current_token()
         
-        if token[0] == 'ID' and token[1].upper() == 'NULL_HANDLING':
+        if token and token[0] == 'EMAIL':
+            self._next_token() # Consume 'EMAIL'
+            # --- New logic for SET EMAIL ---
+            while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
+                keyword_token = self._current_token()
+                if keyword_token[0] not in ['PROVIDER', 'APIKEY', 'SENDER']:
+                    self._error(f"Unexpected keyword '{keyword_token[1]}' in SET EMAIL statement.")
+                self._next_token() # Consume keyword
+                
+                if keyword_token[0] == 'PROVIDER':
+                    self.email_config['provider'] = self._parse_expression()
+                elif keyword_token[0] == 'APIKEY':
+                    self.email_config['apikey'] = self._parse_expression()
+                elif keyword_token[0] == 'SENDER':
+                    self.email_config['from'] = self._parse_expression()
+                elif keyword_token[0] == 'DOMAIN':
+                    self.email_config['domain'] = self._parse_expression()
+            print("Email provider configured.", file=sys.stderr)
+        elif token[0] == 'ID' and token[1].upper() == 'NULL_HANDLING':
             self._next_token() # Consume NULL_HANDLING
             
             # Check if this is a global or column-specific setting
@@ -6044,10 +6157,38 @@ class Interpreter:
     def _html_extractor(self, filename, options):
         """
         Extractor for HTML files. Can extract tables, links, or images.
-        Uses the 'element_type' option ('TABLES', 'LINKS', 'IMAGES').
+        Supports both local file paths and remote URLs.
         """
+        # <<< NEW: Logic to handle URLs >>>
+        is_url = filename.lower().startswith(('http://', 'https://'))
+        temp_file_name = None
+        file_to_process = filename
+
         try:
-            with open(filename, 'r', encoding=options.get('encoding', 'utf-8')) as infile:
+            if is_url:
+                print(f"Notice: Fetching URL for LOAD HTML: {filename}", file=sys.stderr)
+                try:
+                    final_headers = {
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
+                        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
+                        "Accept-Language": "en-US,en;q=0.9"
+                    }
+                    response = requests.get(filename, timeout=15, headers=final_headers)
+                    response.raise_for_status() # Will raise an exception for 4xx/5xx errors
+
+                    # Create a temporary file to store the downloaded content
+                    with tempfile.NamedTemporaryFile(mode='w+', delete=False, encoding='utf-8', suffix=".html") as temp_f:
+                        temp_f.write(response.text)
+                        temp_file_name = temp_f.name
+                    
+                    file_to_process = temp_file_name
+
+                except requests.exceptions.RequestException as e:
+                    self._error(f"Failed to download URL '{filename}': {e}")
+                    return # Stop the generator if download fails
+            # <<< END NEW LOGIC >>>
+
+            with open(file_to_process, 'r', encoding=options.get('encoding', 'utf-8')) as infile:
                 soup = BeautifulSoup(infile, 'lxml')
 
             element_type = options.get('element_type', 'TABLES').upper()
@@ -6059,7 +6200,7 @@ class Interpreter:
                 tables = soup.find_all('table')
                 table_index = int(options.get('table_index', 0))
                 if table_index >= len(tables):
-                    self._error(f"HTML table index {table_index} is out of bounds.")
+                    self._error(f"HTML table index {table_index} is out of bounds (only found {len(tables)} tables).")
                 
                 target_table = tables[table_index]
                 headers = ['source']
@@ -6071,8 +6212,7 @@ class Interpreter:
                     header_cells = rows[0].find_all(['th', 'td'])
                     headers.extend([cell.get_text(strip=True) for cell in header_cells])
                     start_row_idx = 1
-
-                # --- FIX: Add _linenum to headers if requested ---
+                
                 if add_line_num:
                     headers.append('_linenum')
 
@@ -6082,7 +6222,6 @@ class Interpreter:
                     cells = row_element.find_all('td')
                     data_row = [source_url] + [cell.get_text(strip=True) for cell in cells]
                     
-                    # --- FIX: Append the line number to the data row ---
                     if add_line_num:
                         data_row.append(i + 1)
 
@@ -6114,6 +6253,11 @@ class Interpreter:
 
         except FileNotFoundError:
             self._error(f"File not found: {filename}")
+        finally:
+            # <<< NEW: Cleanup Logic >>>
+            # This ensures the temporary file is always deleted after use.
+            if temp_file_name:
+                os.remove(temp_file_name)
       
     def _xml_extractor(self, filename, options):
         """
@@ -6217,6 +6361,7 @@ class Interpreter:
             self._error(f"File not found: {filename}")
         except ET.ParseError as e:
             self._error(f"Error parsing XML file '{filename}': {e}")
+    
     def _json_extractor(self, filename, options):
         """
         Extractor for JSON files (array of objects). Infers a union of all keys
@@ -9381,7 +9526,113 @@ class Interpreter:
         self._expect('RETURN')
         if not self.gosub_stack: self._error("RETURN without GOSUB.")
         self.token_index = self.gosub_stack.pop()
+
+    def _parse_email_statement(self):
+        """Parses and sends an email using the configured provider, with attachment support."""
+        self._expect('EMAIL')
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+
+        if not self.email_config.get('provider'):
+            self._error("Email provider not configured. Use SET EMAIL before sending.")
+
+        email_details = {}
+        while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
+            token_type = self._current_token()[0]
+            # <<< MODIFIED: Add ATTACH to the list of valid keywords >>>
+            if token_type not in ['TO', 'CC', 'BCC', 'SUBJECT', 'BODY', 'HTMLBODY', 'ATTACH']:
+                self._error(f"Unexpected keyword '{token_type}' in EMAIL statement.")
+            self._next_token()
+            email_details[token_type.lower()] = self._parse_expression()
         
+        provider = self.email_config['provider'].lower()
+        
+        try:
+            if provider == 'sendgrid':
+                api_key = self.email_config.get('apikey')
+                sender_email = self.email_config.get('sender')
+                if not api_key or not sender_email:
+                    self._error("SendGrid requires APIKEY and SENDER to be set.")
+
+                personalizations = [{"to": [{"email": e.strip()} for e in email_details.get('to', '').split(',')]}]
+                if email_details.get('cc'): personalizations[0]['cc'] = [{"email": e.strip()} for e in email_details['cc'].split(',')]
+                if email_details.get('bcc'): personalizations[0]['bcc'] = [{"email": e.strip()} for e in email_details['bcc'].split(',')]
+
+                content = []
+                if email_details.get('body'): content.append({"type": "text/plain", "value": email_details['body']})
+                if email_details.get('htmlbody'): content.append({"type": "text/html", "value": email_details['htmlbody']})
+
+                payload = {"personalizations": personalizations, "from": {"email": sender_email}, "subject": email_details.get('subject', '(No Subject)'), "content": content}
+                
+                # <<< MODIFIED: Add attachment logic for SendGrid >>>
+                if email_details.get('attach'):
+                    attachments = []
+                    for file_path in email_details['attach'].split(','):
+                        file_path = file_path.strip()
+                        try:
+                            with open(file_path, 'rb') as f:
+                                file_data = f.read()
+                            encoded_file = base64.b64encode(file_data).decode()
+                            attachments.append({
+                                'content': encoded_file,
+                                'filename': os.path.basename(file_path)
+                            })
+                        except FileNotFoundError:
+                            self._error(f"Attachment file not found: {file_path}")
+                    payload['attachments'] = attachments
+
+                headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+                response = requests.post("https://api.sendgrid.com/v3/mail/send", json=payload, headers=headers)
+                
+                if 200 <= response.status_code < 300: self.variables['ERR'] = 0.0
+                else: self.variables['ERR'] = float(response.status_code); self.variables['ERRMSG$'] = response.text
+            
+            elif provider == 'mailgun':
+                api_key = self.email_config.get('apikey')
+                sender_email = self.email_config.get('sender')
+                domain = self.email_config.get('domain')
+                if not api_key or not sender_email or not domain:
+                    self._error("Mailgun requires APIKEY, SENDER, and DOMAIN to be set.")
+
+                payload = {
+                    'from': sender_email, 'to': email_details.get('to', ''),
+                    'subject': email_details.get('subject', '(No Subject)'),
+                    'text': email_details.get('body', ''), 'html': email_details.get('htmlbody', '')
+                }
+                if email_details.get('cc'): payload['cc'] = email_details['cc']
+                if email_details.get('bcc'): payload['bcc'] = email_details['bcc']
+
+                # <<< MODIFIED: Add attachment logic for Mailgun >>>
+                files_to_send = []
+                if email_details.get('attach'):
+                    for file_path in email_details['attach'].split(','):
+                        file_path = file_path.strip()
+                        try:
+                            # 'attachment' is the field name Mailgun expects for each file
+                            files_to_send.append(('attachment', (os.path.basename(file_path), open(file_path, 'rb'))))
+                        except FileNotFoundError:
+                            # Clean up already opened files before erroring
+                            for _, (_, f) in files_to_send: f.close()
+                            self._error(f"Attachment file not found: {file_path}")
+
+                try:
+                    response = requests.post(
+                        f"https://api.mailgun.net/v3/{domain}/messages",
+                        auth=("api", api_key),
+                        data=payload,
+                        files=files_to_send # Pass the list of files here
+                    )
+                finally:
+                    # Ensure all opened file handles are closed after the request
+                    for _, (_, f) in files_to_send: f.close()
+
+                if 200 <= response.status_code < 300: self.variables['ERR'] = 0.0
+                else: self.variables['ERR'] = float(response.status_code); self.variables['ERRMSG$'] = response.text
+            
+            else:
+                self._error(f"Email provider '{self.email_config['provider']}' is not supported.")
+        except Exception as e:
+            self.variables['ERR'] = -1.0; self.variables['ERRMSG$'] = str(e)
+            
 
 TEST_PROGRAM_SOURCE = """
 REM --- Test complex IF statement ---
