@@ -16,6 +16,11 @@ import fnmatch
 import subprocess
 import requests
 import calendar
+import smtplib
+from collections import Counter # Local import
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from typing import Union
 from datetime import datetime, timedelta
 import xml.etree.ElementTree as ET
@@ -427,7 +432,7 @@ class Lexer:
             ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),('CHAIN', r'\bCHAIN\b(?!\$)'),
             ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), 
             ('TABLE', r'\bTABLE\b(?!\$)'), ('TEXT', r'\bTEXT\b(?!\$)'),('EVAL', r'\bEVAL\b(?!\$)'),
-            ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), 
+            ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('IGNORE', r'\bIGNORE\b(?!\$)'),
             ('REPLACE', r'\bREPLACE\b(?!\$)'), ('TRUNCATE', r'\bTRUNCATE\b(?!\$)'),
             ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
             ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
@@ -448,6 +453,9 @@ class Lexer:
             ('SHIFT', r'\bSHIFT\b(?!\$)'), ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
             ('SPLICE', r'\bSPLICE\b(?!\$)'), ('REVERSE', r'\bREVERSE\b(?!\$)'),
             ('PROVIDER', r'\bPROVIDER\b(?!\$)'), 
+            ('HOST', r'\bHOST\b(?!\$)'), ('PORT', r'\bPORT\b(?!\$)'),
+            ('USER', r'\bUSER\b(?!\$)'), ('PASSWORD', r'\bPASSWORD\b(?!\$)'),
+            ('SECURITY', r'\bSECURITY\b(?!\$)'),
             ('APIKEY', r'\bAPIKEY\b(?!\$)'), ('EMAIL', r'\bEMAIL\b(?!\$)'),('SENDER', r'\bSENDER\b(?!\$)'),
             ('SUBJECT', r'\bSUBJECT\b(?!\$)'), ('BODY', r'\bBODY\b(?!\$)'),('DOMAIN', r'\bDOMAIN\b(?!\$)'),
             ('HTMLBODY', r'\bHTMLBODY\b(?!\$)'), ('CC', r'\bCC\b(?!\$)'), ('BCC', r'\bBCC\b(?!\$)'),
@@ -925,7 +933,6 @@ class LegacyJsonNormalizer:
                  self.table_dict[key]['short_table_name'] = self._key_to_short_table_name(self.table_dict[key]['pathname'])
             
             self.table_dict[key]['pk'] = 'pk_' + self.table_dict[key]['short_table_name']
-        # <<< END FIX >>>
 
         for key in self.table_dict:
             if self.table_dict[key]['table_parent_name']:
@@ -1411,6 +1418,9 @@ class Interpreter:
         else:
             print(f"DEBUG | {message:<40} | Token: None")
 
+    def _halt(self, message):
+        raise RuntimeError(f"{message}")
+        
     def _error(self, message):
         """Raises a RuntimeError with enhanced token context."""
         idx = self.token_index
@@ -1556,7 +1566,7 @@ class Interpreter:
                         # Table was created WITHOUT ROWID, so no implicit primary key
                         return None
                     else:
-                        # Table has implicit rowid
+                        # Table has implicit rowid - *Actually, if it is a VIEW then it does not.
                         return "rowid"
                 else:
                     # Shouldn't happen if table exists, but fallback to rowid
@@ -1896,6 +1906,11 @@ class Interpreter:
                     return self.db_cursor.fetchall()
                 return None
             except (sqlite3.Error, duckdb.Error) as e:
+                print(f"\n--- FAILED SQL ---", file=sys.stderr)
+                print(f"SQL    : {sql_string}", file=sys.stderr)
+                if params is not None:
+                    print(f"PARAMS : {params}", file=sys.stderr)
+                print(f"------------------\n", file=sys.stderr)
                 self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
                 if self.sql_fatal_errors: self._error(f"Fatal DB Error: {e}")
                 return None
@@ -1950,6 +1965,10 @@ class Interpreter:
                 return result.fetchall() if self.db_engine == 'duckdb' else self.db_cursor.fetchall()
             return None
         except (sqlite3.Error, duckdb.Error) as e: # Catch errors from either library
+            print(f"\n--- FAILED SQL ---", file=sys.stderr)
+            print(f"SQL    : {final_sql}", file=sys.stderr)
+            print(f"PARAMS : {resolved_params}", file=sys.stderr)
+            print(f"------------------\n", file=sys.stderr)
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             if self.sql_fatal_errors:
                 self._error(f"Fatal DB Error: {e}")
@@ -3389,21 +3408,26 @@ class Interpreter:
         
         if token and token[0] == 'EMAIL':
             self._next_token() # Consume 'EMAIL'
-            # --- New logic for SET EMAIL ---
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
                 keyword_token = self._current_token()
-                if keyword_token[0] not in ['PROVIDER', 'APIKEY', 'SENDER']:
+                # <<< MODIFIED: Add SMTP keywords to the list of valid keywords >>>
+                if keyword_token[0] not in ['PROVIDER', 'APIKEY', 'SENDER', 'DOMAIN', 'HOST', 'PORT', 'USER', 'PASSWORD', 'SECURITY']:
                     self._error(f"Unexpected keyword '{keyword_token[1]}' in SET EMAIL statement.")
                 self._next_token() # Consume keyword
                 
-                if keyword_token[0] == 'PROVIDER':
-                    self.email_config['provider'] = self._parse_expression()
-                elif keyword_token[0] == 'APIKEY':
-                    self.email_config['apikey'] = self._parse_expression()
-                elif keyword_token[0] == 'SENDER':
-                    self.email_config['from'] = self._parse_expression()
-                elif keyword_token[0] == 'DOMAIN':
-                    self.email_config['domain'] = self._parse_expression()
+                value = self._parse_expression()
+                
+                # <<< MODIFIED: Store all possible config values >>>
+                if keyword_token[0] == 'PROVIDER': self.email_config['provider'] = value
+                elif keyword_token[0] == 'APIKEY': self.email_config['apikey'] = value
+                elif keyword_token[0] == 'SENDER': self.email_config['sender'] = value
+                elif keyword_token[0] == 'DOMAIN': self.email_config['domain'] = value
+                elif keyword_token[0] == 'HOST': self.email_config['host'] = value
+                elif keyword_token[0] == 'PORT': self.email_config['port'] = int(value)
+                elif keyword_token[0] == 'USER': self.email_config['user'] = value
+                elif keyword_token[0] == 'PASSWORD': self.email_config['password'] = value
+                elif keyword_token[0] == 'SECURITY': self.email_config['security'] = value.upper()
+                    
             print("Email provider configured.", file=sys.stderr)
         elif token[0] == 'ID' and token[1].upper() == 'NULL_HANDLING':
             self._next_token() # Consume NULL_HANDLING
@@ -3439,6 +3463,7 @@ class Interpreter:
             self._next_token()
 
         elif token[0] == 'OUTPUT':
+            # SET OUTPUT [FILE,CONSOLE,NONE] FORMAT [TEXT,CSV,JSON,JSONL,XML,HTML,FIXED,EXCEL,SQL]
             self._next_token()
             token = self._current_token()
             
@@ -3512,7 +3537,7 @@ class Interpreter:
             try:
                 with open(g_output_config.file_path, "w", encoding="utf-8", newline='') as f:
                     writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}")
-                    writer_function(results, column_names, f)
+                    writer_function(results, column_names, f, g_output_config.sql_options)
                 print(f"{len(results)} rows written to {g_output_config.file_path}")
             except IOError as e: self._error(f"Error writing to file: {e}")
 
@@ -3565,70 +3590,6 @@ class Interpreter:
         # Print bottom border and row count
         stream.write(build_separator(chars['bl'], chars['bc'], chars['br']))
         stream.write(f"({len(results)} rows returned)\n")
-        
-    def _write_as_text_old(self, results, headers, stream, options={}):
-        if not results:
-            stream.write("(0 rows returned)\n")
-            return
-
-        # Define character sets based on the 'box_style' option
-        style = options.get('box_style', 'ASCII').upper()
-        
-        BOX_CHARS = {'h': '─', 'v': '│', 'tl': '┌', 'tc': '┬', 'tr': '┐', 'ml': '├', 'mc': '┼', 'mr': '┤', 'bl': '└', 'bc': '┴', 'br': '┘'}
-        ASCII_CHARS = {'h': '-', 'v': '|', 'tl': '+', 'tc': '+', 'tr': '+', 'ml': '+', 'mc': '+', 'mr': '+', 'bl': '+', 'bc': '+', 'br': '+'}
-        
-        chars = BOX_CHARS if style == 'BOX' else ASCII_CHARS
-
-        # 1. Calculate column widths (without padding first)
-        widths = {h: len(h) for h in headers}
-        # Pre-process all data to strings to calculate widths accurately
-        all_data_rows = []
-        for row in results:
-            data_row = []
-            for i, h in enumerate(headers):
-                cell_content = str(row[i]) if row[i] is not None else "NULL"
-                data_row.append(cell_content)
-                # Check width against all lines in a multi-line cell
-                max_line_len = max(len(line) for line in cell_content.splitlines()) if cell_content else len("NULL")
-                widths[h] = max(widths[h], max_line_len)
-            all_data_rows.append(data_row)
-        
-        # 2. Helper to build separator lines with padding
-        def build_separator(left, join, right):
-            # Add 2 for padding: ' ' on each side
-            parts = [chars['h'] * (widths[h] + 2) for h in headers]
-            return f"{left}{join.join(parts)}{right}\n"
-        
-        # 3. Print top border
-        stream.write(build_separator(chars['tl'], chars['tc'], chars['tr']))
-        
-        # 4. Print header (centered)
-        header_parts = [f" {h:^{widths[h]}} " for h in headers]
-        stream.write(f"{chars['v']}{chars['v'].join(header_parts)}{chars['v']}\n")
-
-        # 5. Print header separator
-        stream.write(build_separator(chars['ml'], chars['mc'], chars['mr']))
-
-        # 6. Print data rows
-        if not all_data_rows:
-             # If there's no data, we still need to draw the bottom border.
-             pass
-        else:
-            for row_data in all_data_rows:
-                cell_lines = [cell.splitlines() for cell in row_data]
-                for cell in cell_lines:
-                    if not cell: cell.append("")
-
-                max_lines_in_row = max(len(lines) for lines in cell_lines) if any(cell_lines) else 1
-
-                for i in range(max_lines_in_row):
-                    # Left-align content within the padded width
-                    row_parts = [f" {(cell_lines[j][i] if i < len(cell_lines[j]) else ''):<{widths[h]}} " for j, h in enumerate(headers)]
-                    stream.write(f"{chars['v']}{chars['v'].join(row_parts)}{chars['v']}\n")
-
-        # 7. Print bottom border
-        stream.write(build_separator(chars['bl'], chars['bc'], chars['br']))
-        stream.write(f"({len(results)} rows returned)\n")
 
     def _write_as_csv(self, results, headers, stream, options={}):
         csv_writer = csv.writer(stream); csv_writer.writerow(headers); csv_writer.writerows(results)
@@ -3657,19 +3618,48 @@ class Interpreter:
     
     def _write_as_html(self, results, headers, stream, options={}):
         """Writes query results as a basic HTML table."""
+
         is_full = options.get('full', '')
+        report_title = options.get('title')
+        if report_title is None:
+            report_title = "Query Result"
+        report_subtitle = options.get('subtitle',"")
+        report_footer = options.get('footer')
+        if report_footer is None:
+            report_footer = f'({len(results)} rows returned)'
         if is_full:
             stream.write("<!DOCTYPE html>\n")
-            stream.write("<html>\n<head>\n<title>Query Result</title>\n")
+            stream.write(f"<html>\n<head>\n<title>{html.escape(report_title)}</title>\n")
             stream.write("<style>\n")
             stream.write("  body { font-family: sans-serif; }\n")
             stream.write("  table { border-collapse: collapse; width: 80%; margin: 20px auto; }\n")
             stream.write("  th, td { border: 1px solid #cccccc; padding: 8px; text-align: left; }\n")
             stream.write("  thead { background-color: #f2f2f2; font-weight: bold; }\n")
             stream.write("  tr:nth-child(even) { background-color: #f9f9f9; }\n")
+            stream.write("  h1 {")
+            stream.write("  font-family: 'Arial', sans-serif; /* A common, readable sans-serif font */")
+            stream.write("  font-size: 2.5em; /* Larger size for the primary heading */")
+            stream.write("  color: #333; /* Dark gray for good contrast */")
+            stream.write("  margin-bottom: 0.5em; /* Space below the heading */")
+            stream.write("  text-align: center; /* Center alignment for a prominent title */")
+            stream.write("  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.2); /* Subtle shadow for depth */")
+            stream.write("  }")
+
+            stream.write("  h2 {")
+            stream.write("  font-family: 'Georgia', serif; /* A classic serif font for secondary headings */")
+            stream.write("  font-size: 1.8em; /* Slightly smaller than h1 */")
+            stream.write("  color: #555; /* Medium gray */")
+            stream.write("  margin-top: 1em; /* Space above the heading */")
+            stream.write("  margin-bottom: 0.8em; /* Space below the heading */")
+            stream.write("  border-bottom: 1px solid #ccc; /* A subtle line for separation */")
+            stream.write("  padding-bottom: 0.2em; /* Padding above the border */")
+            stream.write("  text-align: center; /* Center alignment for a prominent title */")
+            stream.write("  }")
             stream.write("</style>\n</head>\n<body>\n")
-            stream.write("<h1>Query Result</h1>\n")
-         
+            if report_title:
+                stream.write(f"<h1>{html.escape(report_title)}</h1>\n")
+            if report_subtitle:
+                stream.write(f"<h2>{html.escape(report_subtitle)}</h2>\n")
         if not results:
             if is_full:
                 stream.write("<p>(0 rows returned)</p>\n")
@@ -3691,7 +3681,7 @@ class Interpreter:
             stream.write("  </tbody>\n")
             stream.write("</table>\n")
             if is_full:
-                stream.write(f"<p style='text-align: center; font-style: italic;'>({len(results)} rows returned)</p>\n")
+                stream.write(f"<p style='text-align: center; font-style: italic;'>{html.escape(report_footer)}</p>\n")
 
         if is_full:
             stream.write("</body>\n</html>\n")
@@ -3737,12 +3727,33 @@ class Interpreter:
         filename = g_output_config.file_path
         if not filename.lower().endswith(('.xlsx', '.xls')):
             filename += '.xlsx'
+        report_title = options.get('title')
+        report_footer = options.get('footer')
+        report_subtitle = options.get('subtitle',"")
         
         # Create a new workbook and worksheet
         workbook = openpyxl.Workbook()
         worksheet = workbook.active
         worksheet.title = "Query Results"
         
+        current_row = 1
+        if report_title:
+            worksheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+            title_cell = worksheet.cell(row=1, column=1, value=report_title)
+            title_cell.font = Font(bold=True, size=16)
+            title_cell.alignment = Alignment(horizontal="center", vertical="center")
+            worksheet.row_dimensions[1].height = 30
+            current_row += 1 
+        if report_subtitle:
+            worksheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+            title_cell = worksheet.cell(row=1, column=1, value=report_title)
+            title_cell.font = Font(bold=True, size=16)
+            title_cell.alignment = Alignment(horizontal="center", vertical="center")
+            worksheet.row_dimensions[1].height = 30
+            current_row += 1
+        if report_title or report_subtitle:
+            current_row += 1 # Add a blank row after the title
+            
         # Define styles
         header_font = Font(bold=True, color="FFFFFF")
         header_fill = PatternFill(start_color="366092", end_color="366092", fill_type="solid")
@@ -3750,13 +3761,15 @@ class Interpreter:
         
         # Write headers
         for col_idx, header in enumerate(headers, 1):
-            cell = worksheet.cell(row=1, column=col_idx, value=header)
+            cell = worksheet.cell(row=current_row, column=col_idx, value=header)
             cell.font = header_font
             cell.fill = header_fill
             cell.alignment = header_alignment
         
+        current_row += 1
+        
         # Write data rows
-        for row_idx, row in enumerate(results, 2):
+        for row in results:
             for col_idx, value in enumerate(row, 1):
                 # Handle None values
                 if value is None:
@@ -3768,9 +3781,16 @@ class Interpreter:
                 else:
                     # Convert everything else to string
                     value = str(value)
-                
-                worksheet.cell(row=row_idx, column=col_idx, value=value)
-        
+                worksheet.cell(row=current_row, column=col_idx, value=value)
+            current_row += 1
+       
+        if report_footer:
+            current_row += 1 # Add a blank row before the footer
+            worksheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(headers))
+            footer_cell = worksheet.cell(row=current_row, column=1, value=report_footer)
+            footer_cell.font = Font(italic=True, size=9)
+            footer_cell.alignment = Alignment(horizontal="right")
+       
         # Auto-adjust column widths
         for column in worksheet.columns:
             max_length = 0
@@ -3787,7 +3807,7 @@ class Interpreter:
             worksheet.column_dimensions[column_letter].width = adjusted_width
         
         # Add freeze panes to keep headers visible
-        worksheet.freeze_panes = "A2"
+        worksheet.freeze_panes = "A4" if report_title else "A2"
         
         # Save the workbook
         try:
@@ -5731,7 +5751,7 @@ class Interpreter:
         """
         Parses the destination clause (CREATE TABLE or INTO TABLE) for a LOAD statement.
         Returns a dictionary containing the destination mode, target table,
-        database mode (APPEND/TRUNCATE/UPSERT), and the key column for upserts.
+        database mode (APPEND/TRUNCATE/UPSERT/IGNORE), and the key column for upserts.
         """
         dest_info = {
             'mode': None, 
@@ -5759,7 +5779,7 @@ class Interpreter:
             dest_info['target'] = self._parse_table_name()
             
             mode_token = self._current_token()
-            if mode_token and mode_token[0] in ['APPEND', 'TRUNCATE', 'UPSERT']:
+            if mode_token and mode_token[0] in ['APPEND', 'TRUNCATE', 'UPSERT', 'IGNORE']:
                 dest_info['db_mode'] = mode_token[1].upper()
                 self._next_token()
 
@@ -5772,7 +5792,10 @@ class Interpreter:
                     self._next_token() # Consume KEY
                     dest_info['key_column'] = self._parse_expression()
             else: 
-                self._error("Expected APPEND, TRUNCATE, or UPSERT for INTO TABLE clause.")
+                # If a mode is required after INTO TABLE, this error is correct.
+                # If APPEND is the default, this logic might need adjustment.
+                # For now, we assume a mode is required.
+                self._error("Expected APPEND, TRUNCATE, UPSERT, or IGNORE for INTO TABLE clause.")
         else: 
             self._error("Expected CREATE TABLE or INTO TABLE clause after filename.")
 
@@ -6267,47 +6290,42 @@ class Interpreter:
         """
         record_tag = options.get('record_tag')
         if not record_tag:
-            try:
-                # Use the same cascading heuristic from ANALYZE XML
-                root = ET.parse(filename).getroot()
-                
-                # Strategy 1: Check for a repeating tag directly under the root
-                if len(root) > 0:
-                    direct_child_tags = Counter(self._clean_tag(child.tag) for child in root)
-                    predominant_tag, count = direct_child_tags.most_common(1)[0]
-                    if count > 1:
-                        record_tag = predominant_tag
-
-                # Strategy 2: If Strategy 1 failed, check the next level down
-                if not record_tag and len(root) > 0:
-                    second_level_tags = Counter()
-                    for child in root:
-                        for grandchild in child:
-                            second_level_tags[self._clean_tag(grandchild.tag)] += 1
-                    
-                    if second_level_tags:
-                        record_tag, _ = second_level_tags.most_common(1)[0]
-                
-                if record_tag:
-                    print(f"Notice: 'record_tag' not specified. Inferred '<{record_tag}>'.", file=sys.stderr)
-                else:
-                    self._error("Could not auto-detect a repeating record tag. Please specify one using OPTIONS \"record_tag=...\"")
-
-            except ET.ParseError as e:
-                self._error(f"XML parsing error during record_tag detection: {e}")
+            record_tag, _ = self._infer_record_tag_from_xml(filename) # Unpack the tuple
+            if record_tag:
+                print(f"Notice: 'record_tag' not specified. Inferred '<{record_tag}>'.", file=sys.stderr)
+            else:
+                self._error("Could not auto-detect a repeating record tag. Please specify one using OPTIONS \"record_tag=...\"")
 
         if not record_tag:
             self._error("LOAD XML requires an OPTIONS string with 'record_tag=<name>' specified.")
 
         try:
-            # --- 1. Infer headers by finding the first record element ---
-            headers = []
-            for event, element in ET.iterparse(filename):
+            # --- 1. Infer headers by sampling N records to find all possible columns ---
+            seen_headers = set()
+            ordered_headers = [] # Preserve order of discovery
+            sample_size = int(options.get('samplesize', 1000))
+            records_sampled = 0
+            
+            context_for_headers = ET.iterparse(filename, events=('end',))
+            for _, element in context_for_headers:
+                # Check if the element that just finished parsing is our record tag
                 if self._clean_tag(element.tag) == self._clean_tag(record_tag):
-                    # Strip namespaces from headers for cleaner column names
-                    headers = [self._clean_tag(child.tag) for child in element]
-                    break  # Stop after finding the first record
+                    if records_sampled < sample_size:
+                        for child in element:
+                            clean_child_tag = self._clean_tag(child.tag)
+                            if clean_child_tag not in seen_headers:
+                                seen_headers.add(clean_child_tag)
+                                ordered_headers.append(clean_child_tag)
+                        records_sampled += 1
+                    
+                    # After processing this record, clear it to save memory
+                    element.clear()
 
+                    # If our sample is full, we can stop this first pass
+                    if records_sampled >= sample_size:
+                        break
+            
+            headers = ordered_headers
             yield {'type': 'headers', 'data': headers}
 
             # --- 2. Stream the file again to yield data rows ---
@@ -6317,45 +6335,42 @@ class Interpreter:
             skip = int(options.get('skip', 0))
 
             for _, element in context:
+                # Check if the element that just finished parsing is our record tag
                 if self._clean_tag(element.tag) == self._clean_tag(record_tag):
+                    # It is our record tag. Process it.
                     if row_num < skip:
                         row_num += 1
-                        element.clear()
-                        continue
-
-                    if limit != -1 and (row_num - skip) >= limit:
-                        element.clear()
-                        continue # Keep clearing to free memory even after limit is reached
-
-                    data_row = []
-                    for h in headers:
-                        # Find the child element that corresponds to the clean header
-                        child_element = None
-                        for child in element:
-                            if self._clean_tag(child.tag) == h:
-                                child_element = child
-                                break
-
-                        value = "" # Default to empty string
-                        if child_element is not None:
-                            # If the element has children or attributes, it's a complex type
-                            if len(child_element) > 0 or child_element.attrib:
-                                # Serialize the complex element to a JSON string
-                                value = json.dumps(self._xml_element_to_dict(child_element))
-                            else:
-                                # Otherwise, it's a simple element, just get its text
-                                value = child_element.text or ""
+                    elif limit != -1 and (row_num - skip) >= limit:
+                        pass # Continue loop to ensure all elements get cleared
+                    else:
+                        # Build a dictionary of the current record's children for efficient lookup
+                        current_record_children = {self._clean_tag(child.tag): child for child in element}
                         
-                        data_row.append(value)
+                        data_row = []
+                        for h in headers: # Iterate through the master list of all possible headers
+                            child_element = current_record_children.get(h)
+                            
+                            value = "" # Default to empty string if tag is missing in this record
+                            if child_element is not None:
+                                if len(child_element) > 0 or child_element.attrib:
+                                    value = json.dumps(self._xml_element_to_dict(child_element))
+                                else:
+                                    value = child_element.text or ""
+                            
+                            data_row.append(value)
 
-                    yield {
-                        'type': 'data',
-                        'data': data_row,
-                        'physical_line_num': 0,  # Not applicable for XML stream
-                        'logical_line_num': row_num - skip + 1
-                    }
+                        yield {
+                            'type': 'data',
+                            'data': data_row,
+                            'physical_line_num': 0,
+                            'logical_line_num': row_num - skip + 1
+                        }
+                    
                     row_num += 1
-                    element.clear()  # CRITICAL: Free the element from memory after processing
+                
+                    # IMPORTANT: This clear now happens to ALL elements, but only AFTER
+                    # the 'if' block has had a chance to process a record and its children.
+                    element.clear()
 
         except FileNotFoundError:
             self._error(f"File not found: {filename}")
@@ -6371,14 +6386,34 @@ class Interpreter:
             with open(filename, 'r', encoding=options.get('encoding', 'utf-8')) as infile:
                 data = json.load(infile)
 
+            # Handle the new record_path option to dive into a nested structure
+            record_path = options.get('record_path')
+            if record_path:
+                path_keys = record_path.split('.')
+                target_data = data
+                try:
+                    for key in path_keys:
+                        target_data = target_data[key]
+                    data = target_data # Replace original data with the nested array
+                except (KeyError, TypeError):
+                    print(f"The specified 'record_path' ('{record_path}') was not found in the JSON file.", file=sys.stderr)
+            else:
+                # NEW HEURISTIC: If not specified, auto-dive into single-key objects that contain an array
+                if isinstance(data, dict) and len(data) == 1:
+                    single_key = list(data.keys())[0]
+                    potential_data = data[single_key]
+                    if isinstance(potential_data, list):
+                        data = potential_data
+                        print(f"Notice: Automatically using single key ('{single_key}') as the record source.", file=sys.stderr)
+
             # Ensure data is a list of records
             if isinstance(data, dict):
                 data = [data]
             if not isinstance(data, list):
-                self._error("JSON file must contain an array of objects or a single object.")
+                self._error("The final JSON data to be loaded must be an array of objects.")
 
             if not data:
-                # If the file is empty, yield empty headers and stop.
+                # If the array is empty, yield empty headers and stop.
                 yield {'type': 'headers', 'data': []}
                 return
 
@@ -6431,7 +6466,62 @@ class Interpreter:
             self._error(f"File not found: {filename}")
         except json.JSONDecodeError as e:
             self._error(f"Invalid JSON in file '{filename}': {e}")
+    
+    def _infer_record_tag_from_xml(self, filename):
+        """
+        Scans an XML file to find the most likely repeating record tag.
+        It prioritizes a tag that overwhelmingly dominates as a child of its parent.
+        """
+        path_tags = []
+        # Key: parent_tag, Value: Counter of child tags
+        parent_child_map = {}
+        tag_counts = Counter()
+        
+        try:
+            for event, element in ET.iterparse(filename, events=('start', 'end')):
+                clean_tag = self._clean_tag(element.tag)
+                
+                if event == 'start':
+                    if path_tags:
+                        parent_tag = path_tags[-1]
+                        if parent_tag not in parent_child_map:
+                            parent_child_map[parent_tag] = Counter()
+                        parent_child_map[parent_tag][clean_tag] += 1
+                    
+                    tag_counts[clean_tag] += 1
+                    path_tags.append(clean_tag)
+                
+                elif event == 'end':
+                    path_tags.pop()
+                    element.clear() # Free memory as we go
+
+        except ET.ParseError:
+            return None, 0
+
+        best_candidate = None
+        best_candidate_count = 0
+        highest_homogeneity_score = -1.0
+
+        for parent_tag, children_counter in parent_child_map.items():
+            if not children_counter:
+                continue
             
+            most_common_child, child_count = children_counter.most_common(1)[0]
+            
+            if child_count < 2:
+                continue
+                
+            total_children = sum(children_counter.values())
+            homogeneity = child_count / total_children
+            score = homogeneity + (child_count / (total_children + 1.0))
+            
+            if score > highest_homogeneity_score:
+                highest_homogeneity_score = score
+                best_candidate = most_common_child
+                best_candidate_count = tag_counts.get(most_common_child, 0)
+                
+        return best_candidate, best_candidate_count
+        
     def _stream_xml_to_metadata_table(self, filename, metadata_table_name):
         """
         STAGE 1: Streams an XML file and populates a temporary metadata table.
@@ -6791,7 +6881,7 @@ class Interpreter:
                         transform_rules[col_name.lower()] = func_def
                     elif len(parts) == 1:
                         transform_rules[parts[0].lower()] = True
-            #print("DEBUG: TRANSFORM RULES:", transform_rules)
+
             validation_rules = {}
             validate_spec = options.get('validate')
             if validate_spec:
@@ -6829,7 +6919,13 @@ class Interpreter:
                         new_headers.append(new_name)
                     
                     final_headers, column_map = new_headers, new_map
-            
+            if not final_headers:
+                error_msg = f"Could not determine any columns from the source file '{filename}'. "
+                if dest_info['load_type'] == 'XML':
+                    error_msg += "The 'record_tag' may have been inferred incorrectly. Please specify it using the OPTIONS clause."
+                elif dest_info['load_type'] in ['CSV', 'EXCEL']:
+                    error_msg += "Check if the file is empty or if the 'header=true' option is needed."
+                self._halt(error_msg)
             if transform_rules:
                 # Get a lowercase set of all headers that will be in the final table
                 final_header_set = {h.lower() for h in final_headers}
@@ -7067,7 +7163,9 @@ class Interpreter:
 
             else: # APPEND or TRUNCATE logic
                 batchsize = int(options.get('batchsize', 10000))
-                insert_sql = f"INSERT INTO {self._quote_identifier(dest_info['target'])} ({', '.join([self._quote_identifier(h) for h in final_headers])}) VALUES ({', '.join(['?'] * len(final_headers))})"
+                insert_prefix = "INSERT OR IGNORE INTO" if dest_info.get('db_mode') == 'IGNORE' else "INSERT INTO"
+                insert_sql = f"{insert_prefix} {self._quote_identifier(dest_info['target'])} ({', '.join([self._quote_identifier(h) for h in final_headers])}) VALUES ({', '.join(['?'] * len(final_headers))})"
+                
                 batch = []
                 total_rows = 0
                 self.db_connection.execute('BEGIN TRANSACTION;')
@@ -7181,12 +7279,16 @@ class Interpreter:
         # Convert child elements
         for child in element:
             child_dict = self._xml_element_to_dict(child)
-            if child.tag in node:
-                if not isinstance(node[child.tag], list):
-                    node[child.tag] = [node[child.tag]]
-                node[child.tag].append(child_dict)
+            
+            # Clean the tag name to remove namespaces before using it as a key
+            clean_tag = self._clean_tag(child.tag)
+            
+            if clean_tag in node:
+                if not isinstance(node[clean_tag], list):
+                    node[clean_tag] = [node[clean_tag]]
+                node[clean_tag].append(child_dict)
             else:
-                node[child.tag] = child_dict
+                node[clean_tag] = child_dict
         
         text = element.text.strip() if element.text else ""
 
@@ -8170,9 +8272,17 @@ class Interpreter:
         search_config = {'enabled': False, 'fields': []}
         lookup_definitions = {}
         is_readonly = False
+        pk_column_override = None
         
         while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
             token = self._current_token()
+            if token[0] == 'USING':
+                self._next_token() # Consume USING
+                if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'KEY'):
+                    self._error("Expected KEY after USING.")
+                self._next_token() # Consume KEY
+                pk_column_override = self._parse_expression()
+                continue # Continue to next clause
             if token[0] == 'ID' and token[1].upper() == 'FIELDS':
                 self._next_token()
                 temp_columns = []
@@ -8228,8 +8338,9 @@ class Interpreter:
             else:
                 break
 
+        pk_column = pk_column_override if pk_column_override else self._get_primary_key(table_name)
         metadata = self._get_table_metadata(table_name)
-        pk_column = metadata['pk']
+        
         all_column_names = metadata['columns']
         column_types = metadata['types']
         numeric_types = {'INTEGER', 'REAL', 'NUMERIC', 'INT', 'BIGINT', 'FLOAT', 'DOUBLE', 'DECIMAL'}
@@ -9271,7 +9382,7 @@ class Interpreter:
         Analyzes an XML file, provides a structural and heuristic report,
         and optionally saves the report into a hash variable.
         """
-        from collections import Counter # Local import
+
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ANALYZE XML')
         filename = self._parse_expression()
@@ -9293,47 +9404,22 @@ class Interpreter:
                     ns = element.tag.split('}')[0][1:]
                     namespaces.add(ns)
                     
-            # --- NEW: More Intelligent Heuristic Analysis ---
             report = {}
-            best_candidate = ""
-            record_count = 0
-
-            # Strategy 1: Check for a repeating tag directly under the root (for flat XML).
-            if len(root) > 0:
-                direct_child_tags = Counter(self._clean_tag(child.tag) for child in root)
-                predominant_tag, count = direct_child_tags.most_common(1)[0]
-                # If one tag repeats, it's almost certainly the record tag.
-                if count > 1:
-                    best_candidate = predominant_tag
-                    record_count = count
-
-            # Strategy 2: If Strategy 1 failed (e.g., root has <header> and <programs> once each),
-            # check the next level down (for nested XML).
-            if not best_candidate and len(root) > 0:
-                second_level_tags = Counter()
-                for child in root:
-                    for grandchild in child:
-                        second_level_tags[self._clean_tag(grandchild.tag)] += 1
-                
-                if second_level_tags:
-                    best_candidate, record_count = second_level_tags.most_common(1)[0]
+            best_candidate, record_count = self._infer_record_tag_from_xml(filename)
 
             report['ROOT_ELEMENT'] = self._clean_tag(root.tag)
             report['TOTAL_CHILD_ELEMENTS'] = len(root)
-            report['PREDOMINANT_RECORD_TAG'] = best_candidate
+            report['PREDOMINANT_RECORD_TAG'] = best_candidate or ""
             report['RECORD_COUNT'] = record_count
             report['NAMESPACES'] = list(namespaces)
-            # --- Full Structure Analysis Logic ---
-            # Convert the entire XML tree to a dictionary for full analysis
+            
             data_dict = self._xml_element_to_dict(root)
             should_strip_ns = (len(namespaces) == 1)
             report['STRUCTURE_TEXT'] = self._describe_xml_from_dict(data_dict, self._clean_tag(root.tag), strip_ns=should_strip_ns)
-            # Add the full structure to the report dictionary if saving to a variable
+            
             if into_hash_name:
                 self.variables[into_hash_name] = self._python_to_basic_data(report)
             
-            # --- Output to Console ---
-            # If not saving to a variable, print both reports to the console.
             if not into_hash_name:
                 print(f"--- XML Analysis Report for: {filename} ---")
                 print(f"  --- Heuristic Analysis ---")
@@ -9347,7 +9433,7 @@ class Interpreter:
                         print(f"  - {ns}")
                         
                 print(f"\n  --- Simplified Structure ---")
-                print(report['STRUCTURE_TEXT'])  # structure report
+                print(report['STRUCTURE_TEXT'])
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -9457,14 +9543,34 @@ class Interpreter:
 
             table_names_to_show = []
             if self._current_token() and self._current_token()[0] not in ['SEMICOLON', 'NEWLINE', 'END']:
-                table_name = self._parse_table_name()
+                table_name = ""
+                token = self._current_token()
+
+                if token[0] == 'STRING':
+                    table_name = token[1][1:-1]
+                    self._next_token()
+                elif token[0] == 'ID':
+                    var_name = token[1]
+                    if self._find_variable_key(var_name) is not None:
+                        table_name_value = self._parse_expression()
+                        if not isinstance(table_name_value, str) or not table_name_value.strip():
+                            self._error(f"SHOW CREATE TABLE table name variable '{var_name}' did not resolve to a non-empty string.")
+                        table_name = table_name_value.strip()
+                    else:
+                        table_name = var_name
+                        self._next_token()
+                else:
+                    self._error("SHOW CREATE TABLE expects a table name (as a quoted string, variable, or unquoted literal).")
+                
+                if not table_name:
+                    self._error("Could not determine table name for SHOW CREATE TABLE.")
                 table_names_to_show.append(table_name)
             else:
                 table_names_to_show = self._get_table_list()
-            
+                
             if self._current_token() and self._current_token()[0] == 'SEMICOLON':
                 self._next_token()
-
+                
             for name in table_names_to_show:
                 if self.db_engine == 'duckdb':
                     sql = f"SELECT sql FROM duckdb_tables() WHERE table_name = '{name}'"
@@ -9484,7 +9590,32 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] == 'TABLE':
             self._next_token()
         
-        table_name = self._parse_table_name()
+        table_name = ""
+        token = self._current_token()
+
+        if token[0] == 'STRING':
+            # Case 1: A quoted literal string like "my_table"
+            table_name = token[1][1:-1]
+            self._next_token()
+        elif token[0] == 'ID':
+            var_name = token[1]
+            # Check if the ID matches an existing variable
+            if self._find_variable_key(var_name) is not None:
+                # Case 2: It's a variable, so evaluate it as an expression
+                table_name_value = self._parse_expression()
+                if not isinstance(table_name_value, str) or not table_name_value.strip():
+                    self._error(f"DESCRIBE table name variable '{var_name}' did not resolve to a non-empty string.")
+                table_name = table_name_value.strip()
+            else:
+                # Case 3: It's not a known variable, treat as an unquoted literal name
+                table_name = var_name
+                self._next_token()
+        else:
+            self._error("DESCRIBE expects a table name (as a quoted string, variable, or unquoted literal).")
+        
+        if not table_name:
+             self._error("Could not determine table name for DESCRIBE.")
+
         # Optional: consume semicolon if present
         if self._current_token() and self._current_token()[0] == 'SEMICOLON':
             self._next_token()
@@ -9503,12 +9634,6 @@ class Interpreter:
                 self._handle_output(results, column_names)
             else:
                 print(f"Table '{table_name}' not found.", file=sys.stderr)
-                
-        except Exception as e:
-            self.variables['ERR'] = 1.0
-            self.variables['ERRMSG$'] = str(e)
-            if self.sql_fatal_errors:
-                self._error(f"Error describing table: {e}")
                 
         except Exception as e:
             self.variables['ERR'] = 1.0
@@ -9538,20 +9663,29 @@ class Interpreter:
         email_details = {}
         while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
             token_type = self._current_token()[0]
-            # <<< MODIFIED: Add ATTACH to the list of valid keywords >>>
             if token_type not in ['TO', 'CC', 'BCC', 'SUBJECT', 'BODY', 'HTMLBODY', 'ATTACH']:
                 self._error(f"Unexpected keyword '{token_type}' in EMAIL statement.")
             self._next_token()
             email_details[token_type.lower()] = self._parse_expression()
         
         provider = self.email_config['provider'].lower()
-        
+        if provider == 'sendgrid':
+            if not self.email_config.get('apikey') or not self.email_config.get('sender'):
+                self._error("SendGrid requires APIKEY and SENDER to be set.")
+        elif provider == 'mailgun':
+             if not self.email_config.get('apikey') or not self.email_config.get('sender') or not self.email_config.get('domain'):
+                self._error("Mailgun requires APIKEY, SENDER, and DOMAIN to be set.")
+        elif provider == 'smtp':
+            required_keys = ['host', 'port', 'user', 'password', 'sender']
+            if not all(key in self.email_config for key in required_keys):
+                self._error("SMTP requires HOST, PORT, USER, PASSWORD, and SENDER to be set.")
+        else:
+            self._error(f"Email provider '{self.email_config['provider']}' is not supported.")
+
         try:
             if provider == 'sendgrid':
                 api_key = self.email_config.get('apikey')
                 sender_email = self.email_config.get('sender')
-                if not api_key or not sender_email:
-                    self._error("SendGrid requires APIKEY and SENDER to be set.")
 
                 personalizations = [{"to": [{"email": e.strip()} for e in email_details.get('to', '').split(',')]}]
                 if email_details.get('cc'): personalizations[0]['cc'] = [{"email": e.strip()} for e in email_details['cc'].split(',')]
@@ -9563,7 +9697,6 @@ class Interpreter:
 
                 payload = {"personalizations": personalizations, "from": {"email": sender_email}, "subject": email_details.get('subject', '(No Subject)'), "content": content}
                 
-                # <<< MODIFIED: Add attachment logic for SendGrid >>>
                 if email_details.get('attach'):
                     attachments = []
                     for file_path in email_details['attach'].split(','):
@@ -9590,8 +9723,6 @@ class Interpreter:
                 api_key = self.email_config.get('apikey')
                 sender_email = self.email_config.get('sender')
                 domain = self.email_config.get('domain')
-                if not api_key or not sender_email or not domain:
-                    self._error("Mailgun requires APIKEY, SENDER, and DOMAIN to be set.")
 
                 payload = {
                     'from': sender_email, 'to': email_details.get('to', ''),
@@ -9601,7 +9732,6 @@ class Interpreter:
                 if email_details.get('cc'): payload['cc'] = email_details['cc']
                 if email_details.get('bcc'): payload['bcc'] = email_details['bcc']
 
-                # <<< MODIFIED: Add attachment logic for Mailgun >>>
                 files_to_send = []
                 if email_details.get('attach'):
                     for file_path in email_details['attach'].split(','):
@@ -9628,8 +9758,60 @@ class Interpreter:
                 if 200 <= response.status_code < 300: self.variables['ERR'] = 0.0
                 else: self.variables['ERR'] = float(response.status_code); self.variables['ERRMSG$'] = response.text
             
+            elif provider == 'smtp':
+                cfg = self.email_config
+                required_keys = ['host', 'port', 'user', 'password', 'sender']
+                
+                msg = MIMEMultipart()
+                msg['From'] = cfg['sender']
+                msg['Subject'] = email_details.get('subject', '(No Subject)')
+                
+                recipients = []
+                if email_details.get('to'):
+                    msg['To'] = email_details['to']
+                    recipients.extend(e.strip() for e in email_details['to'].split(','))
+                if email_details.get('cc'):
+                    msg['Cc'] = email_details['cc']
+                    recipients.extend(e.strip() for e in email_details['cc'].split(','))
+                if email_details.get('bcc'):
+                    # BCC recipients are not included in the message headers
+                    recipients.extend(e.strip() for e in email_details['bcc'].split(','))
+
+                # Attach body parts
+                if email_details.get('body'):
+                    msg.attach(MIMEText(email_details['body'], 'plain'))
+                if email_details.get('htmlbody'):
+                    msg.attach(MIMEText(email_details['htmlbody'], 'html'))
+
+                # Attach files
+                if email_details.get('attach'):
+                    for file_path in email_details['attach'].split(','):
+                        file_path = file_path.strip()
+                        try:
+                            with open(file_path, 'rb') as f:
+                                part = MIMEApplication(f.read(), Name=os.path.basename(file_path))
+                            part['Content-Disposition'] = f'attachment; filename="{os.path.basename(file_path)}"'
+                            msg.attach(part)
+                        except FileNotFoundError:
+                            self._error(f"Attachment file not found: {file_path}")
+
+                # Connect to server and send
+                security = cfg.get('security', '').upper()
+                server = None
+                if security == 'SSL':
+                    server = smtplib.SMTP_SSL(cfg['host'], cfg['port'])
+                else:
+                    server = smtplib.SMTP(cfg['host'], cfg['port'])
+                    if security == 'TLS':
+                        server.starttls()
+                
+                with server:
+                    server.login(cfg['user'], cfg['password'])
+                    server.send_message(msg, from_addr=cfg['sender'], to_addrs=recipients)
+            
             else:
                 self._error(f"Email provider '{self.email_config['provider']}' is not supported.")
+
         except Exception as e:
             self.variables['ERR'] = -1.0; self.variables['ERRMSG$'] = str(e)
             
