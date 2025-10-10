@@ -298,7 +298,8 @@ def preprocess_continuations(source_code):
     while i < len(source_code):
         char = source_code[i]
         if not in_string and not in_comment:
-            if char.upper() == 'R' and source_code[i:i+3].upper() == 'REM': in_comment = True
+            #if char.upper() == 'R' and source_code[i:i+3].upper() == 'REM': in_comment = True
+            if char.upper() == 'R' and source_code[i:i+3].upper() == 'REM' and (len(source_code) == i + 3 or not source_code[i+3].isalnum()): in_comment = True
             elif source_code[i:i+2] == '--': in_comment = True
             elif char in ['"', '`']: in_string, string_char = True, char
         elif in_string and char == string_char:
@@ -409,7 +410,7 @@ class Lexer:
             # ---------------------------
             ('STRING', r'"([^"]|"")*"'), ('SINGLE_Q_STRING', r"'[^']*'"),
             ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?'),
-            ('REM', r'REM[^\n]*'), ('DASH_COMMENT', r'--[^\n]*'),
+            ('REM', r'\bREM\b[^\n]*'), ('DASH_COMMENT', r'--[^\n]*'),
             ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
             ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZETEXT', r'\bANALYZETEXT\b'),
             ('LINEINPUT', r'\bLINEINPUT\b(?!\$)'), ('TOFILE', r'\bTOFILE\b(?!\$)'), ('READFILE', r'\bREADFILE\b(?!\$)'),
@@ -441,7 +442,7 @@ class Lexer:
             ('ELSEIF', r'\bELSEIF\b(?!\$)'),('ELSE', r'\bELSE\b(?!\$)'), ('ENDIF', r'\bENDIF\b(?!\$)'), 
             ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),('ECHO', r'\bECHO\b(?!\$)'),
             ('ZIP', r'\bZIP\b(?!\$)'),('UNZIP', r'\bUNZIP\b(?!\$)'), ('UNPACK', r'\bUNPACK\b(?!\$)'),
-            ('DO', r'\bDO\b(?!\$)'), ('UNTIL', r'\bUNTIL\b(?!\$)'),
+            ('DO', r'\bDO\b(?!\$)'), ('UNTIL', r'\bUNTIL\b(?!\$)'), ('UPGRADE', r'\bUPGRADE\b(?!\$)'),
             ('STEP', r'\bSTEP\b(?!\$)'), ('NEXT', r'\bNEXT\b(?!\$)'), ('IN', r'\bIN\b(?!\$)'), ('LOOP', r'\bLOOP\b(?!\$)'),
             ('WHILE', r'\bWHILE\b(?!\$)'), ('WEND', r'\bWEND\b(?!\$)'), ('NOT', r'\bNOT\b(?!\$)'), ('END', r'\bEND\b(?!\$)'),
             ('EXIT', r'\bEXIT\b(?!\$)'), ('FILES', r'\bFILES\b(?!\$)'), ('CHDIR', r'\bCHDIR\b(?!\$)'),
@@ -578,15 +579,20 @@ class Formatter:
         while val_idx < len(values):
             if fmt_idx >= len(format_string): break
             char = format_string[fmt_idx]
-            if char in '#0*!&\\' or (char in '<>^' and format_string[fmt_idx+1:fmt_idx+2] == '\\'):
-                mask_regex = re.compile(r"([<>^]?\\ *\\[\s]*|!|&+|[#0\*,]+\.?[#0]*\^*)")
+            if char in '#0*!&\\$': # Check for '$' as a potential start of a mask
+                # <<< CORRECTED REGEX to properly match masks starting with '$' or '*' >>>
+                mask_regex = re.compile(r"([<>^]?\\ *\\[\s]*|!|&+|[\$*#0, ]+\.?[#0]*\^*)")
                 match = mask_regex.match(format_string, fmt_idx)
                 if match:
                     mask = match.group(0)
                     output += Formatter._format_value(values[val_idx], mask)
                     val_idx += 1; fmt_idx += len(mask)
-                else: output += char; fmt_idx += 1
-            else: output += char; fmt_idx += 1
+                else:
+                    output += char
+                    fmt_idx += 1
+            else:
+                output += char
+                fmt_idx += 1
         return output
     
     @staticmethod
@@ -595,6 +601,7 @@ class Formatter:
     
     @staticmethod
     def _format_scientific(value, mask, is_negative):
+        # (This function is unchanged)
         caret_pos = mask.find('^^^^')
         before_caret = mask[:caret_pos]
         mantissa_str, exponent_str = f"{value:e}".split('e')
@@ -606,44 +613,90 @@ class Formatter:
             if ' ' in result: return result.replace(' ', '-', 1)
             else: return '-' + result
         return result
-        
+
     @staticmethod
     def _format_numeric(value, mask, force_positive=False):
+        # <<< FINAL VERSION using your suggested algorithm for '$$' >>>
         is_negative = value < 0 and not force_positive
-        if is_negative: value = abs(value)
-        if '^^^^' in mask: return Formatter._format_scientific(value, mask, is_negative)
-        decimal_pos = mask.find('.')
-        decimals = 0
-        integer_mask = mask
-        if decimal_pos != -1:
-            decimals = len(re.findall(r'[#0]', mask[decimal_pos+1:]))
-            integer_mask = mask[:decimal_pos]
-        formatted_num = f"{value:.{decimals}f}"
-        int_part, dec_part = formatted_num.split('.') if '.' in formatted_num else (formatted_num, "")
-        result, int_idx, digit_count = "", len(int_part) - 1, 0
-        has_leading_asterisk = integer_mask.strip().startswith('*')
-        for i in range(len(integer_mask) - 1, -1, -1):
-            mask_char = integer_mask[i]
-            if mask_char in '#0*':
-                if int_idx >= 0: result, int_idx, digit_count = int_part[int_idx] + result, int_idx - 1, digit_count + 1
-                elif mask_char == '0': result, digit_count = '0' + result, digit_count + 1
-                elif mask_char == '*' and has_leading_asterisk: result = '*' + result
-                else: result = ' ' + result
-            elif mask_char == ',':
-                if digit_count > 0 and int_idx >= 0: result = ',' + result
-                elif has_leading_asterisk: result = '*' + result
-                else: result = ' ' + result
-            else: result = mask_char + result
-        if int_idx >= 0: result = int_part[:int_idx+1] + result
-        if decimal_pos != -1: result += '.' + dec_part
+        abs_value = abs(value) if is_negative else value
+
+        # --- Handle floating dollar sign as a special case ---
+        if mask.startswith('$$'):
+            new_mask = mask.lstrip('$')
+            # Format the absolute value using the rest of the logic (recursive call)
+            # Pass force_positive=True to prevent the recursive call from handling the sign
+            formatted_number = Formatter._format_numeric(abs_value, new_mask, force_positive=True)
+            
+            # Trim, add the '$', and re-pad to the original mask's full width
+            trimmed_result = formatted_number.strip()
+            result_with_dollar = "$" + trimmed_result
+            positive_result = result_with_dollar.rjust(len(mask))
+        
+        else:
+            # --- Original, reliable logic for fixed literals, padding, and commas ---
+            decimal_pos = mask.find('.')
+            decimals = 0
+            integer_mask = mask
+            if decimal_pos != -1:
+                decimals = len(re.findall(r'[#0]', mask[decimal_pos+1:]))
+                integer_mask = mask[:decimal_pos]
+            
+            formatted_num = f"{abs_value:.{decimals}f}"
+            int_part, dec_part = formatted_num.split('.') if '.' in formatted_num else (formatted_num, "")
+            
+            result, int_idx, digit_count = "", len(int_part) - 1, 0
+            has_leading_asterisk = integer_mask.strip().startswith('*')
+            
+            for i in range(len(integer_mask) - 1, -1, -1):
+                mask_char = integer_mask[i]
+                if mask_char in '#0*':
+                    if int_idx >= 0:
+                        result = int_part[int_idx] + result
+                        int_idx -= 1
+                        digit_count += 1
+                    elif mask_char == '0':
+                        result = '0' + result; digit_count += 1
+                    elif mask_char == '*' and has_leading_asterisk:
+                        result = '*' + result
+                    else:
+                        result = ' ' + result
+                elif mask_char == ',':
+                    if digit_count > 0 and int_idx >= 0:
+                        result = ',' + result
+                    elif has_leading_asterisk:
+                        result = '*' + result
+                    else:
+                        result = ' ' + result
+                else:
+                    result = mask_char + result
+            
+            if int_idx >= 0: result = int_part[:int_idx+1] + result
+            if decimal_pos != -1: result += '.' + dec_part
+            positive_result = result
+
+        # --- Apply sign universally at the end ---
         if is_negative:
-            if ' ' in result: return result.replace(' ', '-', 1)
-            elif '*' in result: return result.replace('*', '-', 1)
-            else: return '-' + result
-        return result
+            if ' ' in positive_result:
+                # Find the last space before the number/dollar sign begins
+                first_char_pos = -1
+                for i, char in enumerate(positive_result):
+                    if char != ' ':
+                        first_char_pos = i
+                        break
+                
+                # Replace the space immediately to the left of the content
+                if first_char_pos > 0:
+                    pos_to_replace = first_char_pos - 1
+                    return positive_result[:pos_to_replace] + '-' + positive_result[pos_to_replace+1:]
+            
+            # Fallback for other cases (like asterisk fill or no padding)
+            return '-' + positive_result.lstrip(' ')
+
+        return positive_result
         
     @staticmethod
     def _format_string(value, mask):
+        # (This function is unchanged)
         backslash_match = re.match(r'([<>^]?)\\(\s*)\\', mask)
         if backslash_match:
             justify, field_width = backslash_match.group(1) or '<', len(backslash_match.group(2)) + 2
@@ -1143,11 +1196,19 @@ class Interpreter:
             'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 'ATTACH', 'COPY',
             'VIEW', 'INDEX', 'ORDER', 'GROUP', 'BY', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'SUMMARIZE', 'PRAGMA',
             'OUTER', 'ON', 'AS', 'IN', 'IS', 'NULL', 'NOT', 'AND', 'OR', 'LIMIT', 'OFFSET'
-        }
+    }
     INVALID_KEY_TOKENS = {
                     'ASSIGN', 'LPAREN', 'RPAREN', 'COMMA', 'STRING', 'NUMBER',
                     'OP', 'RELOP', 'DOT', 'SEMICOLON', 'COLON', 'NEWLINE', 'HASH_SYM'
-                }
+    }
+    LANGUAGE_KEYWORDS = {
+        'AND', 'OR', 'NOT', 'IF', 'THEN', 'ELSE', 'ELSEIF', 'ENDIF', 'FOR', 'TO', 'STEP', 'NEXT',
+        'WHILE', 'WEND', 'DO', 'LOOP', 'UNTIL', 'EXIT', 'GOTO', 'GOSUB', 'RETURN', 'ON', 'ERROR',
+        'PRINT', 'INPUT', 'LET', 'DIM', 'AS', 'REM', 'END', 'USING', 'IN', 'SELECT', 'FROM',
+        'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 'DROP', 'DATABASE', 'OPEN',
+        'CLOSE', 'READ', 'FILE', 'INTO', 'SAVE', 'SCHEMA', 'UPGRADE', 'XML', 'CSV', 'ANALYZE',
+        'TEXT', 'JSON', 'JSONL', 'FIXED', 'LOAD', 'SET', 'OUTPUT', 'FORMAT', 'OPTIONS'
+    }
     
     def __init__(self, lexer, cmd_args=None, debug=False, shared_db_connection=None):
         self.lexer = lexer
@@ -2243,6 +2304,14 @@ class Interpreter:
             self._parse_email_statement()
         elif token[0] == 'BELL':                                  # Ring a bell
             self._parse_bell_statement()
+        elif token[0] == 'UPGRADE':
+            # Peek at the next token to see if it's XML or CSV
+            if self._peek_token() and self._peek_token()[0] == 'XML':
+                self._parse_upgrade_xml_statement()
+            elif self._peek_token() and self._peek_token()[0] == 'CSV':
+                self._parse_upgrade_csv_statement()
+            else:
+                self._error("UPGRADE must be followed by XML or CSV.")
         elif token[0] == 'REDIRECT':
             self._next_token() # Consume REDIRECT
             destination_url = self._parse_expression()
@@ -2830,12 +2899,34 @@ class Interpreter:
                 return calendar.calendar(year)
             except (ValueError, TypeError):
                 self._error("Invalid year provided to YEARCAL$.")
+        elif name == 'FORMAT$':
+            if len(args) != 2:
+                self._error("FORMAT$ requires 2 arguments: value, mask$.")
+            value, mask = args[0], str(args[1])
+            # number/string formatting
+            return Formatter.format(mask, [value])
         elif name == 'FORMATDATE$':
-            date_obj, format_mask = self._parse_date_string(args[0]), str(args[1]).upper()
-            format_map = {'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d', 'HH': '%H', 'MI': '%M', 'SS': '%S'}
-            py_format_str = format_mask
-            for b, p in format_map.items(): py_format_str = py_format_str.replace(b, p)
-            return date_obj.strftime(py_format_str)
+            if not (2 <= len(args) <= 3):
+                self._error("FORMATDATE$ requires 2 or 3 arguments: date_string$, output_mask$, [input_mask$].")
+            
+            value, output_mask = args[0], str(args[1])
+            date_obj = None
+
+            if len(args) == 3:
+                # Case 1: User provided an explicit input mask
+                input_mask = str(args[2])
+                py_input_mask = self._convert_basic_to_python_date_mask(input_mask)
+                try:
+                    date_obj = datetime.strptime(value, py_input_mask)
+                except (ValueError, TypeError):
+                    self._error(f"Value '{value}' does not match the provided input mask '{input_mask}'.")
+            else:
+                # Case 2: Auto-detect the input format
+                date_obj = self._try_parse_date(value)
+                if not date_obj:
+                    self._error(f"Invalid or unrecognized date string provided to FORMATDATE$: '{value}'")
+            
+            return self._format_date_with_mask(date_obj, output_mask)
         elif name == 'NOW':
             if len(args) != 0:
                 self._error("NOW function takes no arguments.")
@@ -3322,8 +3413,13 @@ class Interpreter:
             right = self._parse_term()
             
             if op == '+':
-                # '+' is special: it means concatenation if either side is a string
-                res = self._to_string(res) + self._to_string(right) if isinstance(res, str) or isinstance(right, str) else res + right
+                # '+' is special: could be for strings or numeric. Use & for strings.
+                try:
+                    # Attempt numeric addition first, even with strings like "123.45"
+                    res = float(res) + float(right)
+                except (ValueError, TypeError):
+                    # If conversion to float fails, perform string concatenation
+                    res = self._to_string(res) + self._to_string(right)
             elif op_type == 'AMPERSAND':
                 # '&' ALWAYS concatenates strings
                 res = self._to_string(res) + self._to_string(right)
@@ -7219,6 +7315,22 @@ class Interpreter:
         dest_info['load_type'] = load_type 
         options = self._parse_load_options()
         
+        schema = None
+        if self._current_token() and self._current_token()[0] == 'USING':
+            self._next_token() # Consume USING
+            if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'SCHEMA'):
+                self._error("Expected SCHEMA after USING")
+            self._next_token() # Consume SCHEMA
+            
+            schema_file = self._parse_expression()
+            try:
+                with open(schema_file, 'r', encoding='utf-8') as f:
+                    schema = json.load(f)
+            except FileNotFoundError:
+                self._error(f"Schema file not found: {schema_file}")
+            except Exception as e:
+                self._error(f"Error reading schema file: {e}")
+                
         # --- MODIFIED: Unified NORMALIZE Logic ---
         if str(options.get('normalize', 'false')).lower() in ['true', '1', 'y']:
             if load_type not in ['JSON', 'XML']:
@@ -7245,19 +7357,68 @@ class Interpreter:
                 self._error(f"An error occurred during {load_type} normalization: {e}")
             return # Stop here, normalization is complete
 
-        # --- Standard (non-normalized) Pipeline Path ---
-        extractor_map = {
-            'CSV': self._csv_extractor, 'EXCEL': self._excel_extractor,
-            'FIXED': self._fixed_extractor, 'JSONL': self._jsonl_extractor,
-            'TEXT': self._text_extractor, 'HTML': self._html_extractor,
-            'XML': self._xml_extractor, 'JSON': self._json_extractor,
-        }
+        run_schema_path = (schema is not None) and (load_type == 'CSV')
+        if schema is not None and load_type != 'CSV':
+            print(f"Warning: USING SCHEMA is only supported for LOAD CSV and will be ignored for this LOAD {load_type} command.", file=sys.stderr)
+        if run_schema_path:
+            print(f"Loading '{filename}' into table '{dest_info['target']}' using schema...")
+            try:
+                # 1. Get the transformer generator
+                transformer = self._transform_csv_with_schema(filename, schema)
+                
+                # 2. Get the transformed headers
+                target_headers = next(transformer)
+                
+                # 3. Prepare the database table
+                cursor = self.db_cursor
+                if dest_info['mode'] == 'CREATE_TABLE':
+                    if self._table_exists(dest_info['target']):
+                        self._error(f"Table '{dest_info['target']}' already exists. Use INTO TABLE ... TRUNCATE to overwrite.")
+                    cols_def = ', '.join([f"{self._quote_identifier(h)} TEXT" for h in target_headers])
+                    cursor.execute(f"CREATE TABLE {self._quote_identifier(dest_info['target'])} ({cols_def});")
+                
+                if dest_info.get('db_mode') == 'TRUNCATE':
+                    cursor.execute(f"DELETE FROM {self._quote_identifier(dest_info['target'])};")
+                
+                # 4. Load the transformed data in batches
+                batchsize = int(options.get('batchsize', 10000))
+                insert_prefix = "INSERT OR IGNORE INTO" if dest_info.get('db_mode') == 'IGNORE' else "INSERT INTO"
+                insert_sql = f"{insert_prefix} {self._quote_identifier(dest_info['target'])} ({', '.join([self._quote_identifier(h) for h in target_headers])}) VALUES ({', '.join(['?'] * len(target_headers))})"
+                
+                batch = []
+                total_rows = 0
+                self.db_connection.execute('BEGIN TRANSACTION;')
+                try:
+                    for transformed_row in transformer:
+                        batch.append(transformed_row)
+                        total_rows += 1
+                        if len(batch) >= batchsize:
+                            cursor.executemany(insert_sql, batch)
+                            batch = []
+                    
+                    if batch: cursor.executemany(insert_sql, batch)
+                    self.db_connection.execute('COMMIT;')
+                    print(f"{total_rows} records transformed and loaded into table {dest_info['target']}")
+                except Exception as e:
+                    self.db_connection.execute('ROLLBACK;')
+                    raise e
+            except Exception as e:
+                self._error(f"An error occurred during the schema-based LOAD operation: {e}")
 
-        if load_type in extractor_map:
-            extractor_func = extractor_map[load_type]
-            self._execute_load_pipeline(filename, dest_info, options, extractor_func)
         else:
-            self._error(f"No execution path defined for LOAD type: {load_type}")  
+            # --- Standard (non-normalized) Pipeline Path ---
+            extractor_map = {
+                'CSV': self._csv_extractor, 'EXCEL': self._excel_extractor,
+                'FIXED': self._fixed_extractor, 'JSONL': self._jsonl_extractor,
+                'TEXT': self._text_extractor, 'HTML': self._html_extractor,
+                'XML': self._xml_extractor, 'JSON': self._json_extractor,
+            }
+
+            if load_type in extractor_map:
+                extractor_func = extractor_map[load_type]
+                self._execute_load_pipeline(filename, dest_info, options, extractor_func)
+            else:
+                self._error(f"No execution path defined for LOAD type: {load_type}")  
        
 
     def _value_converter(self, value):
@@ -7750,14 +7911,710 @@ class Interpreter:
             if value is None: self.variables[var_name] = "" if var_name.endswith('$') else 0.0
             else: self.variables[var_name] = value
         else: self._error(f"Invalid assignment statement for '{var_name}'")
+    
+    def _try_parse_date(self, value):
+        """Attempts to parse a string into a datetime object using common formats. Returns object or None."""
+        if not isinstance(value, str):
+            return None
+        # Add more formats here if needed
+        for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d', '%Y%m%d', '%Y-%m-%d %H:%M:%S'):
+            try:
+                return datetime.strptime(value, fmt)
+            except (ValueError, TypeError):
+                continue
+        return None
 
+    def _convert_basic_to_python_date_mask(self, basic_mask):
+        """Converts a DbBasic date mask (YYYY) to a Python strftime mask (%Y)."""
+        py_format_str = str(basic_mask).upper()
+        # Use a defined order to prevent incorrect replacements (e.g., YYYY -> %y%y)
+        format_map = {'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d', 'HH': '%H', 'MI': '%M', 'SS': '%S'}
+        for key in ['YYYY', 'YY', 'MM', 'DD', 'HH', 'MI', 'SS']:
+            py_format_str = py_format_str.replace(key, format_map[key])
+        return py_format_str
+        
+    def _format_date_with_mask(self, date_obj, mask):
+        """Applies DbBasic date format masks to a datetime object."""
+        py_format_str = self._convert_basic_to_python_date_mask(mask)
+        return date_obj.strftime(py_format_str)
+        
+    def _transform_csv_with_schema(self, filename, schema_object):
+        """
+        A generator that reads a source CSV, applies transformation rules from a schema,
+        runs a PROCESS_BY script (either from a variable or directly embedded),
+        and yields the transformed data row by row.
+        """
+        columns = schema_object if isinstance(schema_object, list) else schema_object.get('columns', [])
+        if not columns:
+            self._error("Schema file must contain a 'columns' array.")
+
+        process_script = None
+        script_source = schema_object.get('process_by') if isinstance(schema_object, dict) else None
+        if script_source:
+            is_simple_var = re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*\$?$', script_source)
+            if is_simple_var and script_source in self.variables and isinstance(self.variables[script_source], str):
+                process_script = self.variables[script_source]
+            else:
+                process_script = script_source
+
+        try:
+            with open(filename, 'r', encoding='utf-8', newline='') as infile:
+                reader = csv.reader(infile)
+                
+                source_headers = [h.strip() for h in next(reader)]
+                target_headers = [col.get('name', f'column_{i+1}') for i, col in enumerate(columns)]
+                
+                yield target_headers
+                
+                for line_num, source_row in enumerate(reader, 2):
+                    new_row = []
+                    temp_vars_backup, created_vars = {}, set()
+
+                    for i, header in enumerate(source_headers):
+                        if i < len(source_row):
+                            var_name = header
+                            if var_name.upper() in self.LANGUAGE_KEYWORDS: var_name = "_" + var_name
+                            if var_name in self.variables: temp_vars_backup[var_name] = self.variables[var_name]
+                            self.variables[var_name] = source_row[i]
+                            created_vars.add(var_name)
+                    
+                    for col_def in columns:
+                        source_expr = col_def.get('source', '').strip()
+                        if len(source_expr)>1 and source_expr.startswith("'") and source_expr.endswith("'") and "`" not in source_expr:
+                            source_expr = "`" + source_expr[1:-1] + "`"  # do not use ', but use ` for string constants
+                            col_def['source'] = source_expr
+                        if re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', source_expr):
+                            var_name_to_check = source_expr
+                            if var_name_to_check.upper() in self.LANGUAGE_KEYWORDS: var_name_to_check = "_" + var_name_to_check
+                            if var_name_to_check not in created_vars:
+                                if source_expr in self.variables: temp_vars_backup[source_expr] = self.variables[source_expr]
+                                self.variables[source_expr] = ""
+                                created_vars.add(source_expr)
+
+                    for col_def in columns:
+                        source_expr = col_def.get('source', '').strip()
+                        if len(source_expr) > 1 and source_expr.startswith("'") and source_expr.endswith("'"):
+                            source_expr = "`" + source_expr[1:-1] + "`"
+                        if not source_expr:
+                            new_row.append("")
+                            continue
+                        
+                        temp_lexer = Lexer(source_expr)
+                        original_tokens, original_index = self.tokens, self.token_index
+                        self.tokens, self.token_index = temp_lexer.tokens, 0
+                        try:
+                            sourced_value = self._parse_expression()
+                        finally:
+                            self.tokens, self.token_index = original_tokens, original_index
+                        
+                        transform_rule = col_def.get('transform', '')
+                        if transform_rule:
+                            val_str = str(sourced_value) if sourced_value is not None else ''
+                            rules = [r.strip() for r in transform_rule.split('|')]
+                            for rule in rules:
+                                if not rule: continue
+                                if rule == 'trim': val_str = val_str.strip()
+                                elif rule == 'upper': val_str = val_str.upper()
+                                elif rule == 'lower': val_str = val_str.lower()
+                                elif rule == 'proper': val_str = val_str.title()
+                                elif rule.startswith('round('):
+                                    try:
+                                        decimals = int(re.search(r'\((\d+)\)', rule).group(1))
+                                        numeric_val = float(val_str) if val_str.strip() else 0.0
+                                        val_str = f"{numeric_val:.{decimals}f}"
+                                    except (ValueError, TypeError, IndexError): pass
+                                elif rule.startswith('format('):
+                                    try:
+                                        mask = re.search(r"\((.*)\)", rule).group(1).strip("'\"")
+                                        numeric_val = float(val_str) if val_str.strip() else 0.0
+                                        val_str = Formatter.format(mask, [numeric_val]).strip()
+                                    except (ValueError, TypeError, IndexError): pass
+                                elif rule.startswith('formatdate('):
+                                    try:
+                                        mask = re.search(r"\((.*)\)", rule).group(1).strip("'\"")
+                                        date_obj = self._try_parse_date(val_str)
+                                        if date_obj:
+                                            val_str = self._format_date_with_mask(date_obj, mask)
+                                    except (AttributeError, IndexError):
+                                        pass # Keep original value if rule is malformed
+                            sourced_value = val_str
+                        new_row.append(sourced_value)
+                    
+                    final_row_to_yield = new_row
+                    if process_script:
+                        rec_hash = dict(zip(target_headers, new_row))
+                        self.variables['rec'] = rec_hash
+                        self.variables['physical_line_num'] = float(line_num)
+                        
+                        self._execute_basic_string(process_script)
+                        
+                        updated_rec = self.variables.get('rec', {})
+                        del self.variables['rec'], self.variables['physical_line_num']
+                        
+                        if updated_rec.get('is_valid', -1.0) == 0.0:
+                            for var_name in created_vars:
+                                if var_name in self.variables: del self.variables[var_name]
+                            for var_name, old_value in temp_vars_backup.items():
+                                self.variables[var_name] = old_value
+                            continue
+
+                        final_row_to_yield = [updated_rec.get(h) for h in target_headers]
+                    
+                    yield final_row_to_yield
+
+                    for var_name in created_vars:
+                        if var_name in self.variables: del self.variables[var_name]
+                    for var_name, old_value in temp_vars_backup.items():
+                        self.variables[var_name] = old_value
+
+        except FileNotFoundError:
+            self._error(f"Source file not found in transformer: {filename}")
+        except Exception as e:
+            self._error(f"An error occurred in the CSV transformer: {e}")
+            
+            
+    def _analyze_single_csv(self, filename, options, constraints=None):
+        """
+        Analyzes a single CSV file and returns a structured report dictionary.
+        If constraints are provided, it performs validation first.
+        """
+        report = {'FILENAME': filename}
+        constraint_failures = []
+
+        try:
+            with open(filename, 'r', newline='', encoding='utf-8', errors='replace') as infile:
+                # --- File Pre-analysis (Delimiter, Header) ---
+                sample = infile.read(8192)
+                infile.seek(0)
+                sniffer = csv.Sniffer()
+
+                delimiter = options.get('delimiter', 'auto')
+                #print("DEBUG DELIM 1:", delimiter, sample)
+                if delimiter == 'auto':
+                    try: report['DELIMITER'] = sniffer.sniff(sample).delimiter
+                    except csv.Error: report['DELIMITER'] = ','
+                else: report['DELIMITER'] = delimiter
+                #print("DEBUG DELIM 2:", report['DELIMITER'])
+                has_header = options.get('header', 'auto')
+                if has_header == 'auto':
+                    try: has_header = sniffer.has_header(sample)
+                    except csv.Error: has_header = False
+                report['HEADER_ROW'] = bool(has_header)
+
+                reader = csv.reader(infile, delimiter=report['DELIMITER'])
+                headers = []
+                line_offset = 0
+                if has_header:
+                    try:
+                        raw_headers = next(reader)
+                        headers = [h.strip() for h in raw_headers]
+                        line_offset = 1
+                    except StopIteration: pass
+
+                # --- 1. VALIDATION PHASE (if constraints are provided) ---
+                if constraints:
+                    # (Validation logic remains here, unchanged)
+                    limit = options.get('limit')
+                    for i, row in enumerate(reader):
+                        line_num = i + 1 + line_offset
+                        if limit is not None and i >= limit: break
+                        if not headers and row: headers = [f"Field_{j+1}" for j in range(len(row))]
+                        for field_idx, field_val in enumerate(row):
+                            if field_idx >= len(headers): continue
+                            col_name = headers[field_idx]
+                            if col_name in constraints:
+                                for const in constraints[col_name]:
+                                    is_valid = True
+                                    rule_type = const['type']
+                                    if rule_type == 'REQUIRED' and not field_val.strip(): is_valid = False
+                                    elif field_val.strip():
+                                        if rule_type == 'ISDIGITS' and not field_val.isdigit(): is_valid = False
+                                        elif rule_type == 'MINLENGTH' and len(field_val) < const['value']: is_valid = False
+                                        elif rule_type == 'MAXLENGTH' and len(field_val) > const['value']: is_valid = False
+                                        elif rule_type == 'REGEX' and not re.match(const['value'], field_val): is_valid = False
+                                        elif rule_type == 'IN' and field_val not in const['value']: is_valid = False
+                                        elif rule_type == 'ISDATE':
+                                            try: datetime.strptime(field_val, const['value'])
+                                            except ValueError: is_valid = False
+                                    if not is_valid:
+                                        constraint_failures.append({'LINE': line_num, 'COLUMN': col_name, 'VALUE': field_val, 'FAILED_RULE': const['def']})
+                    if constraint_failures:
+                        report['CONSTRAINT_FAILURES'] = constraint_failures
+                        return report
+
+                # --- 2. STATISTICAL PHASE ---
+                infile.seek(0)
+                reader = csv.reader(infile, delimiter=report['DELIMITER'])
+                if has_header:
+                    try: next(reader)
+                    except StopIteration: pass
+
+                record_count = 0
+                field_counts = Counter()
+                col_stats = {}
+                date_formats_to_try = ["%Y-%m-%d", "%m/%d/%Y", "%m-%d-%Y", "%Y%m%d", "%Y-%m-%dT%H:%M:%S"]
+                logical_trues = {'true', 't', 'y', 'yes', '1'}
+                logical_falses = {'false', 'f', 'n', 'no', '0'}
+
+                limit = options.get('limit')
+                for i, row in enumerate(reader):
+                    if limit is not None and i >= limit: break
+                    record_count += 1
+                    num_fields = len(row)
+                    field_counts[num_fields] += 1
+
+                    if not headers and row: headers = [f"Field_{j+1}" for j in range(num_fields)]
+                    
+                    for j, field in enumerate(row):
+                        if j >= len(headers): continue
+                        h = headers[j]
+                        if h not in col_stats:
+                            col_stats[h] = {'MIN_LEN': None, 'MAX_LEN': 0, 'EMPTY_COUNT': 0, 'INTEGER_COUNT': 0, 'FLOAT_COUNT': 0, 'DATE_COUNT': 0, 'LOGICAL_COUNT': 0, 'STRING_COUNT': 0, 'MAX_DECIMALS': 0, 'MIN_VALUE': None, 'MAX_VALUE': None}
+
+                        field_len = len(field)
+                        stats = col_stats[h]
+                        if stats['MIN_LEN'] is None or field_len < stats['MIN_LEN']: stats['MIN_LEN'] = field_len
+                        if field_len > stats['MAX_LEN']: stats['MAX_LEN'] = field_len
+                        
+                        stripped_field = field.strip()
+                        if not stripped_field:
+                            stats['EMPTY_COUNT'] += 1
+                            continue
+                        
+                        cleaned_field = stripped_field.replace('$', '').replace(',', '')
+                        if not cleaned_field:
+                            stats['EMPTY_COUNT'] += 1; continue
+                        
+                        try:
+                            int_val = int(cleaned_field)
+                            stats['INTEGER_COUNT'] += 1
+                            # Only compare numbers with numbers
+                            if isinstance(stats['MIN_VALUE'], (int, float, type(None))):
+                                if stats['MIN_VALUE'] is None or int_val < stats['MIN_VALUE']: stats['MIN_VALUE'] = int_val
+                            if isinstance(stats['MAX_VALUE'], (int, float, type(None))):
+                                if stats['MAX_VALUE'] is None or int_val > stats['MAX_VALUE']: stats['MAX_VALUE'] = int_val
+
+                            continue
+                        except (ValueError, TypeError): pass
+
+                        try:
+                            float_val = float(cleaned_field)
+                            stats['FLOAT_COUNT'] += 1
+                            if '.' in cleaned_field:
+                                decimals = len(cleaned_field.split('.')[1])
+                                if decimals > stats['MAX_DECIMALS']: stats['MAX_DECIMALS'] = decimals
+                            if isinstance(stats['MIN_VALUE'], (int, float, type(None))):
+                                if stats['MIN_VALUE'] is None or float_val < stats['MIN_VALUE']: stats['MIN_VALUE'] = float_val
+                            if isinstance(stats['MAX_VALUE'], (int, float, type(None))):
+                                if stats['MAX_VALUE'] is None or float_val > stats['MAX_VALUE']: stats['MAX_VALUE'] = float_val
+                            continue
+                        except (ValueError, TypeError): pass
+
+                        lower_field = stripped_field.lower()
+                        if lower_field in logical_trues or lower_field in logical_falses:
+                            stats['LOGICAL_COUNT'] += 1
+                            continue
+                        
+                        is_a_date = False
+                        for fmt in date_formats_to_try:
+                            try:
+                                datetime.strptime(stripped_field, fmt)
+                                stats['DATE_COUNT'] += 1
+                                is_a_date = True; break
+                            except (ValueError, TypeError): pass
+                        if is_a_date: continue
+                        
+                        stats['STRING_COUNT'] += 1
+                        # Only compare strings with strings
+                        if isinstance(stats['MIN_VALUE'], (str, type(None))):
+                            if stats['MIN_VALUE'] is None or field < stats['MIN_VALUE']: stats['MIN_VALUE'] = field
+                        if isinstance(stats['MAX_VALUE'], (str, type(None))):
+                            if stats['MAX_VALUE'] is None or field > stats['MAX_VALUE']: stats['MAX_VALUE'] = field
+
+                # Finalize Report
+                for h, stats in col_stats.items():
+                    if stats['STRING_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                    elif stats['FLOAT_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'REAL'
+                    elif stats['INTEGER_COUNT'] > 0 or stats['LOGICAL_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
+                    else: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+
+                report['HEADERS'] = tuple(headers)
+                report['DATA_RECORDS'] = record_count
+                report['FIELD_COUNT_DISTRIBUTION'] = field_counts
+                report['COLUMN_STATISTICS'] = col_stats
+
+                return report
+        except Exception as e:
+            return {'error': f"Error analyzing {filename}: {e}"}
+            
     def _parse_analyze_csv_statement(self):
+        """
+            Parses and executes ANALYZE CSV.
+            - If one file is specified, it performs a full statistical and constraint analysis.
+            - If a pattern matches multiple files, it performs an aggregated consistency analysis.
+            - Can optionally save a schema file for use with UPGRADE CSV.
+            
+            Examples: ANALYZE CSV "my_order.csv"
+                      ANALYZE CSV "orders/*.csv" SAVE SCHEMA TO "master_order_schema.json"
+                
+                >──[ ANALYZE ]──[ CSV ]──( source_pattern )─┬─────────────────────────>
+                                                            │
+                                        ┌──<──[ SAVE SCHEMA TO ]──( schema_file )──<──┐
+                                        │                                             │
+                                        └──<──[ INTO ]──( hash_variable )──<──────────┘
+        
+          Components
+            ANALYZE CSV
+                The required keywords that initiate the command.
+
+            source_pattern
+                A required string expression that specifies the source CSV file(s) to process. 
+                This can be a single filename or a pattern with wildcards (e.g., "data/*.csv").
+
+            SAVE SCHEMA TO schema_file
+                 An optional clause. When used, it creates a JSON file that represents the "superset" schema found across all analyzed CSV files. 
+                This file is designed to be used by the UPGRADE CSV command.
+
+            INTO hash_variable
+                An optional clause. When used, the analysis report is saved into the specified hash variable instead of being printed to the console.
+            
+            SCHEMA FILE Explained:
+                The file is a JSON array of objects. Each object in the array represents a single column in the target (output) CSV file. 
+                The order of the objects in the array defines the order of the columns in the new file.
+            
+                name
+                    Purpose: Defines the header name for the column in the output file.
+                    Required: Yes.
+                    Data Type: String.
+                    Usage: When ANALYZE CSV generates the file, this will be the name of a header it found in the source file(s). 
+                    You can edit this value to rename the column in your transformed output file.
+
+                source
+                    Purpose: This is the most important field. It tells UPGRADE CSV where to get the data for this column.
+                    Required: Yes.
+                    Data Type: String, containing a DbBasic expression.
+                    Usage: The string is a DbBasic expression that is evaluated for each row. 
+                       The headers of the source CSV are available as temporary variables within this expression.
+                    Direct Mapping: "CustomerID"
+                       The value is taken directly from the CustomerID column of the source row. The generator defaults to this.
+                    Literal Value: "'Active'" or "100"
+                       The value for this column will be the hardcoded string "Active" (or the number 100) for every single row. 
+                       Note that string literals must be enclosed in single quotes inside the double quotes.
+                    Complex Expression: "FirstName & ' ' & LastName" or "Price * Quantity"
+                       The value is calculated by combining other columns, literals, and functions, giving you full control to create new, derived data.
+
+                transform
+                    Purpose: Applies a final, simple data cleaning or formatting rule after the source expression has been evaluated.
+                    Required: No. It is generated as an empty string.
+                    Data Type: String.
+                    Usage: You can add one or more pipe-separated (|) rules. These are the same rules used in the LOAD CSV command's OPTIONS.
+                    Example: "trim | proper" would first remove leading/trailing whitespace and then convert the result to Proper Case.
+                    Common Rules: trim, upper, lower, proper, round(n), format('...').
+
+                analysis
+                    Purpose: A read-only block of information generated by ANALYZE CSV to help you make decisions while editing the schema.
+                    Required: No. This block is completely ignored by the UPGRADE CSV command.
+                    Data Type: Object.
+                    Usage: This contains helpful metadata about the column as it was found in the source file(s).
+                    suggested_type: The data type (TEXT, INTEGER, REAL) that the analyzer inferred for this column.
+                    max_len: The maximum character length observed for this column's data across all analyzed files.
+                    Complete Example
+                    If you ran ANALYZE CSV "sales.csv" SAVE SCHEMA TO "sales_schema.json", the generated file might look like this:
+
+                    JSON
+
+                    [
+                      {
+                        "name": "id",
+                        "source": "id",
+                        "transform": "",
+                        "analysis": {
+                          "suggested_type": "INTEGER",
+                          "max_len": 5
+                        }
+                      },
+                      {
+                        "name": "customer_name",
+                        "source": "customer_name",
+                        "transform": "",
+                        "analysis": {
+                          "suggested_type": "TEXT",
+                          "max_len": 45
+                        }
+                      },
+                      {
+                        "name": "sale_amount",
+                        "source": "sale_amount",
+                        "transform": "",
+                        "analysis": {
+                          "suggested_type": "REAL",
+                          "max_len": 8
+                        }
+                      }
+                    ]
+                    You could then edit this file to transform the data. For example, to create a new customer_id field and format the sale amount, you would change it to:
+
+                    JSON
+
+                    [
+                      {
+                        "name": "customer_id",
+                        "source": "id",
+                        "transform": "",
+                        "analysis": { ... }
+                      },
+                      {
+                        "name": "customer_name",
+                        "source": "customer_name",
+                        "transform": "trim | upper",
+                        "analysis": { ... }
+                      },
+                      {
+                        "name": "formatted_amount",
+                        "source": "sale_amount",
+                        "transform": "format('$ #,##0.00')",
+                        "analysis": { ... }
+                      }
+                    ]
+
+        """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('ANALYZE CSV')
+        file_pattern = self._parse_expression()
+        
+        options = {'header': 'auto', 'delimiter': 'auto', 'limit': None, 'constraints': ''}
+        into_hash_name = None
+        save_schema_path = None
+
+        while self._current_token() and self._current_token()[0] in ['INTO', 'OPTIONS', 'ID']:
+            token = self._current_token()
+            if token[0] == 'INTO':
+                self._next_token()
+                into_hash_name = self._expect('ID')[1]
+            elif token[0] == 'OPTIONS':
+                self._next_token()
+                options_str = self._parse_expression()
+                temp_options = {}
+                key_matches = list(re.finditer(r'\b(\w+)=', options_str))
+                for i, match in enumerate(key_matches):
+                    key = match.group(1).lower()
+                    start_pos = match.end()
+                    end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
+                    value = options_str[start_pos:end_pos].strip().strip(',').strip("'\"")
+                    temp_options[key] = value
+                
+                options.update(temp_options)
+                if 'limit' in options and options['limit']: options['limit'] = int(options['limit'])
+                if 'header' in options:
+                    val = str(options['header']).lower()
+                    if val in ['true', '1', 'y']: options['header'] = True
+                    elif val in ['false', '0', 'n']: options['header'] = False
+                    else: options['header'] = 'auto'
+            
+            elif token[0] == 'ID' and token[1].upper() == 'SAVE':
+                self._next_token() # consume SAVE
+                if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'SCHEMA'):
+                    self._error("Expected SCHEMA after SAVE")
+                self._next_token() # consume SCHEMA
+                if not (self._current_token() and self._current_token()[0] == 'TO'):
+                    self._error("Expected TO after SAVE SCHEMA")
+                self._next_token() # consume TO
+                save_schema_path = self._parse_expression()
+            else:
+                break
+
+        parsed_transform_rules = {}
+        transform_spec = options.get('transform')
+        if transform_spec:
+            for rule in transform_spec.split(';'):
+                if ':' in rule:
+                    col_name, func_def = rule.split(':', 1)
+                    parsed_transform_rules[col_name.strip().lower()] = func_def.strip()
+
+        file_list = sorted(glob.glob(file_pattern))
+        if not file_list:
+            self._error(f"No files found matching pattern: {file_pattern}")
+
+        final_report = {}
+        headers_for_schema = []
+        
+        if len(file_list) == 1:
+            filename = file_list[0]
+            parsed_constraints = {}
+            if options['constraints']:
+                rules = options['constraints'].split(';')
+                for rule in rules:
+                    if ':' not in rule: continue
+                    col_spec, constraint_def = rule.split(':', 1)
+                    col_name = col_spec.strip('[]')
+                    match = re.match(r'(\w+)(?:\((.*)\))?', constraint_def.strip())
+                    if not match: continue
+                    constraint_type, value = match.groups()
+                    constraint_type = constraint_type.upper()
+                    constraint_obj = {'type': constraint_type, 'def': constraint_def}
+                    if constraint_type in ['MINLENGTH', 'MAXLENGTH']: constraint_obj['value'] = int(value)
+                    elif constraint_type == 'REGEX': constraint_obj['value'] = value
+                    elif constraint_type == 'IN': constraint_obj['value'] = {item.strip() for item in value.split(',')}
+                    elif constraint_type == 'ISDATE': constraint_obj['value'] = value.replace('MM', '%m').replace('DD', '%d').replace('YYYY', '%Y')
+                    if col_name not in parsed_constraints: parsed_constraints[col_name] = []
+                    parsed_constraints[col_name].append(constraint_obj)
+
+            report = self._analyze_single_csv(filename, options, constraints=parsed_constraints)
+            if 'error' in report: self._error(report['error'])
+
+            final_report = report # Use the single report for schema generation and INTO
+            headers_for_schema = report.get('HEADERS', [])
+
+            if 'CONSTRAINT_FAILURES' in report:
+                if into_hash_name: self.variables[into_hash_name] = self._python_to_basic_data(report)
+                else:
+                    print(f"Constraint Violations found in '{filename}':")
+                    for failure in report['CONSTRAINT_FAILURES']:
+                        print(f"  - Line {failure['LINE']}, Column '{failure['COLUMN']}': Value '{failure['VALUE']}' failed rule '{failure['FAILED_RULE']}'")
+                return
+            
+            if into_hash_name:
+                self.variables[into_hash_name] = self._python_to_basic_data(report)
+            else:
+                print(f"--- CSV Analysis Report for: {filename} ---")
+                if parsed_constraints: print("  (No constraint violations found)")
+                print(f"  Delimiter Detected : '{report.get('DELIMITER', 'N/A')}'")
+                print(f"  Header Row Detected: {'Yes' if report.get('HEADER_ROW') else 'No'}")
+                print(f"  Total Data Records : {report.get('DATA_RECORDS', 0)}")
+                if report.get('FIELD_COUNT_DISTRIBUTION'):
+                    print("  Field Count Distribution:")
+                    for count, num_rows in report['FIELD_COUNT_DISTRIBUTION'].items():
+                        print(f"    - {num_rows} record(s) with {count} field(s)")
+                if report.get('COLUMN_STATISTICS'):
+                    print("\n  Column Statistics:")
+                    for col_name in report.get('HEADERS', []):
+                        stats = report['COLUMN_STATISTICS'].get(col_name, {})
+                        print(f"    - [{col_name}] -> Suggested Type: {stats.get('SUGGESTED_DATA_TYPE', 'N/A')}")
+                        print(f"      Length (Min/Max) : {stats.get('MIN_LEN', 'N/A')} / {stats.get('MAX_LEN', 'N/A')}")
+                        if stats.get('MIN_VALUE') is not None:
+                            min_val = stats.get('MIN_VALUE')
+                            max_val = stats.get('MAX_VALUE')
+                            def format_report_val(v):
+                                if isinstance(v, str):
+                                    display_v = v[:20] + '...' if len(v) > 20 else v
+                                    return f'"{display_v}"'
+                                return v
+                            print(f"      Value Range      : {format_report_val(min_val)} to {format_report_val(max_val)}")
+
+        else: # Multi-file analysis
+            if options['constraints']:
+                print("Warning: The 'constraints' option is ignored when analyzing multiple files.", file=sys.stderr)
+            
+            if options['delimiter'] == 'auto':
+                try:
+                    with open(file_list[0], 'r', newline='', encoding='utf-8') as first_file:
+                        sample = first_file.read(4096)
+                        detected_delimiter = csv.Sniffer().sniff(sample).delimiter
+                        options['delimiter'] = detected_delimiter
+                        print(f"Notice: Auto-detected delimiter '{detected_delimiter}' from first file and applying it to all subsequent files.", file=sys.stderr)
+                except (csv.Error, FileNotFoundError):
+                    options['delimiter'] = ','
+                    print(f"Warning: Could not auto-detect delimiter. Falling back to comma for all files.", file=sys.stderr)
+
+            individual_reports = [r for r in (self._analyze_single_csv(f, options) for f in file_list) if 'error' not in r]
+            if not individual_reports: self._error("Could not analyze any of the specified files.")
+
+            total_records = sum(r['DATA_RECORDS'] for r in individual_reports)
+            delimiters = Counter(r['DELIMITER'] for r in individual_reports)
+            header_presence = Counter(r['HEADER_ROW'] for r in individual_reports)
+            header_sets = Counter(r['HEADERS'] for r in individual_reports)
+            is_consistent = len(delimiters) == 1 and len(header_presence) == 1 and len(header_sets) == 1
+            
+            superset_headers, seen_headers = [], set()
+            for r in individual_reports:
+                for h in r['HEADERS']:
+                    if h not in seen_headers:
+                        superset_headers.append(h)
+                        seen_headers.add(h)
+            headers_for_schema = superset_headers
+
+            agg_stats = {h: {'MIN_LEN': None, 'MAX_LEN': 0, 'EMPTY_COUNT': 0, 'INTEGER_COUNT': 0, 'FLOAT_COUNT': 0, 'STRING_COUNT': 0, 'PRESENT_IN_FILES': 0} for h in superset_headers}
+            for r in individual_reports:
+                for h, stats in r['COLUMN_STATISTICS'].items():
+                    if h not in agg_stats: continue
+                    agg_s = agg_stats[h]
+                    agg_s['PRESENT_IN_FILES'] += 1
+                    if agg_s['MIN_LEN'] is None or (stats['MIN_LEN'] is not None and stats['MIN_LEN'] < agg_s['MIN_LEN']): agg_s['MIN_LEN'] = stats['MIN_LEN']
+                    if stats['MAX_LEN'] > agg_s['MAX_LEN']: agg_s['MAX_LEN'] = stats['MAX_LEN']
+                    for key in ['EMPTY_COUNT', 'INTEGER_COUNT', 'FLOAT_COUNT', 'STRING_COUNT']: agg_s[key] += stats[key]
+
+            for h, stats in agg_stats.items():
+                if stats['STRING_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                elif stats['FLOAT_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'REAL'
+                elif stats['INTEGER_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
+                else: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+
+            final_report = {
+                "FILES_ANALYZED": len(individual_reports), "FILE_LIST": file_list, "TOTAL_RECORDS": total_records,
+                "IS_CONSISTENT": -1.0 if is_consistent else 0.0,
+                "CONSISTENCY_DETAILS": {"DELIMITERS": dict(delimiters), "HEADER_PRESENCE": {('Yes' if k else 'No'): v for k, v in header_presence.items()}, "COLUMN_SETS": {str(k): v for k, v in header_sets.items()}},
+                "COLUMN_STATISTICS": agg_stats
+            }
+            
+            if into_hash_name:
+                self.variables[into_hash_name] = self._python_to_basic_data(final_report)
+            else:
+                print(f"--- Aggregated CSV Analysis Report for: {file_pattern} ---")
+                print(f"  Files Analyzed          : {final_report['FILES_ANALYZED']}")
+                print(f"  Total Data Records      : {final_report['TOTAL_RECORDS']}")
+                print(f"  Files Examined:")
+                for f in file_list: print(f"    - {f}")
+                print(f"\n  --- Structural Consistency ---")
+                print(f"  Overall Consistent      : {'Yes' if is_consistent else 'No'}")
+                print(f"  Delimiters Found        : {', '.join([f'{repr(k)} ({v} files)' for k, v in delimiters.items()])}")
+                print(f"  Column Structures Found : {len(header_sets)}")
+                if not is_consistent:
+                    for i, (headers, count) in enumerate(header_sets.items()):
+                        print(f"    - Structure #{i+1} ({count} files): {headers}")
+                print("\n  --- Aggregated Column Statistics ---")
+                for col_name in superset_headers:
+                    stats = agg_stats[col_name]
+                    print(f"    - [{col_name}] -> Suggested Type: {stats.get('SUGGESTED_DATA_TYPE', 'N/A')}")
+                    print(f"      Present In         : {stats['PRESENT_IN_FILES']} of {len(individual_reports)} files")
+        
+        # --- SAVE SCHEMA LOGIC (runs for both single and multi-file) ---
+        if save_schema_path:
+            schema_columns = []
+            col_stats = final_report.get('COLUMN_STATISTICS', {})
+
+            for header in headers_for_schema:
+                stats = col_stats.get(header, {})
+                # Get the transform rule for this header, defaulting to "" if not provided
+                transform_rule = parsed_transform_rules.get(header.lower(), "")
+                
+                schema_entry = {
+                    "name": header,
+                    "source": header,
+                    "transform": transform_rule, # Use the looked-up rule
+                    "analysis": {
+                        "suggested_type": stats.get("SUGGESTED_DATA_TYPE", "TEXT"),
+                        "max_len": stats.get("MAX_LEN", 0)
+                    }
+                }
+                schema_columns.append(schema_entry)
+                
+            schema_to_save = {
+                "process_by": "",
+                "columns": schema_columns
+            }
+            try:
+                with open(save_schema_path, 'w', encoding='utf-8') as f:
+                    json.dump(schema_to_save, f, indent=4)
+                print(f"Schema definition saved to {save_schema_path}")
+            except Exception as e:
+                self._error(f"Could not save schema file: {e}")
+                
+    def _parse_analyze_csv_statement_old(self):
         """Parses and executes ANALYZE CSV, providing a detailed report on the file."""
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ANALYZE CSV')
         filename = self._parse_expression()
         
-        # --- FIX STARTS HERE: Restructured parsing logic ---
         options = {'header': 'auto', 'delimiter': 'auto', 'constraints': '', 'limit': None}
         into_hash_name = None
         
@@ -7986,11 +8843,16 @@ class Interpreter:
                             if current_max is None or field > current_max: col_stats[h]['MAX_VALUE'] = field
 
                 for h, stats in col_stats.items():
-                    if stats['STRING_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
-                    elif stats['DATE_COUNT'] > 0 and stats['INTEGER_COUNT'] == 0 and stats['FLOAT_COUNT'] == 0: stats['SUGGESTED_DATA_TYPE'] = 'DATE'
-                    elif stats['FLOAT_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'REAL'
-                    elif stats['INTEGER_COUNT'] > 0 or stats['LOGICAL_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
-                    else: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                    if stats['STRING_COUNT'] > 0: 
+                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                    elif stats['DATE_COUNT'] > 0 and stats['INTEGER_COUNT'] == 0 and stats['FLOAT_COUNT'] == 0: 
+                        stats['SUGGESTED_DATA_TYPE'] = 'DATE'
+                    elif stats['FLOAT_COUNT'] > 0: 
+                        stats['SUGGESTED_DATA_TYPE'] = 'REAL'
+                    elif stats['INTEGER_COUNT'] > 0 or stats['LOGICAL_COUNT'] > 0: 
+                        stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
+                    else: 
+                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
                     if isinstance(stats['MIN_VALUE'], datetime): stats['MIN_VALUE'] = stats['MIN_VALUE'].isoformat()
                     if isinstance(stats['MAX_VALUE'], datetime): stats['MAX_VALUE'] = stats['MAX_VALUE'].isoformat()
 
@@ -8028,7 +8890,15 @@ class Interpreter:
                             print(f"        {', '.join(type_counts)}")
                             print(f"      Length (Min/Max) : {stats.get('MIN_LEN', 0)} / {stats.get('MAX_LEN', 0)}")
                             if stats.get('FLOAT_COUNT', 0) > 0: print(f"      Max Decimals     : {int(stats.get('MAX_DECIMALS', 0))}")
-                            if stats.get('MIN_VALUE') is not None: print(f"      Value Range      : {stats.get('MIN_VALUE')} to {stats.get('MAX_VALUE')}")
+                            if stats.get('MIN_VALUE') is not None:
+                                min_val = stats.get('MIN_VALUE')
+                                max_val = stats.get('MAX_VALUE')                                
+                                def format_report_val(v):
+                                    if isinstance(v, str):
+                                        display_v = v[:20] + '...' if len(v) > 20 else v
+                                        return f'"{display_v}"'
+                                    return v # Return numbers as-is
+                                print(f"      Value Range      : {format_report_val(min_val)} to {format_report_val(max_val)}")
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -8037,6 +8907,88 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during CSV analysis: {e}")
 
+    def _parse_upgrade_csv_statement(self):
+        """
+        Parses and executes the UPGRADE CSV command to transform CSV files based on a schema.
+          Note - The schema file can be created with ANALYZE CSV
+        
+            >──[ UPGRADE ]──[ CSV ]──( source_pattern )─┬
+                                                        │
+             ┌──────────────────────────────────────────┘
+             │
+             └─>[ USING ]──[ SCHEMA ]──( schema_file )──[ INTO ]──( output_folder )─>
+                 
+          Components
+            UPGRADE CSV
+            The required keywords that initiate the command.
+
+            source_pattern
+            A required string expression that specifies the source CSV file(s) to process. 
+            This can be a single filename (e.g., "data.csv") or a pattern with wildcards (e.g., "invoices/*.csv").
+
+            USING SCHEMA schema_file
+            A required clause that points to the JSON master schema file. 
+            The structure defined in this file will be the target format for the upgraded CSV files.
+
+            INTO output_folder
+            A required clause specifying the name of the directory where the newly created, transformed CSV files will be saved.
+
+        """
+    def _parse_upgrade_csv_statement(self):
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('UPGRADE')
+        self._expect('CSV')
+        source_pattern = self._parse_expression()
+        self._expect('USING')
+        self._expect('ID') # SCHEMA
+        schema_file = self._parse_expression()
+        self._expect('INTO')
+        output_folder = self._parse_expression()
+
+        try:
+            with open(schema_file, 'r', encoding='utf-8') as f:
+                schema = json.load(f)
+            if not isinstance(schema, list):
+                self._error("CSV schema file must contain a JSON array.")
+
+            if not os.path.exists(output_folder):
+                os.makedirs(output_folder)
+
+            file_list = glob.glob(source_pattern)
+            if not file_list:
+                print(f"Warning: No files found matching pattern '{source_pattern}'", file=sys.stderr)
+                return
+
+            print(f"Upgrading {len(file_list)} CSV files...")
+
+            for file_path in file_list:
+                output_path = os.path.join(output_folder, os.path.basename(file_path))
+                try:
+                    # Use the new transformer helper
+                    transformer = self._transform_csv_with_schema(file_path, schema)
+                    
+                    with open(output_path, 'w', encoding='utf-8', newline='') as outfile:
+                        writer = csv.writer(outfile)
+                        
+                        # Get the header from the first yield
+                        target_headers = next(transformer)
+                        writer.writerow(target_headers)
+                        
+                        # Write the rest of the yielded data rows
+                        for new_row in transformer:
+                            writer.writerow(new_row)
+
+                except Exception as file_e:
+                    print(f"  - Failed to upgrade '{os.path.basename(file_path)}': {file_e}", file=sys.stderr)
+            
+            print("Upgrade complete.")
+
+        except FileNotFoundError:
+            self._error(f"Schema file not found: {schema_file}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"An error occurred during the UPGRADE CSV operation: {e}")
+            
     def _guess_fixed_width_columns(self, lines, space_threshold=0.90):
         """Analyzes lines of text to guess fixed-width column breaks."""
         if not lines:
@@ -9377,73 +10329,461 @@ class Interpreter:
             tag_name = tag_name[1:]
         return tag_name           
     
+    def _get_repeating_child_tag(self, node):
+        """Returns the name of a repeating child tag (appears as a list), or None."""
+        if not isinstance(node, dict):
+            return None
+        
+        # Look for any key whose value is a list (indicates repeating elements)
+        for key, value in node.items():
+            if isinstance(value, list) and len(value) > 0:
+                # Found a repeating tag - return its cleaned name
+                return self._clean_tag(key)
+        
+        return None
+    
     def _parse_analyze_xml_statement(self):
-        """
-        Analyzes an XML file, provides a structural and heuristic report,
-        and optionally saves the report into a hash variable.
-        """
+        '''
+            Example: ANALYZE XML "my_order.xml"
+                     ANALYZE XML "orders/*.xml" SAVE SCHEMA TO "master_order_schema.json"
+            
+            >──[ ANALYZE ]──[ XML ]──( source_pattern )─┬─────────────────────────>
+                                                        │
+                                    ┌──<──[ SAVE SCHEMA TO ]──( schema_file )──<──┐
+                                    │                                             │
+                                    └──<──[ INTO ]──( hash_variable )──<──────────┘
+        
+          Components
+            ANALYZE XML
+            The required keywords that initiate the command.
 
+            source_pattern
+            A required string expression that specifies the source XML file(s) to process. 
+            This can be a single filename or a pattern with wildcards (e.g., "data/*.xml").
+
+            SAVE SCHEMA TO schema_file
+            An optional clause. When used, it creates a JSON file that represents the "superset" schema found across all analyzed XML files. 
+            This file is designed to be used by the UPGRADE XML command.
+
+            INTO hash_variable
+            An optional clause. When used, the analysis report is saved into the specified hash variable instead of being printed to the console.
+        '''
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ANALYZE XML')
-        filename = self._parse_expression()
+        file_pattern = self._parse_expression()
+
+        # Parse optional clauses first
+        save_schema_path = None
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'SAVE':
+            self._next_token(); self._expect('ID'); self._expect('TO')
+            save_schema_path = self._parse_expression()
 
         into_hash_name = None
         if self._current_token() and self._current_token()[0] == 'INTO':
             self._next_token()
             into_hash_name = self._expect('ID')[1]
             if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+                self._error(f"'{into_hash_name}' is not a dimensioned hash.")
+
+        # Now, expand the file pattern
+        file_list = glob.glob(file_pattern)
+        if not file_list: self._error(f"No files found matching pattern: {file_pattern}")
+
+        # --- BRANCH LOGIC: SINGLE FILE vs. MULTIPLE FILES ---
+        if len(file_list) == 1:
+            # --- SINGLE-FILE ANALYSIS PATH ---
+            if save_schema_path: self._error("SAVE SCHEMA TO is only valid when analyzing multiple files with a wildcard.")
+            
+            filename = file_list[0]
+            try:
+                with open(filename, 'r', encoding='utf-8') as f: data_dict = xmltodict.parse(f.read())
+                if not data_dict: self._error(f"XML file '{filename}' is empty or invalid.")
+                root_key = list(data_dict.keys())[0]
+                root_content = data_dict[root_key]
+                root_tag = self._clean_tag(root_key)
+
+                namespaces = set()
+                # Use a lightweight parse just for namespaces
+                for _, elem in ET.iterparse(filename):
+                    if '}' in elem.tag: namespaces.add(elem.tag.split('}')[0][1:])
+
+                report = {}
+                best_candidate, record_count = self._infer_record_tag_from_xml(filename)
+
+                report['ROOT_ELEMENT'] = root_tag
+                report['INFERRED_RECORD_TAG'] = best_candidate or ""
+                report['RECORD_COUNT'] = record_count
+                report['NAMESPACES'] = list(namespaces)
+                should_strip_ns = (len(namespaces) == 1)
+                report['STRUCTURE_TEXT'] = self._describe_xml_from_dict(root_content, root_tag, strip_ns=should_strip_ns)
+                
+                if into_hash_name: self.variables[into_hash_name] = self._python_to_basic_data(report)
+                
+                if not into_hash_name:
+                    print(f"--- XML Analysis Report for: {filename} ---")
+                    print(f"  Root Element            : <{report['ROOT_ELEMENT']}>")
+                    print(f"  Inferred Record Tag     : <{report['INFERRED_RECORD_TAG']}> ({report['RECORD_COUNT']} instance(s))")
+                    if namespaces:
+                        print(f"\n  --- Namespaces Found ---")
+                        for ns in namespaces: print(f"  - {ns}")
+                    print(f"\n  --- Simplified Structure ---")
+                    # The redundant print of the root element was removed here.
+                    print(report['STRUCTURE_TEXT'])
+
+            except Exception as e: self._error(f"An error occurred during analysis: {e}")
+
+        else:
+            # --- MULTI-FILE ANALYSIS PATH ---
+            all_data_dicts = []
+            superset_schema = {}
+            root_tag_name = None
+            
+            def merge_nodes(master_node, current_node):
+                if isinstance(current_node, dict):
+                    for key, value in current_node.items():
+                        # Normalize: treat @age and age as the same key
+                        is_attr = key.startswith('@')
+                        clean_key = self._clean_tag(key)
+                        
+                        # If we're processing an attribute, check if element form exists
+                        if is_attr and clean_key in master_node:
+                            continue
+                        
+                        # If we're processing an element, remove any attribute version
+                        if not is_attr and f"@{clean_key}" in master_node:
+                            del master_node[f"@{clean_key}"]
+                        
+                        # Use the clean key (without @) for storage
+                        if clean_key not in master_node:
+                            master_node[clean_key] = {} if isinstance(value, (dict, list)) else ""
+                        if not isinstance(master_node[clean_key], dict) and isinstance(value, dict):
+                            master_node[clean_key] = {}
+                        if isinstance(value, dict):
+                            merge_nodes(master_node[clean_key], value)
+                        elif isinstance(value, list) and value:
+                            for item in value:
+                                merge_nodes(master_node[clean_key], item)
+
+
+            for file_path in file_list:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f: 
+                        data_dict = xmltodict.parse(f.read())
+                    if not data_dict: continue
+                    all_data_dicts.append(data_dict)
+                    
+                    current_root_tag = list(data_dict.keys())[0]
+                    current_root_content = data_dict[current_root_tag]
+                    
+                    # Get the repeating child tag from THIS file's original structure
+                    current_child = self._get_repeating_child_tag(current_root_content)
+                    
+                    # Set root on first file
+                    if not root_tag_name:
+                        root_tag_name = current_root_tag
+                        first_file_child = current_child  # Store for comparison
+                        superset_schema[root_tag_name] = {}
+                        merge_nodes(superset_schema[root_tag_name], current_root_content)
+                    else:
+                        # Check if roots match by name
+                        clean_current = self._clean_tag(current_root_tag)
+                        clean_existing = self._clean_tag(root_tag_name)
+                        
+                        if clean_current == clean_existing:
+                            # Same name - merge directly
+                            merge_nodes(superset_schema[root_tag_name], current_root_content)
+                        else:
+                            # Different names - check if they have same repeating child
+                            # Compare against the FIRST file's child tag (stored earlier)
+                            if first_file_child and current_child and first_file_child == current_child:
+                                # Same structure! Merge under first root name
+                                print(f"Note: Treating <{clean_current}> as equivalent to <{clean_existing}> (both contain repeating <{current_child}>)", file=sys.stderr)
+                                merge_nodes(superset_schema[root_tag_name], current_root_content)
+                            else:
+                                # Genuinely different structures - use virtual_root
+                                if clean_existing != "virtual_root":
+                                    temp = superset_schema.copy()
+                                    superset_schema = {"virtual_root": temp}
+                                    root_tag_name = "virtual_root"
+                                    first_file_child = None  # Reset for virtual root
+                                
+                                if clean_current not in superset_schema["virtual_root"]:
+                                    superset_schema["virtual_root"][clean_current] = {}
+                                merge_nodes(superset_schema["virtual_root"][clean_current], current_root_content)
+
+
+
+
+                except Exception as e:
+                    print(f"Warning: Could not process file '{file_path}': {e}", file=sys.stderr)
+            
+            file_count = len(all_data_dicts)
+            if file_count == 0: self._error("None of the matched files could be processed.")
+
+            final_root_name = self._clean_tag(root_tag_name)
+            final_schema_content = superset_schema.get(root_tag_name, superset_schema)
+
+            tag_occurrences = Counter()
+            def find_paths(node, path, unique_paths):
+                if isinstance(node, dict):
+                    for key, value in node.items():
+                        new_path = f"{path}/{self._clean_tag(key)}"
+                        unique_paths.add(new_path)
+                        find_paths(value, new_path, unique_paths)
+                elif isinstance(node, list):
+                    for item in node: find_paths(item, path, unique_paths)
+            
+            for data_dict in all_data_dicts:
+                unique_paths_in_file = set()
+                dict_root_name = list(data_dict.keys())[0]
+                path_prefix = f"/{final_root_name}"
+                if final_root_name == 'virtual_root':
+                    path_prefix += f"/{self._clean_tag(dict_root_name)}"
+                find_paths(data_dict[dict_root_name], path_prefix, unique_paths_in_file)
+                unique_paths_in_file.add(path_prefix)
+                if final_root_name == 'virtual_root': unique_paths_in_file.add(f"/{final_root_name}")
+
+                for path in unique_paths_in_file: tag_occurrences[path] += 1
+
+            inferred_tag, _ = self._infer_record_tag_from_xml(file_list[0])
+            report = { "FILE_COUNT": file_count, "ROOT_ELEMENT": final_root_name, "INFERRED_RECORD_TAG": inferred_tag or "" }
+
+            if save_schema_path:
+                try:
+                    with open(save_schema_path, 'w', encoding='utf-8') as f:
+                        json.dump({final_root_name: final_schema_content}, f, indent=2)
+                    print(f"Superset schema saved to {save_schema_path}")
+                except Exception as e: self._error(f"Could not save schema file: {e}")
+
+            if not into_hash_name:
+                print(f"--- XML Analysis Report for: {file_pattern} ---")
+                print(f"  Files Analyzed          : {file_count}")
+                print(f"  Root Element            : <{report['ROOT_ELEMENT']}>")
+                print(f"  Inferred Record Tag     : <{report['INFERRED_RECORD_TAG']}> (Based on first file)")
+                
+                def print_schema(node, current_path=""):
+                    for key, value in node.items():
+                        path_key = f"{current_path}/{key}"
+                        occurrence = tag_occurrences.get(path_key, 0)
+                        tag_info = f"<{key}> ({occurrence}/{file_count})"
+                        indent = "  " * (path_key.count('/') - 1)
+                        print(f"{indent}- {tag_info}")
+                        if isinstance(value, dict): print_schema(value, path_key)
+                
+                print("\n  --- Consolidated Superset Schema (Occurrence) ---")
+                print(f"- <{report['ROOT_ELEMENT']}> ({tag_occurrences.get('/' + report['ROOT_ELEMENT'], 0)}/{file_count})")
+                print_schema(final_schema_content, f"/{report['ROOT_ELEMENT']}")
+
+
+    def _build_conforming_xml_recursive(self, master_node, source_data, parent_element):
+        if not isinstance(master_node, dict): return
+
+        master_attrs = {k: v for k, v in master_node.items() if k.startswith('@')}
+        master_children = {k: v for k, v in master_node.items() if not k.startswith('@') and k != '#text'}
+
+        for attr_key, _ in master_attrs.items():
+            source_attr_value = source_data.get(attr_key) if isinstance(source_data, dict) else None
+            if source_attr_value is not None:
+                parent_element.set(attr_key[1:], str(source_attr_value))
+
+        source_text_value = None
+        if isinstance(source_data, dict):
+            source_text_value = source_data.get('#text')
+        elif source_data is not None and not isinstance(source_data, (dict, list)):
+            source_text_value = source_data
+        
+        if source_text_value is not None:
+            parent_element.text = str(source_text_value)
+
+        for child_key, child_master_value in master_children.items():
+            source_child_data = None
+            if isinstance(source_data, dict):
+                for src_key, src_val in source_data.items():
+                    if self._clean_tag(src_key).lower() == child_key.lower():
+                        source_child_data = src_val
+                        break
+            
+            items_to_process = []
+            if isinstance(source_child_data, list):
+                items_to_process = source_child_data
+            elif source_child_data is not None:
+                items_to_process = [source_child_data]
+
+            if not items_to_process:
+                new_child_element = ET.SubElement(parent_element, child_key)
+                self._build_conforming_xml_recursive(child_master_value, None, new_child_element)
+            else:
+                for item in items_to_process:
+                    new_child_element = ET.SubElement(parent_element, child_key)
+                    self._build_conforming_xml_recursive(child_master_value, item, new_child_element)
+
+    def _populate_element(self, element, master_schema_node, source_data_node):
+        """
+        Recursively populates XML element, converting attributes to elements as needed.
+        """
+        if not isinstance(master_schema_node, dict):
+            if source_data_node is not None and not isinstance(source_data_node, (dict, list)):
+                element.text = str(source_data_node)
+            return
+
+        # 1. Separate schema components (normalized schema should have no @attributes)
+        master_text_exists = '#text' in master_schema_node
+        master_children = {k: v for k, v in master_schema_node.items() if k != '#text'}
+
+        # 2. Populate text content if schema has it
+        if master_text_exists:
+            source_text_val = None
+            if isinstance(source_data_node, dict):
+                source_text_val = source_data_node.get('#text')
+            if source_text_val is not None:
+                element.text = str(source_text_val)
+
+        # 3. Populate child elements
+        for child_key, child_master_value in master_children.items():
+            source_child_data = None
+            if isinstance(source_data_node, dict):
+                # Look for element form first
+                for src_key, src_val in source_data_node.items():
+                    if self._clean_tag(src_key).lower() == child_key.lower():
+                        source_child_data = src_val
+                        break
+                
+                # If not found as element, check attribute form (for conversion)
+                if source_child_data is None:
+                    attr_key = f"@{child_key}"
+                    if attr_key in source_data_node:
+                        source_child_data = source_data_node[attr_key]
+            
+            items_to_process = []
+            if isinstance(source_child_data, list):
+                items_to_process = source_child_data
+            elif source_child_data is not None:
+                items_to_process = [source_child_data]
+
+            if not items_to_process:
+                # Missing in source - create empty element from schema
+                new_child = ET.SubElement(element, child_key)
+                self._populate_element(new_child, child_master_value, None)
+            else:
+                # Create child element(s) with data
+                for item in items_to_process:
+                    new_child = ET.SubElement(element, child_key)
+                    self._populate_element(new_child, child_master_value, item)
+
+
+
+    def _parse_upgrade_xml_statement(self):
+        '''
+         Parses and executes the UPGRADE XML command to transform XML files based on a schema.
+         Example: UPGRADE XML "raw_data/orders_*.xml" USING SCHEMA "master_schema.json" INTO "processed_orders"
+            Note - The schema file can be created with ANALYZE XML
+         
+                >──[ UPGRADE ]──[ XML ]──( source_pattern )─┬
+                                                            │
+                 ┌──────────────────────────────────────────┘
+                 │
+                 └─>[ USING ]──[ SCHEMA ]──( schema_file )──[ INTO ]──( output_folder )─>
+                     
+            Components
+                UPGRADE CSV
+                The required keywords that initiate the command.
+
+                source_pattern
+                A required string expression that specifies the source CSV file(s) to process. 
+                This can be a single filename (e.g., "data.csv") or a pattern with wildcards (e.g., "invoices/*.csv").
+
+                USING SCHEMA schema_file
+                A required clause that points to the JSON master schema file. 
+                The structure defined in this file will be the target format for the upgraded CSV files.
+
+                INTO output_folder
+                A required clause specifying the name of the directory where the newly created, transformed CSV files will be saved.
+
+        
+        
+        
+        '''
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('UPGRADE'); self._expect('XML')
+        source_pattern = self._parse_expression()
+        self._expect('USING'); self._expect('ID') # SCHEMA
+        schema_file = self._parse_expression()
+        self._expect('INTO')
+        output_folder = self._parse_expression()
 
         try:
-            tree = ET.parse(filename)
-            root = tree.getroot()
+            with open(schema_file, 'r', encoding='utf-8') as f: master_schema = json.load(f)
+            if not os.path.exists(output_folder): os.makedirs(output_folder)
 
-            namespaces = set()
-            for element in root.iter():
-                if '}' in element.tag:
-                    ns = element.tag.split('}')[0][1:]
-                    namespaces.add(ns)
+            file_list = glob.glob(source_pattern)
+            if not file_list:
+                print(f"Warning: No files found matching pattern '{source_pattern}'", file=sys.stderr)
+                return
+
+            print(f"Upgrading {len(file_list)} files...")
+            root_tag = list(master_schema.keys())[0]
+            master_root_content = master_schema[root_tag]
+
+            for file_path in file_list:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        source_dict = xmltodict.parse(f.read())
                     
-            report = {}
-            best_candidate, record_count = self._infer_record_tag_from_xml(filename)
+                    new_root = ET.Element(self._clean_tag(root_tag))
 
-            report['ROOT_ELEMENT'] = self._clean_tag(root.tag)
-            report['TOTAL_CHILD_ELEMENTS'] = len(root)
-            report['PREDOMINANT_RECORD_TAG'] = best_candidate or ""
-            report['RECORD_COUNT'] = record_count
-            report['NAMESPACES'] = list(namespaces)
+                    # Determine the correct source data to pass to the recursive builder
+                    source_for_population = None
+                    if self._clean_tag(root_tag) == "virtual_root":
+                        # If the master schema is virtual, the source for the first level
+                        # is the whole dictionary, so the helper can find the file's actual root.
+                        source_for_population = source_dict
+                    else:
+                        # If roots match, the source for population is the content *inside* the root.
+                        current_root_tag = list(source_dict.keys())[0] if source_dict else ''
+                        source_for_population = source_dict.get(current_root_tag)
+                    
+                    # Call the recursive helper to build the new XML tree
+                    self._populate_element(new_root, master_root_content, source_for_population)
+                    
+                    new_tree = ET.ElementTree(new_root)
+                    ET.indent(new_tree, space="  ")
+                    output_path = os.path.join(output_folder, os.path.basename(file_path))
+                    new_tree.write(output_path, encoding='utf-8', xml_declaration=True)
+                except Exception as e:
+                    print(f"  - Failed to upgrade '{os.path.basename(file_path)}': {e}", file=sys.stderr)
             
-            data_dict = self._xml_element_to_dict(root)
-            should_strip_ns = (len(namespaces) == 1)
-            report['STRUCTURE_TEXT'] = self._describe_xml_from_dict(data_dict, self._clean_tag(root.tag), strip_ns=should_strip_ns)
-            
-            if into_hash_name:
-                self.variables[into_hash_name] = self._python_to_basic_data(report)
-            
-            if not into_hash_name:
-                print(f"--- XML Analysis Report for: {filename} ---")
-                print(f"  --- Heuristic Analysis ---")
-                print(f"  Root Element            : <{report['ROOT_ELEMENT']}>")
-                print(f"  Total Direct Children   : {report['TOTAL_CHILD_ELEMENTS']}")
-                print(f"  Inferred Record Tag     : <{report['PREDOMINANT_RECORD_TAG']}> ({report['RECORD_COUNT']} instance(s))")
-
-                if namespaces:
-                    print(f"\n  --- Namespaces Found ---")
-                    for ns in namespaces:
-                        print(f"  - {ns}")
-                        
-                print(f"\n  --- Simplified Structure ---")
-                print(report['STRUCTURE_TEXT'])
-
-        except FileNotFoundError as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-            self._error(f"File not found: {filename}")
-        except ET.ParseError as e:
-            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"XML parsing error: {e}"
-            self._error(f"XML parsing error: {e}")
+            print("Upgrade complete.")
+        except FileNotFoundError:
+            self._error(f"Schema file not found: {schema_file}")
         except Exception as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
-            self._error(f"An error occurred during XML analysis: {e}")
+            self._error(f"An error occurred during the UPGRADE operation: {e}")
+
+
+    def _build_conforming_xml(self, master_node, source_data, parent_element):
+        """Recursively builds a new XML tree conforming to the master schema."""
+        if not isinstance(master_node, dict) or parent_element is None:
+            return
+
+        for key, value in master_node.items():
+            new_element = ET.SubElement(parent_element, key)
+            
+            # Find corresponding data in the source dictionary (case-insensitive for flexibility)
+            source_value = None
+            if isinstance(source_data, dict):
+                for src_key, src_val in source_data.items():
+                    if self._clean_tag(src_key).lower() == key.lower():
+                        source_value = src_val
+                        break
+            
+            if isinstance(value, dict):
+                # Recurse into child object
+                self._build_conforming_xml(value, source_value, new_element)
+            elif source_value is not None:
+                # Assign text to the leaf node
+                new_element.text = str(source_value) if not isinstance(source_value, (dict, list)) else ""
+
+
 
     '''
     SHOW TABLES;
@@ -9818,14 +11158,14 @@ class Interpreter:
 
 TEST_PROGRAM_SOURCE = """
 REM --- Test complex IF statement ---
-PRINT "DbBasic Interpreter By Data Design Group, Inc. 
+PRINT "DbBasic Interpreter By Data Design Group, Inc." 
 PRINT "Written by Dan Bailey"
 PRINT
-PRINT "Usage: dbbasic -                for stdin
-PRINT "       dbasic myprogram.bas     to run script  
+PRINT "Usage: dbbasic -                for stdin"
+PRINT "       dbasic myprogram.bas     to run script" 
 """
 
-def run_interpreter(source_code, cmd_args=None, source_name="script", debug=False, dump_tokens=True):
+def run_interpreter(source_code, cmd_args=None, source_name="script", debug=False, dump_tokens=False):
     #print(f"--- Running {source_name} ---")
     if cmd_args is None: cmd_args = []
     
@@ -9833,13 +11173,11 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
     try:
         lexer = Lexer(preprocess_continuations(source_code))
 
-        # --- ADD THIS BLOCK ---
         if dump_tokens:
             print("\n--- TOKEN DUMP ---")
             for token in lexer.tokens:
                 print(token)
             print("--------------------\n")
-        # --- END OF BLOCK ---
 
         interpreter = Interpreter(lexer, cmd_args, debug=debug)
         interpreter.run()
