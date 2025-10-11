@@ -576,12 +576,14 @@ class Formatter:
     @staticmethod
     def format(format_string, values):
         output, val_idx, fmt_idx = "", 0, 0
+        # Added 9 to be equivalent to #
+            
         while val_idx < len(values):
             if fmt_idx >= len(format_string): break
             char = format_string[fmt_idx]
-            if char in '#0*!&\\$': # Check for '$' as a potential start of a mask
+            if char in '#09*!&\\$<>^': # Check for '$' as a potential start of a mask
                 # <<< CORRECTED REGEX to properly match masks starting with '$' or '*' >>>
-                mask_regex = re.compile(r"([<>^]?\\ *\\[\s]*|!|&+|[\$*#0, ]+\.?[#0]*\^*)")
+                mask_regex = re.compile(r"([<>^]?\\ *\\[\s]*|!|&+|[\$*#09, ]+\.?[#0]*\^*)")
                 match = mask_regex.match(format_string, fmt_idx)
                 if match:
                     mask = match.group(0)
@@ -593,6 +595,7 @@ class Formatter:
             else:
                 output += char
                 fmt_idx += 1
+            
         return output
     
     @staticmethod
@@ -616,83 +619,116 @@ class Formatter:
 
     @staticmethod
     def _format_numeric(value, mask, force_positive=False):
-        # <<< FINAL VERSION using your suggested algorithm for '$$' >>>
         is_negative = value < 0 and not force_positive
         abs_value = abs(value) if is_negative else value
-
-        # --- Handle floating dollar sign as a special case ---
-        if mask.startswith('$$'):
-            new_mask = mask.lstrip('$')
-            # Format the absolute value using the rest of the logic (recursive call)
-            # Pass force_positive=True to prevent the recursive call from handling the sign
-            formatted_number = Formatter._format_numeric(abs_value, new_mask, force_positive=True)
-            
-            # Trim, add the '$', and re-pad to the original mask's full width
-            trimmed_result = formatted_number.strip()
-            result_with_dollar = "$" + trimmed_result
-            positive_result = result_with_dollar.rjust(len(mask))
         
-        else:
-            # --- Original, reliable logic for fixed literals, padding, and commas ---
-            decimal_pos = mask.find('.')
-            decimals = 0
-            integer_mask = mask
-            if decimal_pos != -1:
-                decimals = len(re.findall(r'[#0]', mask[decimal_pos+1:]))
-                integer_mask = mask[:decimal_pos]
-            
-            formatted_num = f"{abs_value:.{decimals}f}"
-            int_part, dec_part = formatted_num.split('.') if '.' in formatted_num else (formatted_num, "")
-            
-            result, int_idx, digit_count = "", len(int_part) - 1, 0
-            has_leading_asterisk = integer_mask.strip().startswith('*')
-            
-            for i in range(len(integer_mask) - 1, -1, -1):
-                mask_char = integer_mask[i]
-                if mask_char in '#0*':
-                    if int_idx >= 0:
-                        result = int_part[int_idx] + result
-                        int_idx -= 1
-                        digit_count += 1
-                    elif mask_char == '0':
-                        result = '0' + result; digit_count += 1
-                    elif mask_char == '*' and has_leading_asterisk:
-                        result = '*' + result
-                    else:
-                        result = ' ' + result
-                elif mask_char == ',':
-                    if digit_count > 0 and int_idx >= 0:
-                        result = ',' + result
-                    elif has_leading_asterisk:
-                        result = '*' + result
-                    else:
-                        result = ' ' + result
-                else:
-                    result = mask_char + result
-            
-            if int_idx >= 0: result = int_part[:int_idx+1] + result
-            if decimal_pos != -1: result += '.' + dec_part
-            positive_result = result
+        # --- Check for scientific notation (^^^^) ---
+        if '^^^^' in mask:
+            return Formatter._format_scientific(abs_value, mask, is_negative)
+        
+        # --- Check for asterisk fill (** at start) ---
+        asterisk_fill = mask.startswith('**')
+        if asterisk_fill:
+            mask = mask[2:]  # Strip the ** prefix before processing
+        
+        # --- Check for floating dollar sign ($ after ** or $$) ---
+        floating_dollar = False
+        if mask.startswith('$$'):
+            floating_dollar = True
+            mask = mask.lstrip('$')
+        elif mask.startswith('$'):
+            floating_dollar = True
+            mask = mask[1:]  # Strip single $ for floating behavior
 
-        # --- Apply sign universally at the end ---
-        if is_negative:
-            if ' ' in positive_result:
-                # Find the last space before the number/dollar sign begins
-                first_char_pos = -1
-                for i, char in enumerate(positive_result):
-                    if char != ' ':
-                        first_char_pos = i
-                        break
-                
-                # Replace the space immediately to the left of the content
-                if first_char_pos > 0:
-                    pos_to_replace = first_char_pos - 1
-                    return positive_result[:pos_to_replace] + '-' + positive_result[pos_to_replace+1:]
+        # --- Original, reliable logic for fixed literals, padding, and commas ---
+        decimal_pos = mask.find('.')
+        decimals = 0
+        integer_mask = mask
+        if decimal_pos != -1:
+            decimals = len(re.findall(r'[#0]', mask[decimal_pos+1:]))
+            integer_mask = mask[:decimal_pos]
+
+        formatted_num = f"{abs_value:.{decimals}f}"
+        int_part, dec_part = formatted_num.split('.') if '.' in formatted_num else (formatted_num, "")
+
+        result, int_idx, digit_count = "", len(int_part) - 1, 0
+        has_leading_asterisk = integer_mask.strip().startswith('*')
+
+        for i in range(len(integer_mask) - 1, -1, -1):
+            mask_char = integer_mask[i]
+            if mask_char in '#09*':
+                if int_idx >= 0:
+                    result = int_part[int_idx] + result
+                    int_idx -= 1
+                    digit_count += 1
+                elif mask_char == '0':
+                    result = '0' + result
+                    digit_count += 1
+                elif mask_char == '*' and has_leading_asterisk:
+                    result = '*' + result
+                else:
+                    result = ' ' + result
+            elif mask_char == ',':
+                if digit_count > 0 and int_idx >= 0:
+                    result = ',' + result
+                elif has_leading_asterisk:
+                    result = '*' + result
+                else:
+                    result = ' ' + result
+            else:
+                result = mask_char + result
+
+        if int_idx >= 0:
+            result = int_part[:int_idx+1] + result
+        if decimal_pos != -1:
+            result += '.' + dec_part
+        positive_result = result
+
+        # --- Apply floating dollar sign if present ---
+        if floating_dollar:
+            # Find first digit/non-space in the result
+            first_non_space = next((i for i, ch in enumerate(positive_result) if ch != ' '), len(positive_result))
+            if first_non_space > 0:
+                # Insert $ right before the first digit, preserve leading spaces
+                positive_result = positive_result[:first_non_space] + '$' + positive_result[first_non_space:]
+            else:
+                # No leading space, just prepend $
+                positive_result = '$' + positive_result
+
+        # --- Apply asterisk fill if ** was at the start ---
+        if asterisk_fill:
+            # Find first non-space character (could be $ if floating dollar)
+            first_non_space = next((i for i, ch in enumerate(positive_result) if ch != ' '), len(positive_result))
             
-            # Fallback for other cases (like asterisk fill or no padding)
-            return '-' + positive_result.lstrip(' ')
+            if first_non_space > 0:
+                if is_negative:
+                    # Negative: (n-1) asterisks + minus sign adjacent to first significant char
+                    # Example: "     $9.00" -> "****-$9.00"
+                    positive_result = ('*' * (first_non_space - 1)) + '-' + positive_result[first_non_space:]
+                else:
+                    # Positive: all n spaces become asterisks
+                    # Example: "     $9.00" -> "*****$9.00"
+                    positive_result = ('*' * first_non_space) + positive_result[first_non_space:]
+            else:
+                # No leading spaces
+                if is_negative:
+                    positive_result = '-' + positive_result
+                
+        # --- For non-** masks, handle negative sign placement ---
+        elif is_negative:
+            first_non_space = next((i for i, ch in enumerate(positive_result) if ch != ' '), None)
+            
+            if first_non_space is None:
+                positive_result = '-' + positive_result.lstrip(' ')
+            elif first_non_space > 0:
+                pos_to_replace = first_non_space - 1
+                positive_result = positive_result[:pos_to_replace] + '-' + positive_result[pos_to_replace+1:]
+            else:
+                positive_result = '-' + positive_result.lstrip(' ')
 
         return positive_result
+
+
         
     @staticmethod
     def _format_string(value, mask):
