@@ -9,6 +9,7 @@ import duckdb
 import csv
 import io
 import json
+import string
 import glob
 import base64
 import html
@@ -28,12 +29,14 @@ import webbrowser
 import zipfile
 import xlrd3
 import openpyxl
-from bs4 import BeautifulSoup
 from openpyxl.styles import Font, PatternFill, Alignment
+from bs4 import BeautifulSoup
 from tui_runner import FormRunner
 from typing import Any, Dict, List, Optional, Union
-from urllib.parse import urlparse, quote_plus, unquote_plus
+from urllib.parse import urlparse, quote_plus, unquote_plus, urljoin
 import xmltodict
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 try:
     from web_form_runner import WebFormRunner
@@ -434,7 +437,7 @@ class Lexer:
             ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), 
             ('TABLE', r'\bTABLE\b(?!\$)'), ('TEXT', r'\bTEXT\b(?!\$)'),('EVAL', r'\bEVAL\b(?!\$)'),
             ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('IGNORE', r'\bIGNORE\b(?!\$)'),
-            ('REPLACE', r'\bREPLACE\b(?!\$)'), ('TRUNCATE', r'\bTRUNCATE\b(?!\$)'),
+            ('REPLACE', r'\bREPLACE\b(?!\$)'), ('TRUNCATE', r'\bTRUNCATE\b(?!\$)'),('PARQUET', r'\bPARQUET\b(?!\$)'),('PLAIN', r'\bPLAIN\b(?!\$)'),
             ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
             ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
             ('SET', r'\bSET\b(?!\$)'), ('OUTPUT', r'\bOUTPUT\b(?!\$)'), ('AS', r'\bAS\b(?!\$)'),
@@ -645,7 +648,7 @@ class Formatter:
         decimals = 0
         integer_mask = mask
         if decimal_pos != -1:
-            decimals = len(re.findall(r'[#0]', mask[decimal_pos+1:]))
+            decimals = len(re.findall(r'[#09]', mask[decimal_pos+1:]))
             integer_mask = mask[:decimal_pos]
 
         formatted_num = f"{abs_value:.{decimals}f}"
@@ -768,23 +771,54 @@ class LegacyJsonNormalizer:
         ,"TEMP","TEMPORARY","THEN","TIES","TO","TRANSACTION","TRIGGER","UNBOUNDED","UNION","UNIQUE","UPDATE"
         ,"USING","VACUUM","VALUES","VIEW","VIRTUAL","WHEN","WHERE","WINDOW","WITH","WITHOUT"}
 
-    def __init__(self, db_connection, data, root_table_name, options=None):
+    def __init__(self, db_connection, data, root_table_name, options=None, db_engine='sqlite'):
         self.db_conn = db_connection
         self.cursor = self.db_conn.cursor()
         self.data = data
         self.root_name = root_table_name
         self.options = options if options else {}
+        self.db_engine = db_engine  # <<< Store the engine type
 
         self.result = []
         self.table_dict = {}
         self._id_counter = 0
         self._table_parent_cache = {}
         
+        # <<< NEW: Counter for DuckDB manual keys >>>
+        self._row_pk_counter = 0
+        
         # Parse rules upon initialization >>>
         self.transform_rules = {}
         self.validation_rules = {}
         self._parse_processing_rules()
 
+    def _wrap_identifier(self, object_name):
+            # Note that we need a check in here to wrap reserved sqlite words, i.e. "when"
+            if not object_name:
+                return object_name
+            id_wrapper = '"'
+            wrap = False
+            if object_name.startswith('"') and object_name.endswith('"'):
+                return object_name  # Let's safely assume it's wrapped already
+            
+            for c in object_name:
+                if (c in string.punctuation and c != '_') or c in string.whitespace:
+                    wrap = True
+                    break
+            
+            if not wrap and object_name[0] in ('0', '1', '2', '3', '4', '5', '6', '7', '8', '9'):
+                wrap = True
+                
+            # Changed SqliteSupport.SQL_RESERVED_WORDS to self.SQL_RESERVED_WORDS
+            if not wrap and object_name.upper() in self.SQL_RESERVED_WORDS:
+                wrap = True
+                
+            if wrap:
+                return id_wrapper + object_name + id_wrapper
+            else:
+                return object_name
+            
+           
     def run(self):
         print("Running Legacy Normalizer Engine...")
 
@@ -1094,48 +1128,98 @@ class LegacyJsonNormalizer:
                             f"ON {self._wrap_identifier(short_name)}({self._wrap_identifier(fk_col_name)});")
                  self.cursor.execute(idx_sql)
 
-    def _insert_rows(self):
-        for table_name_path in self.table_dict:
-            table_info = self.table_dict[table_name_path]
-            short_name = table_info['short_table_name']
-            parent_table_path = table_info['table_parent_name']
-            last_fk_value = None
-
-            self.cursor.execute('BEGIN;')
-            
-            row = {"data": {}, "idx": 0}
-            
-            for counter, v in enumerate(self.result):
-                if v.get('table_name') != table_name_path:
-                    if v.get('table_name') == parent_table_path and 'pk' in v:
-                        last_fk_value = v['pk']
-                    continue
-                
-                if v.get('type') == 'EndRow':
-                    if row['data']:
-                        # <<< MODIFIED: Process row before inserting >>>
-                        processed_data = self._process_row(row['data'], short_name)
-                        if processed_data: # Only insert if validation passes
-                           row['data'] = processed_data
-                           self._insert_single_row(short_name, table_name_path, row, last_fk_value, counter)
-                    row = {"data": {}, "idx": counter}
-                elif v.get('type') not in ('Array', 'Object', 'BeginRow', 'EndArray'):
-                    column_path = self._normalize_key(v.get('pathname', ''))
-                    
-                    # Ensure the column exists in the schema before trying to add data
-                    if table_name_path in self.table_dict and column_path in self.table_dict[table_name_path]['columns']:
-                        column_name = self.table_dict[table_name_path]['columns'][column_path]['column_name']
-                        row['data'][column_name] = v.get('data')
-            
+    def _safe_commit(self):
+        """
+        Safely commits the transaction. 
+        If DuckDB raises 'no transaction is active', it implies the data 
+        was already committed or auto-committed, so we can safely ignore it.
+        """
+        try:
             self.db_conn.commit()
+        except Exception as e:
+            # DuckDB throws this if the transaction was implicitly closed. 
+            # It is safe to ignore because the data is persisted.
+            if "no transaction is active" in str(e).lower():
+                pass
+            else:
+                raise e
 
-    def _insert_single_row(self, short_table_name, table_name_path, row, parent_fk_value, result_idx):
+    def _insert_rows(self):
+        # Attempt to start a transaction.
+        started_transaction = False
+        try:
+            #self.cursor.execute('BEGIN;')
+            #started_transaction = True
+            pass
+        except Exception:
+            # If this fails, a transaction is likely already active.
+            pass
+
+        try:
+            for table_name_path in self.table_dict:
+                table_info = self.table_dict[table_name_path]
+                short_name = table_info['short_table_name']
+                parent_table_path = table_info['table_parent_name']
+                last_fk_value = None
+
+                row = {"data": {}, "idx": 0}
+                
+                for counter, v in enumerate(self.result):
+                    if v.get('table_name') != table_name_path:
+                        if v.get('table_name') == parent_table_path and 'pk' in v:
+                            last_fk_value = v['pk']
+                        continue
+                    
+                    node_type = v.get('type')
+
+                    if node_type == 'BeginRow':
+                        row = {"data": {}, "idx": counter}
+                    
+                    elif node_type == 'EndRow':
+                        if row['data']:
+                            processed_data = self._process_row(row['data'], short_name)
+                            if processed_data:
+                                row['data'] = processed_data
+                        
+                        self._insert_single_row(short_name, table_name_path, row, last_fk_value)
+                        row = {"data": {}, "idx": 0}
+
+                    elif node_type not in ('Array', 'Object', 'EndArray'):
+                        column_path = self._normalize_key(v.get('pathname', ''))
+                        if table_name_path in self.table_dict and column_path in self.table_dict[table_name_path]['columns']:
+                            column_name = self.table_dict[table_name_path]['columns'][column_path]['column_name']
+                            row['data'][column_name] = v.get('data')
+            
+            # <<< FIX: Use Safe Commit >>>
+            # If we started the transaction OR we are in DuckDB (which needs help flushing),
+            # we attempt a safe commit.
+            if started_transaction or self.db_engine == 'duckdb':
+                self._safe_commit()
+
+        except Exception:
+            if started_transaction:
+                try:
+                    self.db_conn.rollback()
+                except Exception:
+                    pass # Ignore rollback errors on failure
+            raise
+
+    def _insert_single_row(self, short_table_name, table_name_path, row, parent_fk_value):
         table_info = self.table_dict[table_name_path]
         parent_info = self.table_dict.get(table_info['table_parent_name'])
         
+        # 1. Generate Manual PK
+        self._row_pk_counter += 1
+        last_id = self._row_pk_counter
+
         columns = list(row['data'].keys())
         values = list(row['data'].values())
         
+        # 2. Explicitly inject the PK column and value
+        columns.insert(0, table_info['pk'])
+        values.insert(0, last_id)
+
+        # 3. Inject Foreign Key if applicable
         if parent_info:
             columns.append(f"fk_{parent_info['short_table_name']}")
             values.append(parent_fk_value)
@@ -1143,24 +1227,23 @@ class LegacyJsonNormalizer:
         quoted_cols = ', '.join([self._wrap_identifier(c) for c in columns])
         placeholders = ', '.join(['?'] * len(values))
 
+        # 4. Execute Insert
         sql = f"INSERT INTO {self._wrap_identifier(short_table_name)} ({quoted_cols}) VALUES ({placeholders})"
-        self.cursor.execute(sql, values)
-        last_id = self.cursor.lastrowid
         
-        # Find the original 'Array' or 'Object' entry in self.result and store the PK
-        for item in self.result:
-            if item.get('table_name') == table_name_path and 'pk' not in item:
-                 item['pk'] = last_id
-                 break
-        # A bit of a trick: store the generated PK on every node related to this row for child lookups
-        if result_idx < len(self.result):
-            self.result[result_idx]['pk'] = last_id
+        # DEBUG PRINT ONLY FOR THE FIRST FEW ROWS TO AVOID SPAM
+        #if last_id <= 5: 
+        #    print(f"DEBUG SQL: {sql}", file=sys.stderr)
+        #    print(f"DEBUG VALS: {values}", file=sys.stderr)
 
-    def _wrap_identifier(self, object_name):
-        if not object_name: return object_name
-        if object_name.upper() in self.SQL_RESERVED_WORDS or not re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', object_name):
-            return f'"{object_name}"'
-        return object_name
+        self.cursor.execute(sql, values)
+        
+        # 5. Store PK on the specific metadata node identified by 'idx'
+        target_idx = row['idx']
+        if target_idx < len(self.result):
+            # print(f"DEBUG: Tagging PK {last_id} to node index {target_idx} ({self.result[target_idx]['type']})", file=sys.stderr)
+            self.result[target_idx]['pk'] = last_id
+        else:
+             print(f"DEBUG WARNING: Target index {target_idx} out of bounds!", file=sys.stderr)
 
     def _normalize_key(self, value):
         new_value = re.sub(r'/\d+', '/', value)
@@ -2215,14 +2298,16 @@ class Interpreter:
             if is_in_loop:
                 # The token after IN determines the loop type
                 loop_type_token = self.tokens[peek_index + 1]
-                if loop_type_token[0] == 'CSV':                  # iteral csv file
+                if loop_type_token[0] == 'CSV':                  # iterate csv file
                     self._parse_for_in_csv_loop()
-                elif loop_type_token[0] == 'JSONL':              # interate json lines file
+                elif loop_type_token[0] == 'JSONL':              # iterate json lines file
                     self._parse_for_in_jsonl_loop()
                 elif loop_type_token[0] == 'JSON':               # iterate json keys
                     self._parse_for_in_json_loop()
                 elif loop_type_token[0] == 'FILES':              # loop through files
                     self._parse_for_in_files_loop()              
+                elif loop_type_token[0] == 'TEXT':               # loop through a plain text file
+                    self._parse_for_in_text_loop()
                 else: # Default to SQL loop                      # iterate sql result set
                     self._parse_for_in_sql_loop()
             else:
@@ -3161,9 +3246,33 @@ class Interpreter:
         elif name == 'HEX$': return hex(int(args[0]))[2:]
         elif name == 'OCT$': return oct(int(args[0]))[2:]
         elif name == 'SPACE$': return ' ' * int(args[0])
-        elif name == 'TRIM$': return str(args[0]).strip()
-        elif name == 'LTRIM$': return str(args[0]).lstrip()
-        elif name == 'RTRIM$': return str(args[0]).rstrip()
+        elif name == 'TRIM$': 
+            if len(args) == 1:
+                # Standard whitespace trim
+                return str(args[0]).strip()
+            elif len(args) == 2:
+                # Trim a specific set of characters
+                return str(args[0]).strip(str(args[1]))
+            else:
+                self._error("TRIM$ requires 1 or 2 arguments.")
+        elif name == 'LTRIM$': 
+            if len(args) == 1:
+                # Standard whitespace trim from the left
+                return str(args[0]).lstrip()
+            elif len(args) == 2:
+                # Trim a specific set of characters from the left
+                return str(args[0]).lstrip(str(args[1]))
+            else:
+                self._error("LTRIM$ requires 1 or 2 arguments.")
+        elif name == 'RTRIM$': 
+            if len(args) == 1:
+                # Standard whitespace trim from the right
+                return str(args[0]).rstrip()
+            elif len(args) == 2:
+                # Trim a specific set of characters from the right
+                return str(args[0]).rstrip(str(args[1]))
+            else:
+                self._error("RTRIM$ requires 1 or 2 arguments.")
         elif name == 'STR$': return self._format_output_value(args[0])
         elif name == 'HTMLENCODE$':
             if len(args) != 1: self._error("HTMLENCODE$ requires one string argument.")
@@ -3171,6 +3280,12 @@ class Interpreter:
         elif name == 'HTMLDECODE$':
             if len(args) != 1: self._error("HTMLDECODE$ requires one string argument.")
             return html.unescape(str(args[0]))
+        elif name == 'STRIPHTML$':
+            if len(args) != 1: self._error("STRIPHTML$ requires one string argument.")
+            html_content = str(args[0])
+            # Use BeautifulSoup to parse the HTML and get the text
+            soup = BeautifulSoup(html_content, 'lxml')
+            return soup.get_text()
         elif name == 'URLENCODE$':
             if len(args) != 1: self._error("URLENCODE$ requires one string argument.")
             return quote_plus(str(args[0]))
@@ -3606,6 +3721,7 @@ class Interpreter:
                 if mode_value == 'CONSOLE': 
                     self._next_token()
                     g_output_config.mode = "CONSOLE"
+                    g_output_config.format = "TEXT"
                 elif mode_value == 'FILE':
                     self._next_token()
                     filename = self._parse_expression()
@@ -3620,9 +3736,9 @@ class Interpreter:
             if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
                 self._next_token()
                 format_token = self._current_token()
-                if format_token and format_token[0] in ['ID', 'TEXT', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL", "SQL"]:
+                if format_token and format_token[0] in ['ID', 'TEXT', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL", "SQL", "PARQUET", "PLAIN"]:
                     output_format = format_token[1].upper()
-                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED", "EXCEL", "SQL"]: 
+                    if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED", "EXCEL", "SQL", "PARQUET", "PLAIN"]: 
                         g_output_config.format = output_format
                         self._next_token()
                         
@@ -3666,16 +3782,25 @@ class Interpreter:
             writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}")
             writer_function(results, column_names, sys.stdout, g_output_config.sql_options)
         elif g_output_config.mode == "FILE":
-            try:
-                with open(g_output_config.file_path, "w", encoding="utf-8", newline='') as f:
-                    writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}")
-                    writer_function(results, column_names, f, g_output_config.sql_options)
+            if g_output_config.format in ["EXCEL", "PARQUET"]:
+                # Pass None as the stream; the writer will use g_output_config.file_path directly
+                writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}")
+                writer_function(results, column_names, None, g_output_config.sql_options)
                 print(f"{len(results)} rows written to {g_output_config.file_path}")
-            except IOError as e: self._error(f"Error writing to file: {e}")
-
+            else:
+                # Standard text/csv/json formats need a text stream
+                try:
+                    with open(g_output_config.file_path, "w", encoding="utf-8", newline='') as f:
+                        writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}")
+                        writer_function(results, column_names, f, g_output_config.sql_options)
+                    print(f"{len(results)} rows written to {g_output_config.file_path}")
+                except IOError as e: self._error(f"Error writing to file: {e}")
+            
     def _write_as_text(self, results, headers, stream, options={}):
         if not results:
-            stream.write("(0 rows returned)\n")
+            # Check footer option even for empty results
+            if str(options.get('footer', 'true')).lower() != 'false':
+                stream.write("(0 rows returned)\n")
             return
 
         style = options.get('box_style', 'ASCII').upper()
@@ -3700,10 +3825,11 @@ class Interpreter:
             return f"{left}{join.join(parts)}{right}\n"
 
         # Print top border and header
-        stream.write(build_separator(chars['tl'], chars['tc'], chars['tr']))
-        header_parts = [f" {h:^{widths[h]}} " for h in headers]
-        stream.write(f"{chars['v']}{chars['v'].join(header_parts)}{chars['v']}\n")
-        stream.write(build_separator(chars['ml'], chars['mc'], chars['mr']))
+        if str(options.get('header', 'true')).lower() != 'false':
+            stream.write(build_separator(chars['tl'], chars['tc'], chars['tr']))
+            header_parts = [f" {h:^{widths[h]}} " for h in headers]
+            stream.write(f"{chars['v']}{chars['v'].join(header_parts)}{chars['v']}\n")
+            stream.write(build_separator(chars['ml'], chars['mc'], chars['mr']))
 
         # Print data rows one by one
         for row in results:
@@ -3720,11 +3846,15 @@ class Interpreter:
                 stream.write(f"{chars['v']}{chars['v'].join(row_parts)}{chars['v']}\n")
 
         # Print bottom border and row count
-        stream.write(build_separator(chars['bl'], chars['bc'], chars['br']))
-        stream.write(f"({len(results)} rows returned)\n")
+        if str(options.get('footer', 'true')).lower() != 'false':
+            stream.write(build_separator(chars['bl'], chars['bc'], chars['br']))
+            stream.write(f"({len(results)} rows returned)\n")
 
     def _write_as_csv(self, results, headers, stream, options={}):
-        csv_writer = csv.writer(stream); csv_writer.writerow(headers); csv_writer.writerows(results)
+        csv_writer = csv.writer(stream)
+        if str(options.get('header', 'true')).lower() != 'false':
+            csv_writer.writerow(headers)
+        csv_writer.writerows(results)
     
     def _write_as_json(self, results, headers, stream, options={}):
         json.dump([dict(zip(headers, row)) for row in results], stream, indent=2)
@@ -3849,6 +3979,38 @@ class Interpreter:
             
             stream.write("".join(line_parts) + "\n")
 
+    def _write_as_parquet(self, results, headers, stream, options={}):
+            """Writes query results as an Apache Parquet file."""
+            # Parquet is a binary format and cannot be written to a text stream (like the console).
+            # We must enforce that the output mode is set to a file.
+            if g_output_config.mode != "FILE":
+                self._error("Parquet output requires FILE mode. Use: SET OUTPUT FILE \"filename.parquet\" FORMAT PARQUET")
+                return
+
+            if not results:
+                # Create an empty file if there are no results, to be consistent.
+                empty_table = pa.Table.from_pydict({}, schema=pa.schema([(h, pa.string()) for h in headers]))
+                pq.write_table(empty_table, g_output_config.file_path)
+                return
+
+            try:
+                # The 'results' are a list of rows (tuples). PyArrow works with columns.
+                # We need to transpose the data from row-oriented to column-oriented.
+                # Example: [(1, 'a'), (2, 'b')] becomes [[1, 2], ['a', 'b']]
+                columns_as_lists = list(zip(*results))
+
+                # Create PyArrow Arrays for each column. PyArrow can often infer data types.
+                arrow_arrays = [pa.array(col) for col in columns_as_lists]
+
+                # Create a PyArrow Table from the arrays and headers.
+                table = pa.Table.from_arrays(arrow_arrays, names=headers)
+
+                # Write the table to the specified Parquet file.
+                pq.write_table(table, g_output_config.file_path)
+
+            except Exception as e:
+                self._error(f"Error writing Parquet file: {e}")
+            
     def _write_as_excel(self, results, headers, stream, options={}):
         """Writes query results as an Excel file."""
         # For Excel output, we need a file path, not a stream
@@ -3859,29 +4021,46 @@ class Interpreter:
         filename = g_output_config.file_path
         if not filename.lower().endswith(('.xlsx', '.xls')):
             filename += '.xlsx'
+            
         report_title = options.get('title')
         report_footer = options.get('footer')
         report_subtitle = options.get('subtitle',"")
         
-        # Create a new workbook and worksheet
-        workbook = openpyxl.Workbook()
-        worksheet = workbook.active
-        worksheet.title = "Query Results"
+        # <<< CHANGE START: Support Custom Sheet Name and Appending >>>
+        # 1. Get sheet name from options (default to "Query Results")
+        target_sheet_name = options.get('sheetname', "Query Results")
+        
+        # 2. Check if file exists to Append, otherwise Create New
+        if os.path.exists(filename):
+            try:
+                workbook = openpyxl.load_workbook(filename, keep_vba=False, data_only=False, keep_links=True, rich_text=True)
+                # Create a new sheet (openpyxl handles name collisions automatically by appending numbers)
+                worksheet = workbook.create_sheet(title=target_sheet_name)
+            except Exception as e:
+                print(f"Warning: Could not open existing file '{filename}' ({e}). Creating new.", file=sys.stderr)
+                workbook = openpyxl.Workbook()
+                worksheet = workbook.active
+                worksheet.title = target_sheet_name
+        else:
+            workbook = openpyxl.Workbook()
+            worksheet = workbook.active
+            worksheet.title = target_sheet_name
+        # <<< CHANGE END >>>
         
         current_row = 1
         if report_title:
-            worksheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
-            title_cell = worksheet.cell(row=1, column=1, value=report_title)
+            worksheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(headers))
+            title_cell = worksheet.cell(row=current_row, column=1, value=report_title)
             title_cell.font = Font(bold=True, size=16)
             title_cell.alignment = Alignment(horizontal="center", vertical="center")
-            worksheet.row_dimensions[1].height = 30
+            worksheet.row_dimensions[current_row].height = 30
             current_row += 1 
         if report_subtitle:
-            worksheet.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
-            title_cell = worksheet.cell(row=1, column=1, value=report_title)
-            title_cell.font = Font(bold=True, size=16)
+            worksheet.merge_cells(start_row=current_row, start_column=1, end_row=current_row, end_column=len(headers))
+            title_cell = worksheet.cell(row=current_row, column=1, value=report_subtitle) # Fixed: passed report_subtitle
+            title_cell.font = Font(bold=True, size=14) # Slightly smaller than title
             title_cell.alignment = Alignment(horizontal="center", vertical="center")
-            worksheet.row_dimensions[1].height = 30
+            worksheet.row_dimensions[current_row].height = 25
             current_row += 1
         if report_title or report_subtitle:
             current_row += 1 # Add a blank row after the title
@@ -3939,15 +4118,15 @@ class Interpreter:
             worksheet.column_dimensions[column_letter].width = adjusted_width
         
         # Add freeze panes to keep headers visible
-        worksheet.freeze_panes = "A4" if report_title else "A2"
+        worksheet.freeze_panes = f"A{current_row - len(results)}" if report_title else "A2"
         
         # Save the workbook
         try:
             workbook.save(filename)
-            #print(f"{len(results)} rows written to Excel file: {filename}")
         except Exception as e:
             self._error(f"Error writing Excel file: {e}")
-
+    
+    
     def _write_as_sql(self, results, headers, stream, options={}):
         if not results:
             stream.write("-- (0 rows returned)\n")
@@ -3964,8 +4143,10 @@ class Interpreter:
         
         if not target_table_name:
             # We need at least a target table to generate SQL.
-            self._error("FORMAT SQL requires a 'target_tablename' in OPTIONS or a simple FROM clause.")
-            return
+            # self._error("FORMAT SQL requires a 'target_tablename' in OPTIONS or a simple FROM clause.")
+            print("FORMAT SQL - no 'target_tablename' in OPTIONS found nor a simple FROM clause. Defaulting table name to \"mytable\".", file=sys.stderr)
+            target_table_name = "mytable"
+            # return
             
         vendor = options.get('vendor', self.db_engine).lower()    
         mode = options.get('mode', 'insert').lower()
@@ -3990,7 +4171,7 @@ class Interpreter:
 
         if mode in ('insert', 'replace'):
             # This is the existing logic for INSERT and INSERT OR REPLACE
-            command_prefix = f"INSERT OR REPLACE INTO {self._quote_identifier(target_table_name)}" if mode == 'replace' else f"INSERT INTO {self._quote_identifier(table_name)}"
+            command_prefix = f"INSERT OR REPLACE INTO {self._quote_identifier(target_table_name)}" if mode == 'replace' else f"INSERT INTO {self._quote_identifier(target_table_name)}"
             quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
             for row in results:
                 values_str = ', '.join([format_value(v) for v in row])
@@ -4068,7 +4249,21 @@ class Interpreter:
         
         else:
             self._error(f"Invalid mode '{mode}'. Use 'insert', 'replace', 'update', 'upsert', or 'merge'.")
-                   
+
+    def _write_as_plain(self, results, headers, stream, options={}):
+        """Writes the first column of each row directly to the stream (Good for JSON generation)."""
+        if not results:
+            return
+
+        for row in results:
+            # Only write the first column
+            if row and row[0] is not None:
+                stream.write(str(row[0]))
+            
+            # Add newline unless suppressed via OPTIONS "newline=false"
+            if str(options.get('newline', 'true')).lower() != 'false':
+                stream.write('\n')
+                
     def _parse_if_statement(self):
         start_if_index = self.token_index
         self._expect('IF')
@@ -4477,7 +4672,11 @@ class Interpreter:
             else:
                 target.write(formatted_output)
                 if not suppress_nl:
-                    target.write('\n')
+                    # If writing to a file handle (which uses newline=''), force system separator
+                    if target != sys.stdout:
+                        parts.append(os.linesep)
+                    else:
+                        parts.append('\n')
             return
         parts = []
         suppress_nl = False
@@ -4514,28 +4713,52 @@ class Interpreter:
                 else:
                     suppress_nl = False
                     break
-            if not suppress_nl: parts.append('\n')
+            if not suppress_nl: 
+                # If writing to a file handle (which uses newline=''), force system separator
+                if target != sys.stdout:
+                    parts.append(os.linesep)
+                else:
+                    parts.append('\n')
         output = "".join(parts)
         if target == sys.stdout: print(output, end='')
         else: target.write(output)   
             
     def _parse_write_statement(self):
         self._expect('WRITE'); target_handle, dialect_params = None, {}
+        
+        # Handle optional file number
         if self._current_token() and self._current_token()[0] == 'HASH_SYM':
             self._next_token(); file_num = int(self._parse_expression()); self._expect('COMMA')
             handle_info = self.file_handles.get(file_num)
             if not handle_info: self._error(f"File #{file_num} not open.")
             target_handle, dialect_params = handle_info['handle'], handle_info['dialect']
+        
+        # Collect values
         values = []
         if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
             while True:
                 values.append(self._parse_expression())
                 if self._current_token() and self._current_token()[0] == 'COMMA': self._next_token()
                 else: break
+        
+        # --- FIX: Clean values (convert 193.0 -> 193) before writing ---
+        cleaned_values = []
+        for v in values:
+            if isinstance(v, float) and v.is_integer():
+                cleaned_values.append(int(v))
+            else:
+                cleaned_values.append(v)
+        # ---------------------------------------------------------------
+
         if target_handle is None:
-            output_buffer = io.StringIO(); csv_writer = csv.writer(output_buffer, **dialect_params)
-            csv_writer.writerow(values); print(output_buffer.getvalue().strip())
-        else: csv.writer(target_handle, **dialect_params).writerow(values)
+            # Write to stdout (buffer)
+            output_buffer = io.StringIO()
+            csv_writer = csv.writer(output_buffer, **dialect_params)
+            csv_writer.writerow(cleaned_values)
+            print(output_buffer.getvalue().strip())
+        else:
+            # Write to file handle
+            csv.writer(target_handle, **dialect_params).writerow(cleaned_values)
             
     def _parse_exit_statement(self):
         self._expect('EXIT')
@@ -6049,82 +6272,243 @@ class Interpreter:
                 }
                 row_num += 1
  
-    def _excel_extractor(self, filename, options):
+    def _parquet_extractor(self, filename, options):
         """
-        Extractor for Excel files (.xls, .xlsx). Yields headers, then a dict for each data row.
+        Extractor for Apache Parquet files. Yields headers, then data rows.
         """
         try:
-            workbook = xlrd3.open_workbook(filename)
-            sheet = None
+            # --- 1. Open the Parquet file ---
+            parquet_file = pq.ParquetFile(filename)
 
-            # --- 1. Select the correct sheet ---
-            sheet_name_opt = options.get('sheetname')
-            if sheet_name_opt:
-                # Find sheet by name, case-insensitively
-                target_sheet_name = sheet_name_opt.lower()
-                sheet_names_lower = [name.lower() for name in workbook.sheet_names()]
-                if target_sheet_name in sheet_names_lower:
-                    sheet = workbook.sheet_by_index(sheet_names_lower.index(target_sheet_name))
-                else:
-                    self._error(f"Excel file '{filename}' does not have a sheet named '{sheet_name_opt}'.")
-            else:
-                # Default to the sheet index specified, or the very first sheet
-                sheet_index = int(options.get('sheetindex', 0))
-                if sheet_index >= workbook.nsheets:
-                    self._error(f"Excel sheet index {sheet_index} is out of bounds.")
-                sheet = workbook.sheet_by_index(sheet_index)
-
-            # --- 2. Determine and yield headers ---
-            start_row = int(options.get('skip', 0))
-            has_header = str(options.get('header', 'true')).lower() in ['true', '1', 'y']
-            
-            headers = []
-            if has_header:
-                if start_row < sheet.nrows:
-                    # Clean up header names and generate fallbacks for empty cells
-                    raw_headers = [str(sheet.cell_value(start_row, col)) for col in range(sheet.ncols)]
-                    for i, header in enumerate(raw_headers):
-                        cleaned_header = header.strip()
-                        headers.append(cleaned_header if cleaned_header else f"C{i+1}")
-                    start_row += 1 # Move to the first data row
-                # If file is empty or only has skipped rows, headers will be empty
-            else:
-                # No header row, so generate default column names
-                if sheet.ncols > 0:
-                    headers = [f"C{i+1}" for i in range(sheet.ncols)]
-            
+            # --- 2. Yield the headers from the file's schema ---
+            headers = parquet_file.schema.names
             yield {'type': 'headers', 'data': headers}
 
-            # --- 3. Yield each data row ---
+            # --- 3. Iterate over row groups and batches to stream data ---
             row_num = 0
             limit = int(options.get('limit', -1))
-            for row_idx in range(start_row, sheet.nrows):
-                if limit != -1 and row_num >= limit:
-                    break
+            skip = int(options.get('skip', 0))
 
-                # Convert all cell values to strings, handling different types from xlrd3
-                data_row = []
-                for col_idx in range(sheet.ncols):
-                    cell_value = sheet.cell_value(row_idx, col_idx)
-                    # Convert floats that are whole numbers (e.g., 123.0) to clean integers
-                    if isinstance(cell_value, float) and cell_value.is_integer():
-                        data_row.append(str(int(cell_value)))
-                    else:
-                        data_row.append(str(cell_value) if cell_value is not None else "")
-                
-                yield {
-                    'type': 'data',
-                    'data': data_row,
-                    'physical_line_num': row_idx + 1, # Excel rows are 1-based for users
-                    'logical_line_num': row_num + 1
-                }
-                row_num += 1
+            for batch in parquet_file.iter_batches():
+                # Convert the batch to a list of Python dictionaries for easier row access
+                data_as_dicts = batch.to_pylist()
+
+                for i, record_dict in enumerate(data_as_dicts):
+                    # Handle skipping rows at the beginning
+                    if row_num < skip:
+                        row_num += 1
+                        continue
+
+                    # Handle limiting the total number of rows processed
+                    if limit != -1 and (row_num - skip) >= limit:
+                        return # Stop the generator
+
+                    # Convert the dictionary record into a list of values, in the correct header order.
+                    # This ensures consistency even if the internal dictionary order changes.
+                    data_row = []
+                    for h in headers:
+                        val = record_dict.get(h)
+                        # Your pipeline expects string values, so convert everything.
+                        # Complex types (structs, lists) in Parquet will become JSON strings.
+                        if isinstance(val, (dict, list)):
+                            data_row.append(json.dumps(val))
+                        elif val is None:
+                            data_row.append("")
+                        else:
+                            data_row.append(str(val))
+                    
+                    yield {
+                        'type': 'data',
+                        'data': data_row,
+                        'physical_line_num': row_num + 1, # Parquet doesn't have "lines", so we use the row index
+                        'logical_line_num': (row_num - skip) + 1
+                    }
+                    row_num += 1
 
         except FileNotFoundError:
             self._error(f"File not found: {filename}")
-        except xlrd3.biffh.XLRDError as e:
-            self._error(f"Error reading Excel file '{filename}': {e}")
+        except pa.lib.ArrowInvalid as e:
+            self._error(f"Invalid Parquet file or format error in '{filename}': {e}")
             
+    def _excel_extractor(self, filename, options):
+        """
+        Extractor for Excel files. 
+        Uses openpyxl for .xlsx (modern) and xlrd3 for .xls (legacy).
+        """
+        is_xlsx = filename.lower().endswith('.xlsx')
+        
+        # <<< NEW: Check for linenum option >>>
+        add_line_num = str(options.get('linenum', 'false')).lower() in ['true', '1', 'y']
+        
+        if is_xlsx:
+            # --- MODERN PATH (.xlsx) using openpyxl ---
+            try:
+                # data_only=True is CRITICAL.
+                wb = openpyxl.load_workbook(filename, data_only=True, read_only=True, rich_text=True)
+                
+                sheet_name_opt = options.get('sheetname')
+                sheet = None
+                
+                if sheet_name_opt:
+                    if sheet_name_opt in wb.sheetnames:
+                        sheet = wb[sheet_name_opt]
+                    else:
+                        # Try case-insensitive match
+                        for name in wb.sheetnames:
+                            if name.lower() == sheet_name_opt.lower():
+                                sheet = wb[name]
+                                break
+                        if not sheet:
+                            self._error(f"Sheet '{sheet_name_opt}' not found in '{filename}'.")
+                else:
+                    # Default to index
+                    sheet_index = int(options.get('sheetindex', 0))
+                    if sheet_index < len(wb.sheetnames):
+                        sheet = wb[wb.sheetnames[sheet_index]]
+                    else:
+                        self._error(f"Sheet index {sheet_index} out of bounds.")
+
+                # --- Yield Headers ---
+                rows = sheet.iter_rows(values_only=True)
+                
+                # Handle skipping lines
+                skip = int(options.get('skip', 0))
+                for _ in range(skip):
+                    next(rows, None)
+
+                has_header = str(options.get('header', 'true')).lower() in ['true', '1', 'y']
+                headers = []
+                
+                if has_header:
+                    try:
+                        raw_headers = next(rows)
+                        headers = [str(h).strip() if h is not None else f"C{i+1}" for i, h in enumerate(raw_headers)]
+                    except StopIteration:
+                        pass 
+                else:
+                    pass 
+
+                # <<< NEW: Append _linenum header >>>
+                if add_line_num:
+                    headers.append('_linenum')
+
+                yield {'type': 'headers', 'data': headers}
+
+                # --- Yield Data ---
+                row_num = 0
+                limit = int(options.get('limit', -1))
+                
+                for i, row_values in enumerate(rows):
+                    if limit != -1 and row_num >= limit:
+                        break
+                    
+                    if not headers and row_values:
+                        headers = [f"C{k+1}" for k in range(len(row_values))]
+
+                    data_row = []
+                    for val in row_values:
+                        if val is None:
+                            data_row.append("")
+                        elif isinstance(val, (int, float)):
+                            if isinstance(val, float) and val.is_integer():
+                                data_row.append(str(int(val)))
+                            else:
+                                data_row.append(str(val))
+                        else:
+                            data_row.append(str(val))
+
+                    # <<< NEW: Append physical row number to data >>>
+                    if add_line_num:
+                        # 1-based index + skip + 1 for header (if present)
+                        physical_row = i + 1 + skip + (1 if has_header else 0)
+                        data_row.append(physical_row)
+
+                    yield {
+                        'type': 'data',
+                        'data': data_row,
+                        'physical_line_num': i + 1 + skip + (1 if has_header else 0),
+                        'logical_line_num': row_num + 1
+                    }
+                    row_num += 1
+                
+                wb.close()
+
+            except Exception as e:
+                self._error(f"Error reading .xlsx file '{filename}': {e}")
+
+        else:
+            # --- LEGACY PATH (.xls) using xlrd3 ---
+            try:
+                workbook = xlrd3.open_workbook(filename)
+                sheet = None
+
+                sheet_name_opt = options.get('sheetname')
+                if sheet_name_opt:
+                    target_sheet_name = sheet_name_opt.lower()
+                    sheet_names_lower = [name.lower() for name in workbook.sheet_names()]
+                    if target_sheet_name in sheet_names_lower:
+                        sheet = workbook.sheet_by_index(sheet_names_lower.index(target_sheet_name))
+                    else:
+                        self._error(f"Excel file '{filename}' does not have a sheet named '{sheet_name_opt}'.")
+                else:
+                    sheet_index = int(options.get('sheetindex', 0))
+                    if sheet_index >= workbook.nsheets:
+                        self._error(f"Excel sheet index {sheet_index} is out of bounds.")
+                    sheet = workbook.sheet_by_index(sheet_index)
+
+                start_row = int(options.get('skip', 0))
+                has_header = str(options.get('header', 'true')).lower() in ['true', '1', 'y']
+                
+                headers = []
+                if has_header:
+                    if start_row < sheet.nrows:
+                        raw_headers = [str(sheet.cell_value(start_row, col)) for col in range(sheet.ncols)]
+                        for i, header in enumerate(raw_headers):
+                            cleaned_header = header.strip()
+                            headers.append(cleaned_header if cleaned_header else f"C{i+1}")
+                        start_row += 1
+                else:
+                    if sheet.ncols > 0:
+                        headers = [f"C{i+1}" for i in range(sheet.ncols)]
+                
+                # <<< NEW: Append _linenum header >>>
+                if add_line_num:
+                    headers.append('_linenum')
+
+                yield {'type': 'headers', 'data': headers}
+
+                row_num = 0
+                limit = int(options.get('limit', -1))
+                for row_idx in range(start_row, sheet.nrows):
+                    if limit != -1 and row_num >= limit:
+                        break
+
+                    data_row = []
+                    for col_idx in range(sheet.ncols):
+                        cell_value = sheet.cell_value(row_idx, col_idx)
+                        if isinstance(cell_value, float) and cell_value.is_integer():
+                            data_row.append(str(int(cell_value)))
+                        else:
+                            data_row.append(str(cell_value) if cell_value is not None else "")
+                    
+                    # <<< NEW: Append physical row number to data >>>
+                    if add_line_num:
+                        # xlrd3 row_idx is 0-based, users expect 1-based
+                        data_row.append(row_idx + 1)
+
+                    yield {
+                        'type': 'data',
+                        'data': data_row,
+                        'physical_line_num': row_idx + 1,
+                        'logical_line_num': row_num + 1
+                    }
+                    row_num += 1
+
+            except FileNotFoundError:
+                self._error(f"File not found: {filename}")
+            except xlrd3.biffh.XLRDError as e:
+                self._error(f"Error reading Excel file '{filename}': {e}")
+                
     def _fixed_extractor(self, filename, options):
         """
         Extractor for fixed-width text files. Yields headers, then data rows.
@@ -6389,7 +6773,11 @@ class Interpreter:
                 
                 links = soup.find_all('a', href=True)
                 for i, link in enumerate(links):
+                    relative_href = link.get('href')
+                    # 'filename' holds the original URL passed to LOAD HTML
+                    absolute_href = urljoin(filename, relative_href)
                     data_row = [source_url, link.get_text(strip=True), link.get('href')]
+                    data_row = [source_url, link.get_text(strip=True), absolute_href]
                     if add_line_num: data_row.append(i + 1)
                     yield {'type': 'data', 'data': data_row, 'physical_line_num': 0, 'logical_line_num': i + 1}
 
@@ -6398,9 +6786,13 @@ class Interpreter:
                 if add_line_num: headers.append('_linenum')
                 yield {'type': 'headers', 'data': headers}
 
+                base_url = options.get('base_url', filename)
+
                 images = soup.find_all('img', src=True)
                 for i, img in enumerate(images):
-                    data_row = [source_url, img.get('src'), img.get('alt', ''), img.get('title', '')]
+                    relative_src = img.get('src')
+                    absolute_src = urljoin(base_url, relative_src) # Use base_url
+                    data_row = [source_url, absolute_src, img.get('alt', ''), img.get('title', '')]
                     if add_line_num: data_row.append(i + 1)
                     yield {'type': 'data', 'data': data_row, 'physical_line_num': 0, 'logical_line_num': i + 1}
             else:
@@ -6736,7 +7128,12 @@ class Interpreter:
 
                     element.clear() # CRITICAL: This frees the element from memory
             
-            self.db_connection.commit() # Commit the transaction
+            #self.db_connection.commit() # Commit the transaction
+            try:
+                self.db_connection.commit()
+            except Exception:
+                # Ignore "no transaction is active" errors if it was already committed
+                pass
             print(f"Normalization Stage 1: Complete. Streamed {node_id_counter} nodes.")
 
         except Exception as e:
@@ -6925,7 +7322,12 @@ class Interpreter:
                 print("--- END DEBUG ---")
                 # <<< END DEBUGGING >>>
 
-            self.db_connection.commit()
+            #self.db_connection.commit()
+            try:
+                self.db_connection.commit()
+            except Exception:
+                # Ignore "no transaction is active" errors if it was already committed
+                pass
             print("Normalization Stage 3: Complete.")
 
         except Exception as e:
@@ -7323,9 +7725,19 @@ class Interpreter:
             self._error(f"An error occurred during the LOAD operation: {e}")
 
     def _show_table_counts(self): 
+        # Safely attempt to commit/refresh for DuckDB.
+        # This persists data if the Normalizer ran inside an open transaction.
+        if self.db_engine == 'duckdb':
+            try:
+                self.db_connection.commit()
+            except Exception:
+                # Ignore "no transaction is active" errors if it was already committed
+                pass
+
         tables = self._get_table_list()
         print(f"  - Created {len(tables)} tables:")
         for table in tables:
+            # Use the Interpreter's _quote_identifier method
             self.db_cursor.execute(f"SELECT COUNT(*) FROM {self._quote_identifier(table)}")
             count = self.db_cursor.fetchone()[0]
             print(f"    * {table}: {count} records")
@@ -7337,7 +7749,7 @@ class Interpreter:
         """
         self._expect('LOAD')
         token = self._current_token()
-        valid_load_types = {'CSV', 'EXCEL', 'FIXED', 'JSON', 'JSONL', 'XML', 'HTML', 'TEXT'}
+        valid_load_types = {'CSV', 'EXCEL', 'FIXED', 'JSON', 'JSONL', 'XML', 'HTML', 'TEXT', 'PARQUET'}
 
         if not token or token[0] not in valid_load_types:
             self._error(f"Expected a valid LOAD type but got '{token[0] if token else 'None'}'.")
@@ -7383,7 +7795,7 @@ class Interpreter:
                         data = json.load(f)
 
                 # Instantiate and run the ported normalizer
-                normalizer = LegacyJsonNormalizer(self.db_connection, data, dest_info['target'], options)
+                normalizer = LegacyJsonNormalizer(self.db_connection, data, dest_info['target'], options, db_engine=self.db_engine)
                 normalizer.run()
                 self._show_table_counts()
 
@@ -7448,6 +7860,7 @@ class Interpreter:
                 'FIXED': self._fixed_extractor, 'JSONL': self._jsonl_extractor,
                 'TEXT': self._text_extractor, 'HTML': self._html_extractor,
                 'XML': self._xml_extractor, 'JSON': self._json_extractor,
+                'PARQUET': self._parquet_extractor,
             }
 
             if load_type in extractor_map:
@@ -7546,6 +7959,67 @@ class Interpreter:
             elif key_var in self.variables:
                 del self.variables[key_var]
 
+    def _parse_for_in_text_loop(self):
+        """
+        Parses and executes a FOR...IN TEXT(...) loop.
+        Syntax: FOR line$ IN TEXT("filename.txt")
+        """
+        self._expect('FOR')
+        loop_var_name = self._expect('ID')[1]
+        self._expect('IN')
+        self._expect('TEXT')
+        
+        self._expect('LPAREN')
+        filename = self._parse_expression()
+        self._expect('RPAREN')
+        
+        if not isinstance(filename, str):
+            self._error("FOR...IN TEXT requires a string filename.")
+
+        loop_body_start_index = self.token_index
+        original_value = self.variables.get(loop_var_name)
+        row_number = 0
+        
+        try:
+            # Open with errors='replace' to be robust against encoding issues
+            with open(filename, 'r', encoding='utf-8', errors='replace') as infile:
+                for line in infile:
+                    row_number += 1
+                    self.variables['RECNO'] = float(row_number)
+                    
+                    # Strip newline characters (like LINE INPUT does)
+                    line_content = line.rstrip('\n\r')
+                    
+                    self.variables[loop_var_name] = line_content
+                    
+                    # Rewind and execute the loop body for this iteration
+                    self.token_index = loop_body_start_index
+                    if self._current_token() and self._current_token()[0] == 'NEWLINE': 
+                        self._next_token()
+                    
+                    self.run_block(end_tokens={'NEXT'})
+                    
+                    # After each iteration, consume the NEXT token.
+                    self._expect('NEXT')
+                    if self._current_token() and self._current_token()[0] == 'ID':
+                        self._next_token()
+
+        except FileNotFoundError:
+            self._error(f"File not found for TEXT loop: {filename}")
+        except LoopExit as e:
+            if e.args[0] == 'FOR':
+                self._skip_block('FOR', 'NEXT')
+            else:
+                raise e
+        finally:
+            # Restore the original value of the loop variable.
+            if original_value is not None:
+                self.variables[loop_var_name] = original_value
+            elif loop_var_name in self.variables:
+                del self.variables[loop_var_name]
+            if 'RECNO' in self.variables:
+                del self.variables['RECNO']
+                
     def _parse_for_in_sql_loop(self):
         start_index = self.token_index
         self._expect('FOR')
@@ -7844,7 +8318,8 @@ class Interpreter:
                 self._next_token()
                 type_token = self._current_token()
                 if not type_token or type_token[0] not in ['HASH', 'ARRAY']:
-                    self._error(f"Expected HASH or ARRAY after AS")
+                    pass
+                    #print(f"Data types other than HASH and ARRAY are currently ignored", file=sys.stderr)
                 self._next_token()
                 if type_token[0] == 'HASH':
                     self.variables[var_name] = {}
