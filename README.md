@@ -1,4 +1,4 @@
-# DbBasic: A Data-Centric BASIC Interpreter and Procedure Language for SQLite and DuckDB
+# DbBasic: A Data-Centric BASIC Interpreter and Procedural Language for SQLite and DuckDB
 
 ![Language](https://img.shields.io/badge/language-BASIC-blue.svg)
 ![Backend](https://img.shields.io/badge/backend-Python-green.svg)
@@ -97,6 +97,7 @@ END
 | FORM ... ENDFORM        | Defines the layout and elements of a text-based user interface (TUI) form. |
 | GOSUB ... RETURN        | Jumps to a labeled subroutine and returns to the next statement after the GOSUB call. |
 | GOTO                    | Unconditionally jumps program execution to a specified label. |
+| HELP                    | Help system when running in interactive mode |
 | IF ... THEN ... ELSE ... END IF | Executes blocks of code conditionally.           |
 | INPUT                   | Prompts the user for input from the console and stores it in a variable. |
 | KILL                    | Deletes a file from the filesystem.                     |
@@ -120,7 +121,7 @@ END
 | SET                     | Configures global settings for the interpreter, such as OUTPUT redirection or error handling behavior. |
 | SHELL                   | Executes a command in the underlying operating system shell. |
 | SHIFT                   | Removes the first element from an array, optionally storing it in a variable. |
-| SHOW                    | Displays database schema information, such as SHOW TABLES or SHOW INDEXES. |
+| SHOW                    | Displays database schema information, such as SHOW TABLES or SHOW INDEXES. Also SHOW VARIABLES |
 | SORT                    | Sorts an array in-place, with an optional key for sorting arrays of hashes. |
 | SPLICE                  | Modifies an array by removing, replacing, and/or adding elements at a specific index. |
 | SQL Statement           | Any line starting with a SQL keyword (e.g., SELECT, INSERT, UPDATE) is executed directly against the current database. Must end in semi-colon. |
@@ -237,6 +238,7 @@ This document provides a quick reference to all available functions in the DbBas
 ---
 
 **Note:** All functions return a value and can be used in expressions, assignments, or as arguments to other functions/statements.
+
 
 
 
