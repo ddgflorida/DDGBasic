@@ -49,7 +49,8 @@ DATABASE OPEN ":memory:"
 
 REM --- Download a CSV and create a table from it in one command ---
 PRINT "Fetching and loading data..."
-CREATE TABLE domains AS SELECT * FROM read_csv_auto('https://raw.githubusercontent.com/cisagov/dotgov-data/main/current-full.csv');
+CREATE TABLE domains AS
+  SELECT * FROM read_csv_auto('https://raw.githubusercontent.com/cisagov/dotgov-data/main/current-full.csv');
 
 REM --- Run a query on the loaded data ---
 PRINT "Top 5 States with the most .gov domains:"
@@ -236,6 +237,7 @@ This document provides a quick reference to all available functions in the DbBas
 ---
 
 **Note:** All functions return a value and can be used in expressions, assignments, or as arguments to other functions/statements.
+
 
 
 
