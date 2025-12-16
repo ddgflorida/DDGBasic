@@ -108,7 +108,6 @@ END
 | ON ERROR GOTO           | Specifies a label to jump to when a runtime error occurs. |
 | OPEN                    | Opens a file for reading, writing, or appending, assigning it a file handle. |
 | OPENFORM                | Displays a previously defined FORM to the user for interaction. |
-| PARSE JSON              | Parses a JSON-formatted string into a HASH or ARRAY variable. |
 | POP                     | Removes the last element from an array, optionally storing it in a variable. |
 | PRINT                   | Outputs text, variables, or expressions to the console or an open file. |
 | PUSH                    | Adds a new element to the end of an array.              |
@@ -237,6 +236,7 @@ This document provides a quick reference to all available functions in the DbBas
 ---
 
 **Note:** All functions return a value and can be used in expressions, assignments, or as arguments to other functions/statements.
+
 
 
 
