@@ -202,6 +202,7 @@ This document provides a quick reference to all available functions in the DbBas
 | OCT$(number)            | STRING      | Returns the octal representation of a number as a string. |
 | PADLEFT$(text$, length, pad_char$) | STRING | Pads a string on the left to a total length using pad_char$. |
 | PADRIGHT$(text$, length, pad_char$) | STRING | Pads a string on the right to a total length using pad_char$. |
+| PARSEJSON(string$)      | STRING      | Parses a JSON string into a HASH or ARRAY. |
 | PATHNAME$(path$)        | FILE        | Returns the directory portion of a path. |
 | POWER(base, exponent)   | MATH        | Returns the value of base raised to the power of exponent. |
 | PROPER$(string$)        | STRING      | Converts a string to title case (e.g., "hello world" becomes "Hello World"). |
@@ -236,6 +237,7 @@ This document provides a quick reference to all available functions in the DbBas
 ---
 
 **Note:** All functions return a value and can be used in expressions, assignments, or as arguments to other functions/statements.
+
 
 
 
