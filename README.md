@@ -103,7 +103,7 @@ END
 | LINE INPUT              | Reads a single line of text from an open file into a variable. |
 | LOAD                    | Loads data from a file (CSV, JSON, JSONL, XML, HTML, FIXED, EXCEL, TEXT) into a database table. |
 | MKDIR                   | Creates a new directory.                                |
-| NAME ... AS             | Renames a file.                                         |
+| NAME ... AS             | Renames a file. Name                                         |
 | ON ERROR GOTO           | Specifies a label to jump to when a runtime error occurs. |
 | OPEN                    | Opens a file for reading, writing, or appending, assigning it a file handle. |
 | OPENFORM                | Displays a previously defined FORM to the user for interaction. |
@@ -123,7 +123,7 @@ END
 | SHOW                    | Displays database schema information, such as SHOW TABLES or SHOW INDEXES. |
 | SORT                    | Sorts an array in-place, with an optional key for sorting arrays of hashes. |
 | SPLICE                  | Modifies an array by removing, replacing, and/or adding elements at a specific index. |
-| SQL Statement           | Any line starting with a SQL keyword (e.g., SELECT, INSERT, UPDATE) is executed directly against the current database. |
+| SQL Statement           | Any line starting with a SQL keyword (e.g., SELECT, INSERT, UPDATE) is executed directly against the current database. Must end in semi-colon. |
 | TROFF                   | Turns off (Trace Off) the line-by-line execution trace. |
 | TRON                    | Turns on (Trace On) a line-by-line execution trace for debugging. |
 | UNSHIFT                 | Adds a new element to the beginning of an array.        |
@@ -236,6 +236,7 @@ This document provides a quick reference to all available functions in the DbBas
 ---
 
 **Note:** All functions return a value and can be used in expressions, assignments, or as arguments to other functions/statements.
+
 
 
 
