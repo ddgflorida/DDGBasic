@@ -1,4 +1,4 @@
-# DbBasic: A Data-Centric BASIC Interpreter
+# DbBasic: A Data-Centric BASIC Interpreter and Procedure Language for SQLite and DuckDB
 
 ![Language](https://img.shields.io/badge/language-BASIC-blue.svg)
 ![Backend](https://img.shields.io/badge/backend-Python-green.svg)
@@ -237,6 +237,7 @@ This document provides a quick reference to all available functions in the DbBas
 ---
 
 **Note:** All functions return a value and can be used in expressions, assignments, or as arguments to other functions/statements.
+
 
 
 
