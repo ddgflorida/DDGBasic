@@ -31,7 +31,10 @@ import xlrd3
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from bs4 import BeautifulSoup
-from tui_runner import FormRunner
+try:
+    from tui_runner import FormRunner
+except ImportError:
+    FormRunner = None
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, quote_plus, unquote_plus, urljoin
 import xmltodict
@@ -264,6 +267,515 @@ class SqliteStringFunctions:
                 num_params, func = funcs
                 conn.create_function(name, num_params, func)
 
+class HelpRegistry:
+    TOPICS = {
+        # --- CORE LANGUAGE ---
+        "BELL": {
+            "syntax": 'BELL',
+            "desc": "Plays a system sound (beep) to alert the user.",
+            "examples": ['BELL', 'IF err THEN BELL']
+        },
+        "BROWSER": {
+            "syntax": 'BROWSER "url"',
+            "desc": "Opens the specified URL in the default system web browser.",
+            "examples": ['BROWSER "https://www.google.com"']
+        },
+        "CHAIN": {
+            "syntax": 'CHAIN "filename"',
+            "desc": "Transfers control to another script file immediately. Variables are cleared.",
+            "examples": ['CHAIN "menu.bas"']
+        },
+        "END": {
+            "syntax": 'END',
+            "desc": "Terminates script execution immediately.",
+            "examples": ['IF x > 100 THEN END']
+        },
+        "EXECUTE": {
+            "syntax": 'EXECUTE "command_string"',
+            "desc": "Runs a dynamic string as code. Variables in the string are evaluated in the current context.",
+            "examples": ['EXECUTE "PRINT 1 + 2"', 'EXECUTE "GOTO " + label$']
+        },
+        "EXIT": {
+            "syntax": 'EXIT',
+            "desc": "Exits the DbBasic interpreter shell and returns to the OS.",
+            "examples": ['EXIT']
+        },
+        "RUN": {
+            "syntax": 'RUN "filename"',
+            "desc": "Loads and executes a script file. When finished, control returns to the prompt (unlike CHAIN).",
+            "examples": ['RUN "setup.bas"']
+        },
+        "PRINT": {
+            "syntax": 'PRINT expression [, expression] [;]',
+            "desc": "Outputs text or values to the console. Use ; to suppress newline.",
+            "examples": ['PRINT "Hello"', 'PRINT "Value: "; x']
+        },
+        "PRINT USING": {
+            "syntax": 'PRINT USING "mask"; expression [, expression] ...',
+            "desc": "Formats numeric output using a mask string. Supports # for digits, comma separators, and $$ for currency.",
+            "examples": [
+                'PRINT USING "Value: ##.##"; 12.345',
+                'PRINT USING "$$#,###.00"; 1500.50'
+            ]
+        },
+        "WRITE": {
+            "syntax": 'WRITE [#n,] expression1 [, expression2] ...',
+            "desc": "Writes data to a file (or console) in CSV format. Strings are quoted, numbers are not.",
+            "examples": [
+                'WRITE #1, "John", 42, "New York"',
+                'WRITE "Error", err_code'
+            ]
+        },
+        "LET": {
+            "syntax": '[LET] var = expression',
+            "desc": "Assigns a value to a variable. The LET keyword is optional.",
+            "examples": ['LET x = 10', 'name$ = "Bob"']
+        },
+        "DIM": {
+            "syntax": 'DIM var(size) OR DIM var AS HASH/ARRAY',
+            "desc": "Declares an array or hash.",
+            "examples": ['DIM names(10)', 'DIM config AS HASH']
+        },
+        "IF": {
+            "syntax": 'IF condition THEN ... [ELSE ...] \nOR\nIF condition THEN\n ... \n[ELSEIF ...]\n ... \nEND IF',
+            "desc": "Conditionally executes code.",
+            "examples": ['IF x > 10 THEN PRINT "Big"', 'IF x=1 THEN: PRINT 1: END IF']
+        },
+        "FOR": {
+            "syntax": 'FOR var = start TO end [STEP step] ... NEXT',
+            "desc": "Standard numeric loop.",
+            "examples": ['FOR i = 1 TO 10: PRINT i: NEXT']
+        },
+        "FOR IN": {
+            "syntax": 'FOR var IN [TEXT|CSV|JSON|JSONL|SQL](source) ... NEXT',
+            "desc": "Iterates over files or SQL results.",
+            "examples": ['FOR line$ IN TEXT("file.txt")', 'FOR row IN CSV("data.csv")']
+        },
+        "WHILE": {
+            "syntax": 'WHILE condition ... WEND',
+            "desc": "Repeats a block of statements as long as the condition is true.",
+            "examples": [
+                'i = 0',
+                'WHILE i < 5',
+                '  PRINT i',
+                '  i = i + 1',
+                'WEND'
+            ]
+        },
+        "GOSUB": {
+            "syntax": 'GOSUB label',
+            "desc": "Jumps to a subroutine at the specified label. RETURN command jumps back.",
+            "examples": ['GOSUB CalculateTax']
+        },
+        "INPUT": {
+            "syntax": 'INPUT "Prompt string", variable',
+            "desc": "Prompts the user for input and stores it in a variable.",
+            "examples": ['INPUT "Enter your name: ", name$', 'INPUT "Age: ", age']
+        },
+        "ERROR": {
+            "syntax": 'ERROR code, "message"',
+            "desc": "Manually triggers an error with a custom code and message.",
+            "examples": ['ERROR 404, "File not found"', 'IF x=0 THEN ERROR 1, "Div by Zero"']
+        },
+        "ON ERROR": {
+            "syntax": 'ON ERROR GOTO label',
+            "desc": "Defines an error handler. If an error occurs, execution jumps to the label.",
+            "examples": ['ON ERROR GOTO ErrorHandler']
+        },
+        "RESUME": {
+            "syntax": 'RESUME [NEXT | label]',
+            "desc": "Returns from an error handler. NEXT resumes at the line following the error.",
+            "examples": ['RESUME NEXT', 'RESUME Start']
+        },
+        
+        # --- DATABASE COMMANDS ---
+        "DATABASE": {
+            "syntax": 'DATABASE OPEN "filename" | DATABASE ENGINE [SQLITE|DUCKDB]',
+            "desc": "Manages database connections. Type HELP DATABASE OPEN or HELP DATABASE ENGINE for details.",
+            "examples": ['DATABASE OPEN "my.db"', 'DATABASE ENGINE DUCKDB']
+        },
+        "DATABASE OPEN": {
+            "syntax": 'DATABASE OPEN "filename"',
+            "desc": "Opens a connection to a database file. Creates the file if it doesn't exist. Use ':memory:' for RAM-only.",
+            "examples": ['DATABASE OPEN "data.db"', 'DATABASE OPEN ":memory:"']
+        },
+        "DATABASE ENGINE": {
+            "syntax": 'DATABASE ENGINE [SQLITE|DUCKDB]',
+            "desc": "Switches the active database backend. Default is SQLITE.",
+            "examples": ['DATABASE ENGINE DUCKDB', 'DATABASE ENGINE SQLITE']
+        },
+        "SQL": {
+            "syntax": 'SQL_STATEMENT; (e.g., SELECT...;, INSERT...;)',
+            "desc": "Executes standard SQL statements directly.\nSyntax depends on current database engine.\nSQL statements MUST end with a semi-colon.",
+            "examples": ['SELECT * FROM users;', 'INSERT INTO users\n  VALUES (1, :name);']
+        },
+        "DESCRIBE": {
+            "syntax": 'DESCRIBE "table_name"',
+            "desc": "Prints the schema (columns and types) of a database table.",
+            "examples": ['DESCRIBE "customers"', 'DESCRIBE "sqlite_master"']
+        },
+        "SHOW TABLES": {
+            "syntax": 'SHOW TABLES',
+            "desc": "Lists all tables found in the currently open database.",
+            "examples": ['SHOW TABLES']
+        },
+        "SHOW CREATE TABLE": {
+            "syntax": 'SHOW CREATE TABLE',
+            "desc": "Displays the full SQL statement for all tables.",
+            "examples": ['SHOW CREATE TABLE']
+        },
+        "SHOW INDEXES": {
+            "syntax": 'SHOW INDEXES FROM "tablename"',
+            "desc": "Lists all indexes associated with a table, including primary keys.",
+            "examples": ['SHOW INDEXES FROM "orders"']
+        },
+        "SHOW VARIABLES": {
+            "syntax": 'SHOW VARIABLES',
+            "desc": "Debug command. Prints the names, types, and values of all current variables.",
+            "examples": ['SHOW VARIABLES']
+        },
+        "PARSEJSON": {
+            "syntax": 'variable = PARSEJSON(string_expr)',
+            "desc": "Parses a JSON string and returns a structured object (Hash/List) that can be accessed by key or index.",
+            "examples": [
+                'data = PARSEJSON(response$)',
+                'PRINT "ID: " + data("id")'
+            ]
+        },
+# --- SQL COMMANDS ---
+        "SELECT": {
+            "syntax": 'SELECT column1, column2 FROM table_name [WHERE condition];',
+            "desc": "Retrieves data from a database. Must end with a semicolon.",
+            "examples": [
+                'SELECT * FROM users;',
+                'SELECT id, name FROM customers WHERE id > 100 ORDER BY name;'
+            ]
+        },
+        "INSERT": {
+            "syntax": 'INSERT INTO table (col1, col2) VALUES (val1, val2);',
+            "desc": "Adds new records. You can use variables (e.g., :name$) as values.",
+            "examples": [
+                'INSERT INTO log (msg) VALUES ("System Start");',
+                'INSERT INTO users (name, age) VALUES (:name$, :age);'
+            ]
+        },
+        "UPDATE": {
+            "syntax": 'UPDATE table_name SET col1 = val1 WHERE condition;',
+            "desc": "Modifies existing records. Must end with a semicolon.",
+            "examples": [
+                'UPDATE users SET status = "Active" WHERE id = 1;',
+                'UPDATE products SET price = price * 1.1;'
+            ]
+        },
+        "DELETE": {
+            "syntax": 'DELETE FROM table_name WHERE condition;',
+            "desc": "Removes records from a table. Be careful without a WHERE clause!",
+            "examples": [
+                'DELETE FROM cart_items WHERE session_id = "abc";',
+                'DELETE FROM logs;'
+            ]
+        },
+        "CREATE": {
+            "syntax": 'CREATE TABLE table_name (col1 TYPE, col2 TYPE...);',
+            "desc": "Creates a new table. Types: TEXT, INTEGER, REAL, BLOB.",
+            "examples": [
+                'CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT);',
+                'CREATE INDEX idx_name ON users(name);'
+            ]
+        },
+        "DROP": {
+            "syntax": 'DROP TABLE [IF EXISTS] table_name;',
+            "desc": "Permanently deletes a table and all its data.",
+            "examples": ['DROP TABLE IF EXISTS temp_data;']
+        },
+        
+        # --- ANALYZE COMMANDS ---
+        "ANALYZE": {
+            "syntax": 'ANALYZE [CSV|JSON|XML|TEXT|FIXED] "filename" [INTO var]',
+            "desc": "Scans a file and reports statistics/structure. Type HELP ANALYZE CSV for specifics.",
+            "examples": ['ANALYZE TEXT "log.txt"', 'ANALYZE JSON "data.json"']
+        },
+        "ANALYZE CSV": {
+            "syntax": 'ANALYZE CSV "file" [OPTIONS "delimiter=,"] [INTO var]',
+            "desc": "Analyzes CSV structure, column types, and validity.",
+            "examples": ['ANALYZE CSV "data.csv" OPTIONS "header=false"']
+        },
+        "ANALYZE JSON": {
+            "syntax": 'ANALYZE JSON "file" [INTO var]',
+            "desc": "Scans a JSON file to determine key consistency.",
+            "examples": ['ANALYZE JSON "users.json"', 'ANALYZE JSON "data/*.json" SAVE SCHEMA TO "master.json"']
+        },
+        "ANALYZE FIXED": {
+            "syntax": 'ANALYZE FIXED "filename" [FIELDS "col:start-end,..."] [INTO var]',
+            "desc": "Analyzes fixed-width files. If FIELDS is omitted, it attempts to auto-detect columns.",
+            "examples": [
+                'ANALYZE FIXED "data.txt"',
+                'ANALYZE FIXED "data.txt" FIELDS "ID:1-5,Name:6-20"'
+            ]
+        },
+        "ANALYZE TEXT": {
+            "syntax": 'ANALYZE TEXT "filename" [INTO var]',
+            "desc": "Reports file statistics: encoding, line endings (CRLF/LF), line counts, and size.",
+            "examples": [
+                'ANALYZE TEXT "readme.md"',
+                'ANALYZE TEXT "server.log" INTO report'
+            ]
+        },
+        "ANALYZE XML": {
+            "syntax": 'ANALYZE XML "pattern" [SAVE SCHEMA TO "file.json"] [INTO var]',
+            "desc": "Scans XML structure/namespaces. Use SAVE SCHEMA to generate a mapping for UPGRADE XML.",
+            "examples": [
+                'ANALYZE XML "config.xml"',
+                'ANALYZE XML "data/*.xml" SAVE SCHEMA TO "master.json"'
+            ]
+        },
+        # --- ARRAY OPERATIONS ---
+        "ARRAY": {
+            "syntax": 'var = ARRAY(val1, val2, ...)',
+            "desc": "Creates a new array initialized with the given values.",
+            "examples": ['numbers = ARRAY(1, 2, 3)', 'empty = ARRAY()']
+        },
+        "PUSH": {
+            "syntax": 'PUSH array, value',
+            "desc": "Adds an element to the end of an array.",
+            "examples": ['PUSH stack, "New Item"']
+        },
+        "POP": {
+            "syntax": 'POP array [INTO var]',
+            "desc": "Removes the last element from an array. Optionally saves it to a variable.",
+            "examples": ['POP stack', 'POP stack INTO last_value']
+        },
+        "UNSHIFT": {
+            "syntax": 'UNSHIFT array, value',
+            "desc": "Adds an element to the beginning of an array.",
+            "examples": ['UNSHIFT queue, "First"']
+        },
+        "SHIFT": {
+            "syntax": 'SHIFT array [INTO var]',
+            "desc": "Removes the first element from an array. Optionally saves it.",
+            "examples": ['SHIFT queue', 'SHIFT queue INTO first_val']
+        },
+        "SPLICE": {
+            "syntax": 'SPLICE array, start, count [, val1, val2...]',
+            "desc": "Removes 'count' items starting at 'start'. Optionally inserts new items there.",
+            "examples": ['SPLICE my_list, 2, 1', 'SPLICE my_list, 0, 0, "Insert Me"']
+        },
+        "REVERSE": {
+            "syntax": 'REVERSE array',
+            "desc": "Reverses the order of elements in an array in place.",
+            "examples": ['REVERSE my_list']
+        },
+        "SORT": {
+            "syntax": 'SORT array [ON "key"] [ASC|DESC]',
+            "desc": "Sorts an array. Use ON to sort arrays of hashes by a specific key.",
+            "examples": ['SORT names ASC', 'SORT users ON "age" DESC']
+        },
+        
+        # --- FILE OPERATIONS ---
+        "OPEN": {
+            "syntax": 'OPEN "filename" FOR [INPUT|OUTPUT|APPEND] AS #n',
+            "desc": "Opens a file for reading or writing using a file number.",
+            "examples": ['OPEN "data.txt" FOR INPUT AS #1', 'OPEN "log.txt" FOR APPEND AS #2']
+        },
+        "CLOSE": {
+            "syntax": 'CLOSE [#n]',
+            "desc": "Closes a specific file number, or all open files if no number is given.",
+            "examples": ['CLOSE #1', 'CLOSE']
+        },
+        "LINE INPUT": {
+            "syntax": 'LINE INPUT #n, string_var',
+            "desc": "Reads a single line from an open file into a variable.",
+            "examples": ['LINE INPUT #1, row$']
+        },
+        "READ FILE": {
+            "syntax": 'READ FILE "filename" INTO var$',
+            "desc": "Reads the entire contents of a file into a single string variable.",
+            "examples": ['READ FILE "config.json" INTO config$']
+        },
+        "FILES": {
+            "syntax": 'FILES "pattern" [INTO array] [RECURSIVE] [WITH DETAILS|FULLPATH|FILESONLY|FOLDERSONLY]',
+            "desc": "Lists files matching a pattern. Can print to console or store in an array.",
+            "examples": [
+                'FILES "*.txt"',
+                'FILES "data/*" INTO my_files RECURSIVE WITH FULLPATH'
+            ]
+        },
+        "COPY": {
+            "syntax": 'COPY "source_file" AS "dest_file"',
+            "desc": "Copies a file from one location to another.",
+            "examples": ['COPY "data.csv" AS "backup/data.bak"']
+        },
+        "NAME": {
+            "syntax": 'NAME "old_name" AS "new_name"',
+            "desc": "Renames or moves a file.",
+            "examples": ['NAME "temp.txt" AS "final.txt"']
+        },
+        "KILL": {
+            "syntax": 'KILL "filename"',
+            "desc": "Deletes a file.",
+            "examples": ['KILL "old_data.tmp"']
+        },
+        "MKDIR": {
+            "syntax": 'MKDIR "directory_path"',
+            "desc": "Creates a new directory.",
+            "examples": ['MKDIR "archive/2024"']
+        },
+        "CHDIR": {
+            "syntax": 'CHDIR "directory_path"',
+            "desc": "Changes the current working directory.",
+            "examples": ['CHDIR "C:/Data"']
+        },
+        "RMDIR": {
+            "syntax": 'RMDIR "directory_path"',
+            "desc": "Removes an empty directory.",
+            "examples": ['RMDIR "temp_folder"']
+        },
+        
+        # --- LOAD COMMANDS ---
+        "LOAD": {
+            "syntax": 'LOAD [TYPE] "file" INTO/CREATE TABLE "table" [OPTIONS "..."]',
+            "desc": "Imports data into a database table. Type HELP LOAD CSV for specifics.",
+            "examples": ['LOAD CSV "data.csv" INTO TABLE users']
+        },
+        "LOAD CSV": {
+            "syntax": 'LOAD CSV "file" INTO TABLE "tbl" OPTIONS "header=true, delimiter=,"',
+            "desc": "Loads a CSV file. Supports APPEND, TRUNCATE, UPSERT.",
+            "examples": ['LOAD CSV "data.csv" INTO TABLE my_table TRUNCATE OPTIONS "header=true"']
+        },
+        "LOAD JSON": {
+            "syntax": 'LOAD JSON "file" INTO TABLE "tbl" [OPTIONS "normalize=true"]',
+            "desc": "Loads a JSON file. Use normalize=true to auto-relationalize nested data.",
+            "examples": ['LOAD JSON "data.json" CREATE TABLE users']
+        },
+        "LOAD FIXED": {
+            "syntax": 'LOAD FIXED "file" INTO TABLE "tbl" OPTIONS "fields=..."',
+            "desc": "Loads fixed-width files. Fields syntax: 'Name:Start-End' OR 'Name:Start+Length'.",
+            "examples": [
+                'LOAD FIXED "dat.txt" INTO TABLE t OPTIONS "fields=ID:1-5,Name:6-20"',
+                'LOAD FIXED "dat.txt" INTO TABLE t OPTIONS "fields=ID:1+5,Name:6+15"'
+            ]
+        },
+        "LOAD EXCEL": {
+            "syntax": 'LOAD EXCEL "file.xlsx" INTO TABLE "tbl" OPTIONS "sheetname=Sheet1"',
+            "desc": "Loads data from an Excel worksheet.",
+            "examples": ['LOAD EXCEL "sales.xlsx" INTO TABLE sales']
+        },
+        
+        # --- CONFIGURATION (SET) ---
+        "SET": {
+            "syntax": 'SET [OUTPUT|EMAIL|SQL_FATAL_ERRORS|HASH_KEYS] ...',
+            "desc": "Configures system behavior. Type HELP SET OUTPUT or HELP SET EMAIL for details.",
+            "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE']
+        },
+        "SET OUTPUT": {
+            "syntax": 'SET OUTPUT [CONSOLE|FILE "path"|OFF] FORMAT [TEXT|CSV|JSON|SQL|EXCEL] [OPTIONS "..."]',
+            "desc": "Redirects output. Formats: TEXT, CSV, JSON, HTML, SQL, EXCEL, PARQUET.",
+            "examples": [
+                'SET OUTPUT FILE "report.csv" FORMAT CSV',
+                'SET OUTPUT CONSOLE FORMAT TABLE OPTIONS "box_style=ASCII"',
+                'SET OUTPUT FILE "dump.sql" FORMAT SQL INSERT',
+                'SET OUTPUT FILE "dump.sql" FORMAT SQL OPTIONS "mode=update, target_tablename=users"'
+            ]
+        },
+        "SET EMAIL": {
+            "syntax": 'SET EMAIL PROVIDER "SMTP" HOST "..." PORT n USER "..." PASSWORD "..." SENDER "..."',
+            "desc": "Configures the email provider (SMTP, SENDGRID, MAILGUN).",
+            "examples": ['SET EMAIL PROVIDER "SMTP" HOST "smtp.mail.com" PORT 587 USER "me" PASSWORD "pass" SENDER "me@mail.com"']
+        },
+        "SET NULL_HANDLING": {
+            "syntax": 'SET NULL_HANDLING [FOR "col"] TO [NULL|EMPTY|CONVERT_EMPTY_TO_NULL]',
+            "desc": "Controls how empty strings/nulls are handled during data loading.",
+            "examples": ['SET NULL_HANDLING FOR "middle_name" TO NULL']
+        },
+        "SET HASH_KEYS": {
+            "syntax": 'SET HASH_KEYS [PRESERVE_CASE|IGNORE_CASE]',
+            "desc": "Controls case sensitivity for hash keys (Dictionaries). Default is PRESERVE_CASE.",
+            "examples": ['SET HASH_KEYS IGNORE_CASE']
+        },
+        "SET SQL_FATAL_ERRORS": {
+            "syntax": 'SET SQL_FATAL_ERRORS [ON|OFF]',
+            "desc": "If ON (default), SQL errors stop the program. If OFF, they set ERR variable.",
+            "examples": ['SET SQL_FATAL_ERRORS OFF']
+        },
+        
+        # --- DATA TRANSFORMATION ---
+        "UPGRADE": {
+            "syntax": 'UPGRADE [CSV|XML|JSON] "source_pattern" USING SCHEMA "file" INTO "folder"',
+            "desc": "Transforms raw files to match a Master Schema. Type HELP UPGRADE CSV for details.",
+            "examples": ['UPGRADE CSV "raw/*.csv" USING SCHEMA "master.json" INTO "clean"']
+        },
+        "UPGRADE CSV": {
+            "syntax": 'UPGRADE CSV "pattern" USING SCHEMA "schema.json" INTO "out_folder"',
+            "desc": "Standardizes CSV headers, order, and values based on a schema generated by ANALYZE CSV.",
+            "examples": ['UPGRADE CSV "invoices_*.csv" USING SCHEMA "inv_schema.json" INTO "processed"']
+        },
+        "UPGRADE JSON": {
+            "syntax": 'UPGRADE JSON "source.json" USING SCHEMA "schema.json" INTO "output.json"',
+            "desc": "Rewrites a JSON file to strictly match a schema (from ANALYZE JSON). Fills missing keys.",
+            "examples": ['UPGRADE JSON "raw.json" USING SCHEMA "master.json" INTO "clean.json"']
+        },
+        "UPGRADE XML": {
+            "syntax": 'UPGRADE XML "pattern" USING SCHEMA "schema.json" INTO "out_folder"',
+            "desc": "Rewrites XML files to enforce a consistent tag structure defined by ANALYZE XML.",
+            "examples": ['UPGRADE XML "data/*.xml" USING SCHEMA "master.json" INTO "output"']
+        },
+        
+        # --- UTILITIES ---
+        "EMAIL": {
+            "syntax": 'EMAIL TO "..." SUBJECT "..." BODY "..." [ATTACH "..."]',
+            "desc": "Sends an email using the configured provider (See: HELP SET EMAIL).",
+            "examples": ['EMAIL TO "bob@ex.com" SUBJECT "Hi" BODY "Hello"']
+        },
+        "FETCH": {
+            "syntax": 'FETCH "url" [POST|PUT|PATCH|DELETE body_hash] [USING HEADERS req_h] [USING FILE field=path] INTO var$ | TO FILE "path" [HEADERS INTO resp_h]',
+            "desc": "Makes an HTTP request. Default method is GET. POST/PUT/PATCH/DELETE send a hash as the request body (DELETE body optional). USING HEADERS attaches request headers from a hash. USING FILE does multipart file upload. INTO stores response text; TO FILE streams to disk. Optional HEADERS INTO captures response headers as a hash. Sets ERR to status code (-1 network error, -2 file not found).",
+            "examples": [
+                'FETCH "https://api.com/data" INTO response$',
+                'FETCH "https://api.com/items" POST body INTO resp$',
+                'FETCH "https://api.com/items/42" PUT body INTO resp$',
+                'FETCH "https://api.com/items/42" DELETE INTO resp$',
+                'FETCH "https://api.com/data" INTO resp$ HEADERS INTO h',
+                'FETCH "https://api.com/upload" POST meta USING FILE "file"="local.pdf" INTO resp$'
+            ]
+        },
+        "SHELL": {
+            "syntax": 'SHELL "command"',
+            "desc": "Run a command in the underlying operating system shell.",
+            "examples": ['SHELL "dir/s"']
+        },
+        "TRON": {
+            "syntax": 'TRON',
+            "desc": "Turns TRace ON. The interpreter will print each line of code before executing it.",
+            "examples": ['TRON']
+        },
+        "TROFF": {
+            "syntax": 'TROFF',
+            "desc": "Turns TRace OFF. Stops printing executed lines.",
+            "examples": ['TROFF']
+        },
+        "UNZIP": {
+            "syntax": 'UNZIP "archive.zip" [TO "destination_folder"]',
+            "desc": "Extracts files from a ZIP archive. Defaults to current directory if TO is omitted.",
+            "examples": [
+                'UNZIP "data.zip"',
+                'UNZIP "backup.zip" TO "restored_files"'
+            ]
+        },
+        "ZIP": {
+            "syntax": 'ZIP "archive.zip" FROM "file1", "file2"...',
+            "desc": "Creates a ZIP archive.",
+            "examples": ['ZIP "backup.zip" FROM "data/*.csv"']
+        }
+    }
+
+    @staticmethod
+    def get_help(topic):
+        return HelpRegistry.TOPICS.get(topic.upper())
+
+    @staticmethod
+    def list_topics():
+        return sorted(HelpRegistry.TOPICS.keys())
+        
 # =================================================================
 # GLOBAL STATE AND CONFIGURATION
 # =================================================================
@@ -291,6 +803,10 @@ class ProgramEnd(Exception):
 
 class RedirectSignal(Exception):
     """Exception raised to signal an HTTP redirect."""
+    pass
+
+class FunctionReturn(Exception):
+    """Exception raised by EXIT FUNCTION to return early from a user-defined function."""
     pass
     
 # =================================================================
@@ -366,6 +882,7 @@ class Lexer:
             r'\bANALYZE\s+XML\b': 'ANALYZEXML',r'\bANALYZE\s+TEXT\b': 'ANALYZETEXT',
             r'\bON\s+ERROR\s+GOTO\b': 'ONERRORGOTO',
             r'\bEND\s+FORM\b': 'ENDFORM',r'\bOPEN\s+FORM\b': 'OPENFORM',
+            r'\bEND\s+FUNCTION\b': 'ENDFUNCTION',
             r'\bWITH\s+DETAILS\b': 'WITHDETAILS',
             r'\bWITH\s+FULLPATH\b': 'WITHFULLPATH',
             r'\bWITH\s+FOLDERSONLY\b': 'WITHFOLDERSONLY',
@@ -378,7 +895,6 @@ class Lexer:
         self.modified_source_code = code
 
         token_specification = [
-            # For giggles
             ('FORM', r'\bFORM\b(?!\$)'),  
             ('ENDFORM', r'\bENDFORM\b(?!\$)'),
             ('FIELD', r'\bFIELD\b(?!\$)'),
@@ -442,6 +958,7 @@ class Lexer:
             ('OPEN', r'\bOPEN\b(?!\$)'), ('CLOSE', r'\bCLOSE\b(?!\$)'), ('INPUT', r'\bINPUT\b(?!\$)'),
             ('SET', r'\bSET\b(?!\$)'), ('OUTPUT', r'\bOUTPUT\b(?!\$)'), ('AS', r'\bAS\b(?!\$)'),
             ('PRINT', r'\bPRINT\b(?!\$)'), ('LET', r'\bLET\b(?!\$)'), ('IF', r'\bIF\b(?!\$)'), ('THEN', r'\bTHEN\b(?!\$)'),
+            ('HELP', r'\bHELP\b(?!\$)'),
             ('ELSEIF', r'\bELSEIF\b(?!\$)'),('ELSE', r'\bELSE\b(?!\$)'), ('ENDIF', r'\bENDIF\b(?!\$)'), 
             ('FOR', r'\bFOR\b(?!\$)'), ('TO', r'\bTO\b(?!\$)'),('ECHO', r'\bECHO\b(?!\$)'),
             ('ZIP', r'\bZIP\b(?!\$)'),('UNZIP', r'\bUNZIP\b(?!\$)'), ('UNPACK', r'\bUNPACK\b(?!\$)'),
@@ -463,6 +980,8 @@ class Lexer:
             ('APIKEY', r'\bAPIKEY\b(?!\$)'), ('EMAIL', r'\bEMAIL\b(?!\$)'),('SENDER', r'\bSENDER\b(?!\$)'),
             ('SUBJECT', r'\bSUBJECT\b(?!\$)'), ('BODY', r'\bBODY\b(?!\$)'),('DOMAIN', r'\bDOMAIN\b(?!\$)'),
             ('HTMLBODY', r'\bHTMLBODY\b(?!\$)'), ('CC', r'\bCC\b(?!\$)'), ('BCC', r'\bBCC\b(?!\$)'),
+            ('FUNCTION', r'\bFUNCTION\b(?!\$)'),
+            ('ENDFUNCTION', r'\bENDFUNCTION\b(?!\$)'),
             # Place new keywords above this line
             ('ID', r'(?!INTO\b)[a-zA-Z_][a-zA-Z0-9_]*\$?'),
             ('OP', r"[+\*/-]"), ('CARET', r'\^'), ('AMPERSAND', r'&'),
@@ -557,6 +1076,7 @@ class Lexer:
             elif u_value == 'READFILE': kind, value = 'READ FILE', 'READ FILE' 
             elif u_value == 'TOFILE': kind, value = 'TO FILE', 'TO FILE'
             elif u_value == 'ENDFORM': kind, value = 'ENDFORM', 'END FORM'
+            elif u_value == 'ENDFUNCTION': kind, value = 'END FUNCTION', 'END FUNCTION'
             elif u_value == 'FOREACH': kind, value = 'FOR EACH', 'FOR EACH'
             elif u_value == 'ENDTRANSACTION': kind, value = 'END TRANSACTION', 'END TRANSACTION'
             elif u_value == 'ANALYZECSV': kind, value = 'ANALYZE CSV', 'ANALYZE CSV'
@@ -1341,6 +1861,7 @@ class Interpreter:
         self.command_args = cmd_args if cmd_args is not None else []
         self.gosub_stack = []
         self.labels = {}
+        self.user_functions = {}  # {NAME_UPPER: (body_token_index, [param_names], orig_name)}
         self.form_definitions = {}
         self.db_engine = 'sqlite' # Set SQLite as the default engine
         self.sql_fatal_errors = True
@@ -1370,6 +1891,7 @@ class Interpreter:
 
         self._pre_scan_for_jumps()
         self._scan_for_labels()
+        self._scan_for_functions()
 
     def _pre_scan_for_jumps(self):
         """
@@ -1475,6 +1997,37 @@ class Interpreter:
             safe_identifier = identifier_str.replace(open_quote, '').replace(close_quote, '')
             return f'{open_quote}{safe_identifier}{close_quote}'
 
+    def repl_execute(self, code_string):
+        """Executes a single line/block of code in the current context for REPL."""
+        try:
+            # 1. Tokenize the new input
+            # We append a newline to ensure statements are terminated correctly
+            processed_code = preprocess_continuations(code_string + '\n')
+            lexer = Lexer(processed_code)
+            
+            # 2. Swap the token stream temporarily
+            self.tokens = lexer.tokens
+            self.token_index = 0
+            self.labels = {}
+            self.jump_map = {}
+            
+            # 3. Re-scan strictly for the current line's logic
+            # Note: This limits GOTO/GOSUB to labels defined within the current line only
+            self._pre_scan_for_jumps()
+            self._scan_for_labels()
+            
+            # 4. Run until we hit the end of this input
+            self.program_terminated = False
+            while self._current_token() and self._current_token()[0] != 'END':
+                if not self._parse_line():
+                    break
+                if self.program_terminated:
+                    break
+                    
+        except Exception as e:
+            print(f"REPL Error: {e}")
+   
+        
     def _split_sql_statements(self, sql_text: str) -> list[str]:
         """
         Splits a single string of SQL into a list of individual statements.
@@ -1674,6 +2227,195 @@ class Interpreter:
                 label_name = token[1]
                 if label_name in self.labels: self._error(f"Duplicate label found: {label_name}")
                 self.labels[label_name] = i + 2
+
+    def _scan_for_functions(self):
+        """Pre-scans tokens to find FUNCTION definitions.
+        Records each as self.user_functions[NAME_UPPER] = (body_start_index, [param_names], orig_name).
+        Syntax: FUNCTION name(param1, param2, ...) ... END FUNCTION
+        """
+        self.user_functions = {}
+        i = 0
+        while i < len(self.tokens):
+            token = self.tokens[i]
+            if token[0] == 'FUNCTION':
+                # Distinguish a FUNCTION *definition* from the FUNCTION token in "EXIT FUNCTION".
+                # A definition's FUNCTION token is preceded by NEWLINE/COLON (or is the first token).
+                # An EXIT FUNCTION's FUNCTION token is preceded by EXIT.
+                prev = self.tokens[i-1] if i > 0 else None
+                if prev is not None and prev[0] == 'EXIT':
+                    i += 1
+                    continue
+                # Expect: FUNCTION name ( param1, param2, ... )
+                if i + 1 >= len(self.tokens) or self.tokens[i+1][0] != 'ID':
+                    pos = token[2] if len(token) > 2 else 0
+                    line, _ = self.lexer.get_line_col(pos)
+                    raise Exception(f"Line {line}: Expected function name after FUNCTION")
+                func_name = self.tokens[i+1][1]
+                func_key = func_name.upper()
+                if func_key in self.user_functions:
+                    pos = token[2] if len(token) > 2 else 0
+                    line, _ = self.lexer.get_line_col(pos)
+                    raise Exception(f"Line {line}: Duplicate FUNCTION definition: '{func_name}'")
+                j = i + 2
+                params = []
+                # Require parameter list parens (even for zero-arg: FUNCTION foo())
+                if j >= len(self.tokens) or self.tokens[j][0] != 'LPAREN':
+                    pos = self.tokens[i+1][2] if len(self.tokens[i+1]) > 2 else 0
+                    line, _ = self.lexer.get_line_col(pos)
+                    raise Exception(f"Line {line}: FUNCTION '{func_name}' requires parameter list in parentheses (use () for no params)")
+                j += 1  # consume LPAREN
+                while j < len(self.tokens) and self.tokens[j][0] != 'RPAREN':
+                    if self.tokens[j][0] == 'ID':
+                        params.append(self.tokens[j][1])
+                        j += 1
+                    elif self.tokens[j][0] == 'COMMA':
+                        j += 1
+                    else:
+                        pos = self.tokens[j][2] if len(self.tokens[j]) > 2 else 0
+                        line, _ = self.lexer.get_line_col(pos)
+                        raise Exception(f"Line {line}: Unexpected token in FUNCTION '{func_name}' parameter list: {self.tokens[j][1]}")
+                if j >= len(self.tokens):
+                    raise Exception(f"Unterminated parameter list in FUNCTION '{func_name}'")
+                j += 1  # consume RPAREN
+                # Skip optional trailing NEWLINE (body starts on next line typically)
+                if j < len(self.tokens) and self.tokens[j][0] == 'NEWLINE':
+                    j += 1
+                body_start = j
+                # Find matching END FUNCTION
+                level = 1
+                while j < len(self.tokens) and level > 0:
+                    if self.tokens[j][0] == 'FUNCTION':
+                        # Ignore FUNCTION tokens that are part of "EXIT FUNCTION"
+                        prev = self.tokens[j-1] if j > 0 else None
+                        if prev is None or prev[0] != 'EXIT':
+                            raise Exception(f"Nested FUNCTION definitions not allowed (inside '{func_name}')")
+                    elif self.tokens[j][0] == 'END FUNCTION':
+                        level -= 1
+                        if level == 0:
+                            break
+                    j += 1
+                if level > 0:
+                    raise Exception(f"Missing END FUNCTION for '{func_name}'")
+                self.user_functions[func_key] = (body_start, params, func_name)
+                i = j + 1  # continue past END FUNCTION
+            else:
+                i += 1
+
+    def _parse_function_definition(self):
+        """When FUNCTION is encountered at top level during execution, skip past END FUNCTION.
+        The body was already recorded by _scan_for_functions.
+        We can't use _skip_block here because it would count the FUNCTION token from any
+        nested 'EXIT FUNCTION' statement toward the nesting level."""
+        self._expect('FUNCTION')
+        level = 1
+        while self._current_token() and level > 0:
+            cur = self._current_token()
+            if cur[0] == 'FUNCTION':
+                prev_idx = self.token_index - 1
+                prev = self.tokens[prev_idx] if prev_idx >= 0 else None
+                if prev is None or prev[0] != 'EXIT':
+                    level += 1
+            elif cur[0] == 'END FUNCTION':
+                level -= 1
+            self._next_token()
+
+    def _parse_udf_call_statement(self):
+        """Call a user-defined function as a statement; discard the return value.
+        Syntax:  name(arg1, arg2, ...)
+        Used for functions invoked purely for side effects (printing, file I/O, mutating globals, etc.)
+        """
+        name = self._expect('ID')[1]
+        self._expect('LPAREN')
+        args = []
+        if self._current_token() and self._current_token()[0] != 'RPAREN':
+            while True:
+                args.append(self._parse_expression())
+                if self._current_token()[0] == 'RPAREN': break
+                self._expect('COMMA')
+        self._expect('RPAREN')
+        self._execute_user_function(name, args)  # return value intentionally discarded
+
+    def _execute_user_function(self, name, args):
+        """Execute a user-defined function with shadow-only parameter scoping.
+        Returns the function's return value (the value of the variable named after the function)."""
+        func_key = name.upper()
+        if func_key not in self.user_functions:
+            self._error(f"Unknown function: '{name}'")
+        body_index, params, orig_name = self.user_functions[func_key]
+
+        if len(args) != len(params):
+            self._error(f"Function '{orig_name}' expects {len(params)} argument(s), got {len(args)}.")
+
+        # Determine which variable names to shadow: params + the return-slot (function name).
+        # We shadow case-insensitively by matching any existing variable with the same uppercase form.
+        shadow_names = list(params) + [orig_name]
+        # Build a snapshot of any existing variables (by exact key) that would be clobbered.
+        # For each shadow_name, find all existing keys matching case-insensitively.
+        keys_to_restore = {}
+        for shadow in shadow_names:
+            shadow_upper = shadow.upper()
+            for existing_key in list(self.variables.keys()):
+                if existing_key.upper() == shadow_upper and existing_key not in keys_to_restore:
+                    keys_to_restore[existing_key] = self.variables[existing_key]
+        # Also remember which names DIDN'T exist before (so we can delete them on exit).
+        new_names = []
+        for shadow in shadow_names:
+            shadow_upper = shadow.upper()
+            if not any(k.upper() == shadow_upper for k in self.variables):
+                new_names.append(shadow)
+
+        # Bind parameters (overwrites any existing same-named variable; snapshot above will restore).
+        # Delete any case-variant of the param first so the binding is clean.
+        for p, v in zip(params, args):
+            p_upper = p.upper()
+            for existing_key in list(self.variables.keys()):
+                if existing_key.upper() == p_upper:
+                    del self.variables[existing_key]
+            self.variables[p] = v
+
+        # Initialize the return slot (function's own name) to a type-appropriate default.
+        # Same case-cleanup as for params.
+        orig_upper = orig_name.upper()
+        for existing_key in list(self.variables.keys()):
+            if existing_key.upper() == orig_upper:
+                del self.variables[existing_key]
+        self.variables[orig_name] = "" if orig_name.endswith('$') else 0.0
+
+        # Save token position and gosub_stack depth (so a RETURN-without-GOSUB inside a UDF
+        # doesn't accidentally pop a frame from an outer GOSUB).
+        saved_index = self.token_index
+        saved_gosub_depth = len(self.gosub_stack)
+        self.token_index = body_index
+
+        try:
+            try:
+                self.run_block(end_tokens={'END FUNCTION'})
+            except FunctionReturn:
+                pass
+            # Read the result (case-insensitive lookup of the function's own name)
+            result_default = "" if orig_name.endswith('$') else 0.0
+            result = result_default
+            for k in self.variables:
+                if k.upper() == orig_upper:
+                    result = self.variables[k]
+                    break
+        finally:
+            # Restore token position
+            self.token_index = saved_index
+            # Trim gosub_stack to its pre-call depth in case the UDF didn't balance GOSUB/RETURN
+            if len(self.gosub_stack) > saved_gosub_depth:
+                self.gosub_stack = self.gosub_stack[:saved_gosub_depth]
+            # Remove anything created during the call that didn't exist before
+            for n in new_names:
+                n_upper = n.upper()
+                for existing_key in list(self.variables.keys()):
+                    if existing_key.upper() == n_upper:
+                        del self.variables[existing_key]
+            # Restore originals
+            for k, v in keys_to_restore.items():
+                self.variables[k] = v
+
+        return result
 
     def close(self):
         self._close_all_files()
@@ -2159,7 +2901,7 @@ class Interpreter:
             token = self._current_token()
             if not token or token[0] in end_tokens:
                 break
-            if not self._parse_line():
+            if not self._parse_line(end_tokens):
                 break
             if self.program_terminated: break
 
@@ -2183,20 +2925,17 @@ class Interpreter:
             idx += 1
         return idx
         
-    def _parse_line(self):
+    # CHANGED: Added end_tokens=None parameter
+    def _parse_line(self, end_tokens=None):
         """Parse a line which may contain multiple colon-separated statements."""
-        # --- START OF TRACING LOGIC ---
+        # --- START OF TRACING LOGIC (Keep existing tracing code) ---
         if self.trace_mode:
             token = self._current_token()
             if token and token[0] != 'NEWLINE':
                 line_num, _ = self.lexer.get_line_col(token[2])
-                
-                # Look up the actual source line text
                 start_pos = self.lexer.line_starts[line_num - 1]
                 end_pos = self.lexer.line_starts[line_num] if line_num < len(self.lexer.line_starts) else len(self.lexer.raw_source_code)
                 source_line = self.lexer.raw_source_code[start_pos:end_pos].strip()
-                
-                # Don't trace the TROFF command itself
                 if token[0] != 'TROFF':
                     print(f"[{line_num}]> {source_line}")
         # --- END OF TRACING LOGIC ---
@@ -2208,8 +2947,17 @@ class Interpreter:
             self._next_token()
             return True
         
-        # Parse statements until we hit a NEWLINE or END
+        # Parse statements until we hit a NEWLINE
         while self._current_token() and self._current_token()[0] not in ['NEWLINE']:
+            # CHANGED: Check for end_tokens (like NEXT) to stop parsing on this line
+            if end_tokens and self._current_token()[0] in end_tokens:
+                break
+
+            # CHANGED: Handle colon separators gracefully at the start of the loop
+            if self._current_token()[0] == 'COLON':
+                self._next_token()
+                continue
+
             # Store the resume point BEFORE parsing the statement
             resume_point = self._find_next_statement_index(self.token_index)
             
@@ -2217,6 +2965,8 @@ class Interpreter:
                 self._parse_statement()
             except (LoopExit):
                 raise # Re-raise control-flow exceptions so loop parsers can catch them
+            except (FunctionReturn):
+                raise # Re-raise so _execute_user_function can catch it
             except Exception as e:
                 if not self.error_handler_label or self.in_error_handler:
                     raise e
@@ -2229,9 +2979,14 @@ class Interpreter:
                 self.variables['ERRMSG$'] = str(e)
                 self.token_index = self.labels[self.error_handler_label]
             
+            # (Note: The old colon check here is now redundant but harmless)
             if self._current_token() and self._current_token()[0] == 'COLON':
                 self._next_token()
             elif self._current_token() and self._current_token()[0] not in ['NEWLINE']:
+                # Check end_tokens again before breaking, in case _parse_statement didn't consume it
+                if end_tokens and self._current_token()[0] in end_tokens:
+                    break
+                # Only break if it's not a colon and not an end token
                 break
         
         if self._current_token() and self._current_token()[0] == 'NEWLINE':
@@ -2378,7 +3133,14 @@ class Interpreter:
         elif token[0] == 'DATABASE':                              # define database in use
             self._parse_database_statement()
         elif token[0] == 'LET' or token[0] == 'ID':               # optional let var = value
-             self._parse_assignment_statement()
+             # If this is a UDF call used as a statement (no assignment), handle it here.
+             # Pattern: name(...) at statement position, where name is a user-defined function.
+             if (token[0] == 'ID'
+                 and token[1].upper() in self.user_functions
+                 and self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                 self._parse_udf_call_statement()
+             else:
+                 self._parse_assignment_statement()
         elif token[0] == 'DIM':                                   # declare variable
             self._parse_dim_statement()
         elif token[0] == 'REDIM':                                 # redeclare array
@@ -2387,6 +3149,8 @@ class Interpreter:
             self._parse_while_statement()
         elif token[0] == 'OPEN':                                  # open file
             self._parse_open_statement()
+        elif token[0] == 'HELP':
+            self._parse_help_statement()
         elif token[0] == 'READ FILE':                             # read file into variable
             self._parse_read_file_statement()
         elif token[0] == 'CLOSE':                                 # close file
@@ -2399,6 +3163,8 @@ class Interpreter:
             self._parse_gosub_statement()
         elif token[0] == 'RETURN':                                # return from subroutine
             self._parse_return_statement()
+        elif token[0] == 'FUNCTION':                              # user-defined function definition
+            self._parse_function_definition()
         elif token[0] == 'PUSH':                                  # Push item on array
             self._parse_push_statement()
         elif token[0] == 'POP':                                   # Pop array
@@ -2429,10 +3195,12 @@ class Interpreter:
             # Peek at the next token to see if it's XML or CSV
             if self._peek_token() and self._peek_token()[0] == 'XML':
                 self._parse_upgrade_xml_statement()
+            elif self._peek_token() and self._peek_token()[0] == 'JSON':
+                self._parse_upgrade_json_statement()
             elif self._peek_token() and self._peek_token()[0] == 'CSV':
                 self._parse_upgrade_csv_statement()
             else:
-                self._error("UPGRADE must be followed by XML or CSV.")
+                self._error("UPGRADE must be followed by XML, 'JSON', or CSV.")
         elif token[0] == 'REDIRECT':
             self._next_token() # Consume REDIRECT
             destination_url = self._parse_expression()
@@ -2493,6 +3261,7 @@ class Interpreter:
         self.jump_map = {}
         self._pre_scan_for_jumps()
         self._scan_for_labels()
+        self._scan_for_functions()
 
         output_html = io.StringIO()
         old_stdout = sys.stdout
@@ -3391,6 +4160,21 @@ class Interpreter:
             return results[0][0]
         elif token[0] == 'ID':
             var_name = token[1]
+            # --- USER-DEFINED FUNCTION INTERCEPT ---
+            # If this ID is a user function name followed by LPAREN, treat as a call.
+            if (var_name.upper() in self.user_functions
+                and self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+                self._next_token()  # consume ID
+                self._expect('LPAREN')
+                args = []
+                if self._current_token() and self._current_token()[0] != 'RPAREN':
+                    while True:
+                        args.append(self._parse_expression())
+                        if self._current_token()[0] == 'RPAREN': break
+                        self._expect('COMMA')
+                self._expect('RPAREN')
+                return self._execute_user_function(var_name, args)
+            # --- END UDF INTERCEPT ---
             #print(f"DEBUG _parse_factor: Looking up '{var_name}', variables: {list(self.variables.keys())}")
             # Handle case-insensitive BASIC variable lookup
             actual_var_name = var_name
@@ -4138,39 +4922,31 @@ class Interpreter:
             source_table_name = self._extract_table_from_select(self.last_sql_statement)
 
         # 2. Determine the TARGET table name for the output SQL.
-        #    It defaults to the source table name if not explicitly provided.
         target_table_name = options.get('target_tablename', source_table_name)
         
         if not target_table_name:
-            # We need at least a target table to generate SQL.
-            # self._error("FORMAT SQL requires a 'target_tablename' in OPTIONS or a simple FROM clause.")
             print("FORMAT SQL - no 'target_tablename' in OPTIONS found nor a simple FROM clause. Defaulting table name to \"mytable\".", file=sys.stderr)
             target_table_name = "mytable"
-            # return
             
         vendor = options.get('vendor', self.db_engine).lower()    
         mode = options.get('mode', 'insert').lower()
         pk_column = options.get('pk')
+        
+        # Auto-discovery of PK if not provided
         if not pk_column and mode in ('upsert', 'update', 'merge'):
             pk_column = self._get_primary_key(source_table_name) or "rowid"
-            if not pk_column:
-                self._error(f"Failed to auto-discover primary key for {source_table_name}: {e}")
-                
+            # Note: We don't error here if pk_column is None/rowid, we catch it 
+            # during the index lookup below if it's missing from the data.
+
         # --- Value formatting helper ---
         def format_value(value):
             if value is None: return "NULL"
             if isinstance(value, (int, float)): return str(value)
-            # 1. Convert the original value to a string.
             string_value = str(value)
-            
-            # 2. Escape any single quotes by replacing them with two single quotes.
             escaped_string = string_value.replace("'", "''")
-            
-            # 3. Add the single quotes around the outside and return.
             return "'" + escaped_string + "'"
 
         if mode in ('insert', 'replace'):
-            # This is the existing logic for INSERT and INSERT OR REPLACE
             command_prefix = f"INSERT OR REPLACE INTO {self._quote_identifier(target_table_name)}" if mode == 'replace' else f"INSERT INTO {self._quote_identifier(target_table_name)}"
             quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
             for row in results:
@@ -4178,11 +4954,18 @@ class Interpreter:
                 stream.write(f"{command_prefix} ({quoted_headers}) VALUES ({values_str});\n")
 
         elif mode == 'update':
+            # --- IMPROVED ERROR HANDLING START ---
             try:
+                # Try to find the PK column in the current result set
                 pk_index = [h.lower() for h in headers].index(pk_column.lower())
             except ValueError:
-                self._error(f"Primary key '{pk_column}' not found in the SELECT statement's results.")
+                # If we fail, provide a specific, helpful error message
+                if pk_column == 'rowid':
+                    self._error("Automatic update failed: The result set lacks a 'rowid' column. You must specify which column to use as the Primary Key using OPTIONS \"pk=column_name\".")
+                else:
+                    self._error(f"Update failed: The specified primary key '{pk_column}' was not found in the query results. Available columns: {', '.join(headers)}")
                 return
+            # --- IMPROVED ERROR HANDLING END ---
 
             for row in results:
                 pk_value = row[pk_index]
@@ -4190,17 +4973,19 @@ class Interpreter:
                 for i, header in enumerate(headers):
                     if i == pk_index: continue
                     set_clauses.append(f"{self._quote_identifier(header)} = {format_value(row[i])}")
+                
+                # Handle edge case where ONLY the PK was selected (UPDATE ... SET ... WHERE is invalid without SET)
                 if not set_clauses:
+                    # Fallback: Set the PK to itself just to make valid SQL (UPDATE t SET id=id WHERE id=id)
                     set_clauses.append(f"{self._quote_identifier(pk_column)} = {format_value(pk_value)}")
+                
                 stream.write(f"UPDATE {self._quote_identifier(target_table_name)} SET {', '.join(set_clauses)} WHERE {self._quote_identifier(pk_column)} = {format_value(pk_value)};\n")
 
         elif mode == 'upsert':
             if not pk_column: self._error("mode='upsert' requires the 'pk' option to be set.")
             quoted_headers = ', '.join([self._quote_identifier(h) for h in headers])
             
-            # --- START of Vendor-Specific Logic ---
             if vendor == 'mysql':
-                # MySQL uses ON DUPLICATE KEY UPDATE
                 update_clauses = [f"{self._quote_identifier(h)} = VALUES({self._quote_identifier(h)})" for h in headers if h.lower() != pk_column.lower()]
                 for row in results:
                     values_str = ', '.join([format_value(v) for v in row])
@@ -4209,7 +4994,6 @@ class Interpreter:
                         f"ON DUPLICATE KEY UPDATE {', '.join(update_clauses)};\n"
                     )
             else:
-                # SQLite, DuckDB, and PostgreSQL use ON CONFLICT
                 update_clauses = [f"{self._quote_identifier(h)} = excluded.{self._quote_identifier(h)}" for h in headers if h.lower() != pk_column.lower()]
                 for row in results:
                     values_str = ', '.join([format_value(v) for v in row])
@@ -4217,7 +5001,6 @@ class Interpreter:
                         f"INSERT INTO {self._quote_identifier(target_table_name)} ({quoted_headers}) VALUES ({values_str}) "
                         f"ON CONFLICT ({self._quote_identifier(pk_column)}) DO UPDATE SET {', '.join(update_clauses)};\n"
                     )
-            # --- END of Vendor-Specific Logic ---
 
         elif mode == 'merge':
             if not pk_column: self._error("mode=merge requires the 'pk' option to be set.")
@@ -4228,15 +5011,11 @@ class Interpreter:
             for row in results:
                 values_str = ', '.join([format_value(v) for v in row])
 
-                # --- START of Vendor-Specific Logic ---
                 if vendor == 'oracle':
-                    # Oracle uses SELECT ... FROM DUAL for the source
                     using_selects = [f"{format_value(row[i])} AS {self._quote_identifier(h)}" for i, h in enumerate(headers)]
                     using_clause = f"USING (SELECT {', '.join(using_selects)} FROM DUAL) S"
                 else:
-                    # SQL Server and DuckDB use VALUES
                     using_clause = f"USING (VALUES ({values_str})) AS S({quoted_headers})"
-                # --- END of Vendor-Specific Logic ---
 
                 merge_statement = (
                     f"MERGE INTO {self._quote_identifier(target_table_name)} T "
@@ -4765,8 +5544,8 @@ class Interpreter:
         token = self._current_token()
         
         # EXIT LOOP is valid for DO...LOOP structures
-        if not token or token[0] not in ['FOR', 'WHILE', 'LOOP', 'DO']:
-            self._error("EXIT must be followed by FOR, WHILE, LOOP, or DO")
+        if not token or token[0] not in ['FOR', 'WHILE', 'LOOP', 'DO', 'FUNCTION']:
+            self._error("EXIT must be followed by FOR, WHILE, LOOP, DO, or FUNCTION")
         
         exit_type = token[0]
         self._next_token()
@@ -4774,6 +5553,8 @@ class Interpreter:
         # Map EXIT LOOP and EXIT DO to the same internal type
         if exit_type == 'LOOP' or exit_type == 'DO':
             raise LoopExit('DO')  # Use 'DO' as the internal identifier
+        elif exit_type == 'FUNCTION':
+            raise FunctionReturn()
         else:
             raise LoopExit(exit_type)
 
@@ -5853,7 +6634,7 @@ class Interpreter:
         if array_name not in self.variables or not isinstance(self.variables[array_name], list):
             self._error(f"'{array_name}' is not an array.")
         
-        self.variables[array_name].insert(0, value)
+        self.variables[array_name].insert(1, value)   # 1 based, so ignore 0
 
     def _parse_shift_statement(self):
         self._expect('SHIFT')
@@ -5862,15 +6643,16 @@ class Interpreter:
         if array_name not in self.variables or not isinstance(self.variables[array_name], list):
             self._error(f"'{array_name}' is not an array.")
         
-        if not self.variables[array_name]:
+        # Check if there are user-accessible elements (need at least 2 elements: index 0 reserved, index 1+)
+        if len(self.variables[array_name]) < 2:
             self._error(f"Cannot SHIFT from empty array '{array_name}'.")
         
         if self._current_token() and self._current_token()[0] == 'INTO':
             self._next_token()
             var_name = self._expect('ID')[1]
-            self.variables[var_name] = self.variables[array_name].pop(0)
+            self.variables[var_name] = self.variables[array_name].pop(1)  # 1 based
         else:
-            self.variables[array_name].pop(0)
+            self.variables[array_name].pop(1)
 
     def _parse_splice_statement(self):
         self._expect('SPLICE')
@@ -5943,65 +6725,240 @@ class Interpreter:
         except Exception as e:
             self.variables['ERR'] = 1.0 # General error
             self.variables['ERRMSG$'] = f"An error occurred while trying to open the browser: {e}"
+    
+    def _parse_help_statement(self):
+        
+        def print_topic(topic, info):
+            print(f"\n=== HELP: {topic} ===")
+            print(f"Description: {info['desc']}")
+            print(f"Syntax:      {info['syntax']}")
+            if info['examples']:
+                print("Examples:")
+                for ex in info['examples']:
+                    print(f"  {ex}")
+            print("========================\n")
+                
+        self._expect('HELP')
+        all_help = False
+        topic = None
+        
+        # 1. Get the first token (Command)
+        if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'EOF']:
+            token = self._current_token()
+            
+            print(token)
+            if token[0] == 'ID' and token[1].upper() == 'ALL':
+                all_topics = HelpRegistry.list_topics()
+                for i in range(0, len(all_topics)):
+                    info = HelpRegistry.get_help(all_topics[i])
+                    if info:
+                        print_topic(all_topics[i], info)
+                self._next_token()
+                return
+                    
+            # Handle quoted strings specifically        
+            if token[0] == 'STRING':
+                topic = token[1].strip('"').upper()
+                self._next_token()
+            else:
+                # Use Token Type if it's a Keyword, or Token Value if it's an ID
+                # e.g. "LOAD" -> topic="LOAD", "ENGINE" (ID) -> topic="ENGINE"
+                topic = token[1].upper() if token[0] == 'ID' else token[0]
+                self._next_token()
+                
+                # 2. Look for Sub-Topic (2nd word)
+                # e.g. "CSV", "CREATE", "OPEN"
+                sub_token = self._current_token()
+                if sub_token:
+                    # Resolve what the 2nd word is (Value if ID, Type if Keyword)
+                    sub_word = sub_token[1].upper() if sub_token[0] == 'ID' else sub_token[0]
+                    
+                    # List of all allowed 2nd words
+                    valid_sub_words = [
+                        'CSV', 'JSON', 'JSONL', 'XML', 'FIXED', 'TEXT', 'EXCEL', 'PARQUET', 
+                        'IN', 'OUTPUT', 'EMAIL', 'USING',  # Keywords
+                        'ENGINE', 'OPEN', 'TABLES', 'VARIABLES', 'INDEXES', 'BROWSER', # IDs
+                        'CREATE', 'TABLE' # SQL Keywords
+                    ]
+
+                    if sub_word in valid_sub_words:
+                        topic += " " + sub_word
+                        self._next_token()
+
+                        # 3. Look for "Third" Topic (specifically for SHOW CREATE TABLE)
+                        if topic == "SHOW CREATE":
+                            third_token = self._current_token()
+                            if third_token:
+                                third_word = third_token[1].upper() if third_token[0] == 'ID' else third_token[0]
+                                if third_word == 'TABLE':
+                                    topic += " TABLE"
+                                    self._next_token()
+
+        if topic:
+            # 4. Lookup and Print
+            info = HelpRegistry.get_help(topic)
+            if info:
+                print_topic(topic, info)
+            else:
+                # Partial match search
+                all_topics = HelpRegistry.list_topics()
+                partials = [t for t in all_topics if t.startswith(topic + " ")]
+                
+                if partials:
+                    print(f"No general help for '{topic}', but specific sub-topics exist:")
+                    for p in partials:
+                        print(f"  HELP {p}")
+                else:
+                    print(f"No help available for '{topic}'. Type HELP to see list.")
+        else:
+            # 5. List all topics
+            print("\n=== DbBasic Help Topics ===")
+            topics = HelpRegistry.list_topics()
+            col_width = 22
+            num_cols = 3
+            for i in range(0, len(topics), num_cols):
+                chunk = topics[i:i+num_cols]
+                print("".join(word.ljust(col_width) for word in chunk))
+            print("\nType HELP \"COMMAND\" for details.\n")
             
     def _parse_fetch_statement(self):
-        self.variables['ERR'] = 0.0; self._expect('FETCH'); url = self._parse_expression()
+        """
+        FETCH "url" [METHOD body_hash] [USING HEADERS req_h] [USING FILE field=path]
+              INTO var$ | TO FILE "path"
+              [HEADERS INTO resp_h]
+        METHOD is one of: POST, PUT, PATCH, DELETE.
+        For DELETE the body hash is optional. The captured response headers (if requested)
+        are stored as a HASH keyed by header name.
+        ERR is set to the HTTP status code, -1 on network error, -2 on file not found.
+        """
+        self.variables['ERR'] = 0.0
+        self._expect('FETCH')
+        url = self._parse_expression()
         post_data_hash, headers_hash, upload_file_info, method = None, None, None, 'GET'
+
+        # Tokens that signal the start of a method clause inside FETCH.
+        # POST and DELETE are real tokens; PUT and PATCH arrive as ID with that uppercase value.
+        def _is_method_clause(tok):
+            if tok[0] == 'POST': return 'POST'
+            if tok[0] == 'DELETE': return 'DELETE'
+            if tok[0] == 'ID' and tok[1].upper() in ('PUT', 'PATCH'):
+                return tok[1].upper()
+            return None
+
         while self._current_token() and self._current_token()[0] not in ['INTO', 'TO FILE']:
             clause = self._current_token()
-            if clause[0] == 'POST':
-                method = 'POST'; self._next_token(); hash_name = self._expect('ID')[1]
-                post_data_hash = self.variables.get(hash_name)
-                if self._current_token() and self._current_token()[0] == 'LPAREN': self._next_token(); self._expect('RPAREN')
-            elif clause[0] == 'USING':
-                self._next_token(); next_clause = self._current_token()
-                if next_clause[0] == 'ID' and next_clause[1] == 'FILE':
-                    self._next_token(); field_name = self._parse_expression(); self._expect('ASSIGN'); file_path = self._parse_expression()
-                    upload_file_info = (field_name, file_path)
-                elif next_clause[0] == 'ID' and next_clause[1] == 'HEADERS':
-                    self._next_token(); hash_name = self._expect('ID')[1]
-                    headers_hash = self.variables.get(hash_name)
-                    if self._current_token() and self._current_token()[0] == 'LPAREN': 
+            verb = _is_method_clause(clause)
+            if verb is not None:
+                method = verb
+                self._next_token()
+                # POST/PUT/PATCH require a body hash; DELETE's body is optional.
+                # The body is the next ID, unless we've hit a clause keyword or destination.
+                next_tok = self._current_token()
+                body_required = verb in ('POST', 'PUT', 'PATCH')
+                body_present = (next_tok is not None
+                                and next_tok[0] == 'ID'
+                                and next_tok[1].upper() not in ('USING', 'INTO', 'HEADERS'))
+                if body_required and not body_present:
+                    self._error(f"{verb} requires a body hash, e.g. FETCH \"url\" {verb} data INTO resp$")
+                if body_present:
+                    hash_name = self._expect('ID')[1]
+                    post_data_hash = self.variables.get(hash_name)
+                    if self._current_token() and self._current_token()[0] == 'LPAREN':
                         self._next_token(); self._expect('RPAREN')
-                else: self._error("Expected FILE or HEADERS after USING")
-            else: self._error(f"Unexpected token '{clause[0]}' in FETCH statement")
+            elif clause[0] == 'USING':
+                self._next_token()
+                next_clause = self._current_token()
+                if next_clause[0] == 'ID' and next_clause[1].upper() == 'FILE':
+                    self._next_token()
+                    field_name = self._parse_expression()
+                    self._expect('ASSIGN')
+                    file_path = self._parse_expression()
+                    upload_file_info = (field_name, file_path)
+                elif next_clause[0] == 'ID' and next_clause[1].upper() == 'HEADERS':
+                    self._next_token()
+                    hash_name = self._expect('ID')[1]
+                    headers_hash = self.variables.get(hash_name)
+                    if self._current_token() and self._current_token()[0] == 'LPAREN':
+                        self._next_token(); self._expect('RPAREN')
+                else:
+                    self._error("Expected FILE or HEADERS after USING")
+            else:
+                self._error(f"Unexpected token '{clause[0]}' in FETCH statement")
+
         destination_token = self._current_token()
-        if not destination_token: self._error("FETCH statement requires an INTO or TO FILE clause.")
-        final_headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.9"
-        }
-        if headers_hash:
-            final_headers.update(headers_hash) # User headers override defaults
-        
+        if not destination_token:
+            self._error("FETCH statement requires an INTO or TO FILE clause.")
+
+        # Build request kwargs once; dispatch via requests.request() for uniform method handling.
+        req_kwargs = {'headers': headers_hash, 'timeout': 30 if upload_file_info else 15}
+        if method != 'GET' and post_data_hash is not None:
+            req_kwargs['data'] = post_data_hash
+
         try:
+            # ---------- TO FILE ----------
             if destination_token[0] == 'TO FILE':
-                self._next_token(); local_filename = self._parse_expression()
-                if method == 'POST':
-                    if upload_file_info:
-                        with open(upload_file_info[1], 'rb') as f:
-                            files = {upload_file_info[0]: f}; response = requests.post(url, data=post_data_hash, headers=headers_hash, files=files, timeout=30, stream=True)
-                    else: response = requests.post(url, data=post_data_hash, headers=headers_hash, timeout=15, stream=True)
-                else: response = requests.get(url, headers=headers_hash, timeout=15, stream=True)
-                response.raise_for_status()
-                with open(local_filename, 'wb') as f:
-                    for chunk in response.iter_content(chunk_size=8192): f.write(chunk)
-                self.variables['ERR'] = float(response.status_code)
-            elif destination_token[0] == 'INTO':
-                self._next_token(); dest_var = self._expect('ID')[1]
-                if upload_file_info and method == 'POST':
+                self._next_token()
+                local_filename = self._parse_expression()
+                resp_header_var = self._parse_optional_response_headers_clause()
+                req_kwargs['stream'] = True
+                if upload_file_info and method in ('POST', 'PUT', 'PATCH'):
                     with open(upload_file_info[1], 'rb') as f:
                         files = {upload_file_info[0]: f}
-                        response = requests.post(url, data=post_data_hash, headers=headers_hash, files=files, timeout=30)
-                elif method == 'POST': response = requests.post(url, data=post_data_hash, headers=headers_hash, timeout=15)
-                else: response = requests.get(url, headers=headers_hash, timeout=15)
+                        response = requests.request(method, url, files=files, **req_kwargs)
+                        response.raise_for_status()
+                        with open(local_filename, 'wb') as out:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                out.write(chunk)
+                else:
+                    response = requests.request(method, url, **req_kwargs)
+                    response.raise_for_status()
+                    with open(local_filename, 'wb') as out:
+                        for chunk in response.iter_content(chunk_size=8192):
+                            out.write(chunk)
                 self.variables['ERR'] = float(response.status_code)
-                try: self.variables[dest_var] = response.content.decode('utf-8')
-                except UnicodeDecodeError: self.variables[dest_var] = "Binary data received"
-            else: self._error("FETCH statement requires an INTO or TO FILE clause.")
-        except FileNotFoundError: self.variables['ERR'] = -2.0
-        except requests.exceptions.RequestException: self.variables['ERR'] = -1.0
+                if resp_header_var is not None:
+                    self.variables[resp_header_var] = dict(response.headers)
+
+            # ---------- INTO var ----------
+            elif destination_token[0] == 'INTO':
+                self._next_token()
+                dest_var = self._expect('ID')[1]
+                resp_header_var = self._parse_optional_response_headers_clause()
+                if upload_file_info and method in ('POST', 'PUT', 'PATCH'):
+                    with open(upload_file_info[1], 'rb') as f:
+                        files = {upload_file_info[0]: f}
+                        response = requests.request(method, url, files=files, **req_kwargs)
+                else:
+                    response = requests.request(method, url, **req_kwargs)
+                self.variables['ERR'] = float(response.status_code)
+                try:
+                    self.variables[dest_var] = response.content.decode('utf-8')
+                except UnicodeDecodeError:
+                    self.variables[dest_var] = "Binary data received"
+                if resp_header_var is not None:
+                    self.variables[resp_header_var] = dict(response.headers)
+            else:
+                self._error("FETCH statement requires an INTO or TO FILE clause.")
+        except FileNotFoundError:
+            self.variables['ERR'] = -2.0
+        except requests.exceptions.RequestException:
+            self.variables['ERR'] = -1.0
+
+    def _parse_optional_response_headers_clause(self):
+        """If the current token sequence is `HEADERS INTO id`, consume it and return the
+        variable name where response headers should be stored. Otherwise return None.
+        Called after FETCH's destination (INTO var$ or TO FILE "path") is consumed."""
+        tok = self._current_token()
+        if tok is None:
+            return None
+        if tok[0] == 'ID' and tok[1].upper() == 'HEADERS':
+            # Lookahead: HEADERS INTO id
+            next_idx = self.token_index + 1
+            if next_idx < len(self.tokens) and self.tokens[next_idx][0] == 'INTO':
+                self._next_token()    # consume HEADERS
+                self._next_token()    # consume INTO
+                return self._expect('ID')[1]
+        return None
 
     def _clean_and_deduplicate_headers(self, headers: List[str]) -> List[str]:
         """
@@ -6511,8 +7468,10 @@ class Interpreter:
                 
     def _fixed_extractor(self, filename, options):
         """
-        Extractor for fixed-width text files. Yields headers, then data rows.
-        Requires a 'fields' option specifying column names and positions (e.g., "ID:1-5,Name:6-20").
+        Extractor for fixed-width text files. 
+        Syntax Compliance:
+          - 'start-end': 1-based, INCLUSIVE. (e.g. 1-5 includes cols 1,2,3,4,5)
+          - 'start+len': 1-based start, plus length. (e.g. 1+5 includes cols 1,2,3,4,5)
         """
         fields_spec = options.get('fields')
         if not fields_spec:
@@ -6522,10 +7481,21 @@ class Interpreter:
         try:
             for field_def in fields_spec.split(','):
                 name, positions = field_def.strip().split(':', 1)
-                start, end = positions.split('-', 1)
-                # Convert from 1-based inclusive to 0-based exclusive for Python slicing
-                start_pos = int(start.strip()) - 1
-                end_pos = int(end.strip())
+                
+                # --- NEW LOGIC START ---
+                if '+' in positions:
+                    # Syntax: start+length (e.g., 1+10 means start at 1, 10 chars long)
+                    start_str, len_str = positions.split('+', 1)
+                    start_pos = int(start_str.strip()) - 1
+                    field_len = int(len_str.strip())
+                    end_pos = start_pos + field_len
+                else:
+                    # Syntax: start-end (e.g., 1-10 means chars 1 through 10)
+                    start_str, end_str = positions.split('-', 1)
+                    start_pos = int(start_str.strip()) - 1
+                    end_pos = int(end_str.strip())
+                # --- NEW LOGIC END ---
+
                 field_definitions.append({'name': name.strip(), 'start': start_pos, 'end': end_pos})
         except ValueError as e:
             self._error(f"Invalid 'fields' specification for LOAD FIXED: {e}")
@@ -8339,17 +9309,7 @@ class Interpreter:
                 self._next_token()  # Consume the comma and continue the loop
             else:
                 break  # No comma, so the DIM statement is finished
-            
-    def _parse_json_statement(self):
-        self._expect('PARSE'); self._expect('JSON')
-        json_string = self._parse_expression()
-        self._expect('INTO'); var_name = self._expect('ID')[1]
-        if self._current_token() and self._current_token()[0] == 'LPAREN': self._next_token(); self._expect('RPAREN')
-        if var_name not in self.variables: self._error(f"Target variable '{var_name}' must be dimensioned.")
-        try: parsed_data = json.loads(json_string)
-        except json.JSONDecodeError as e: self._error(f"Invalid JSON string: {e}")
-        self.variables[var_name] = self._python_to_basic_data(parsed_data)
-        
+                   
     def _parse_redim_statement(self):
         self._expect('REDIM'); var_name = self._expect('ID')[1]
         if var_name not in self.variables or not isinstance(self.variables.get(var_name), list): self._error(f"'{var_name}' not dimensioned for REDIM.")
@@ -9565,17 +10525,30 @@ class Interpreter:
             self._next_token()
             fields_spec = self._parse_expression()
             for field_def in fields_spec.split(','):
-                # (Manual parsing logic is the same)
                 parts = field_def.strip().split(':')
                 if len(parts) != 2: self._error(f"Invalid field specification: {field_def}")
                 field_name, positions = parts
-                pos_parts = positions.split('-')
-                if len(pos_parts) != 2: self._error(f"Invalid position specification: {positions}")
+                
+                # --- NEW LOGIC START ---
                 try:
-                    start_pos = int(pos_parts[0].strip()) - 1
-                    end_pos = int(pos_parts[1].strip())
+                    if '+' in positions:
+                        # Syntax: start+length
+                        start_str, len_str = positions.split('+', 1)
+                        start_pos = int(start_str.strip()) - 1
+                        field_len = int(len_str.strip())
+                        end_pos = start_pos + field_len
+                    else:
+                        # Syntax: start-end
+                        pos_parts = positions.split('-')
+                        if len(pos_parts) != 2: self._error(f"Invalid position specification: {positions}")
+                        start_pos = int(pos_parts[0].strip()) - 1
+                        end_pos = int(pos_parts[1].strip())
+                    
                     field_definitions.append({
-                        'name': field_name.strip(), 'start': start_pos, 'end': end_pos, 'width': end_pos - start_pos
+                        'name': field_name.strip(), 
+                        'start': start_pos, 
+                        'end': end_pos, 
+                        'width': end_pos - start_pos
                     })
                 except ValueError:
                     self._error(f"Invalid position numbers: {positions}")
@@ -9651,27 +10624,49 @@ class Interpreter:
             if into_hash_name:
                 self.variables[into_hash_name] = self._python_to_basic_data(report)
             else:
-                # The printing logic now uses 'first_two_lines'
+                # --- PRINTING TO CONSOLE ---
                 print(f"--- Fixed-Width Analysis Report for: {filename} ---")
                 print(f"  Total Records: {report.get('TOTAL_RECORDS', 0)}")
                 print(f"  Defined Fields: {report.get('FIELD_COUNT', 0)}")
                 
                 line_lengths = report.get('LINE_LENGTH_DISTRIBUTION', {})
-                max_line_length = int(max(line_lengths.keys())) if line_lengths else 0
+                # Find the maximum line length referenced in our distribution keys
+                max_line_length = int(max([int(k) for k in line_lengths.keys()])) if line_lengths else 80
                 print(f"  Maximum Line Length: {max_line_length}")
                 
-                if max_line_length > 0:
-                    print("\nPosition Reference:")
-                    tens_ruler = "         "
-                    for i in range(1, (max_line_length // 10) + 2):
-                        tens_ruler += f"{i}         "
-                    print(f"{tens_ruler[:max_line_length]}")
-                    
-                    units_ruler = "123456789" * ((max_line_length // 9) + 2)
-                    print(f"{units_ruler[:max_line_length]}")
+                print("\nPosition Reference:")
+                
+                # 1. Create the Tens Ruler (e.g., "         10        20")
+                tens_chars = [" "] * (max_line_length + 1)
+                for i in range(10, max_line_length + 1, 10):
+                    s = str(i)
+                    # Align so the number ends exactly at the 10th tick
+                    # (1-based column 'i' becomes 0-based index 'i-1')
+                    start_idx = i - len(s)
+                    for offset, char in enumerate(s):
+                        if 0 <= start_idx + offset < len(tens_chars):
+                            tens_chars[start_idx + offset] = char
+                tens_ruler = "".join(tens_chars).rstrip()
 
-                    for line in first_two_lines:
-                        print(line.rstrip('\n\r'))
+                # 2. Create the Units Ruler (e.g., "12345678901234567890")
+                units_pattern = "1234567890"
+                units_ruler = (units_pattern * ((max_line_length // 10) + 2))[:max_line_length]
+
+                # 3. Print Rulers
+                print(tens_ruler)
+                print(units_ruler)
+                
+                # 4. Print Sample Data (Directly read from file to ensure it appears)
+                try:
+                    with open(filename, 'r', encoding='utf-8') as f:
+                        count = 0
+                        for line in f:
+                            if count >= 5: break
+                            # Print the line truncated to the ruler width (or slightly more)
+                            print(line.rstrip('\r\n')[:max_line_length])
+                            count += 1
+                except Exception:
+                    print("(Could not read sample lines from file)")
                 
                 if 'FIELD_ANALYSIS' in report:
                     print("\n  Field Analysis:")
@@ -10592,6 +11587,47 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during file analysis: {e}")
 
+    def _merge_json_structure(self, master, current):
+        """Recursively merges JSON structure to create a superset schema."""
+        if isinstance(current, dict):
+            # If we are merging a dict into a non-dict (e.g. previously found a null), force master to dict
+            if not isinstance(master, dict):
+                # This is tricky in Python references, but for this schema generator, 
+                # we assume master is correctly initialized by the caller or previous iterations.
+                pass 
+
+            for key, value in current.items():
+                if key not in master:
+                    # Initialize based on type
+                    if isinstance(value, dict):
+                        master[key] = {}
+                        self._merge_json_structure(master[key], value)
+                    elif isinstance(value, list):
+                        # Represent list as a list containing one schema object: [ {schema} ]
+                        master[key] = [{}] if value and isinstance(value[0], dict) else []
+                        if value:
+                            for item in value:
+                                if isinstance(item, dict) and master[key]:
+                                    self._merge_json_structure(master[key][0], item)
+                    else:
+                        # Leaf node: Store the type
+                        val_type = "TEXT"
+                        if isinstance(value, bool): val_type = "BOOLEAN"
+                        elif isinstance(value, int): val_type = "INTEGER"
+                        elif isinstance(value, float): val_type = "REAL"
+                        master[key] = val_type
+                else:
+                    # Key exists, recurse if it's a container
+                    if isinstance(value, dict) and isinstance(master[key], dict):
+                        self._merge_json_structure(master[key], value)
+                    elif isinstance(value, list) and isinstance(master[key], list):
+                        if value:
+                            # Ensure we have a schema object to merge into
+                            if not master[key]: master[key].append({})
+                            for item in value:
+                                if isinstance(item, dict):
+                                    self._merge_json_structure(master[key][0], item)
+                                    
     def _describe_json_node(self, node, indent=""):
         """A recursive helper to print the structure of a JSON node."""
         if isinstance(node, dict):
@@ -10633,31 +11669,165 @@ class Interpreter:
             print("(Null)")
         else:
             print("(Unknown Type)")
+    
+    def _upgrade_json_record(self, schema_node, source_node):
+        """
+        Recursively rebuilds a source record to strictly match the schema_node structure.
+        """
+        # Case 1: Schema is a dictionary (Nested Object)
+        if isinstance(schema_node, dict):
+            new_record = {}
+            # If source is not a dict (e.g. it was missing or null), treat it as empty
+            source_dict = source_node if isinstance(source_node, dict) else {}
+            
+            for key, sub_schema in schema_node.items():
+                # Recurse for every key defined in the schema
+                source_val = source_dict.get(key)
+                new_record[key] = self._upgrade_json_record(sub_schema, source_val)
+            return new_record
+
+        # Case 2: Schema is a list (Array of Objects)
+        elif isinstance(schema_node, list):
+            # We expect a list of objects in the source
+            source_list = source_node if isinstance(source_node, list) else []
+            if not schema_node:
+                # Schema list is empty? Just return source list or empty list
+                return source_list
+            
+            # The schema for items in this list is the first element of schema_node
+            item_schema = schema_node[0]
+            new_list = []
+            for item in source_list:
+                new_list.append(self._upgrade_json_record(item_schema, item))
+            return new_list
+
+        # Case 3: Schema is a leaf type (String, Integer, etc.)
+        else:
+            # If source_node matches the type, return it.
+            # Otherwise, or if it's missing, return a default.
+            
+            # If source exists and is not a container when it should be a value
+            if source_node is not None and not isinstance(source_node, (dict, list)):
+                return source_node
+            
+            # Default values based on schema type hint strings
+            schema_type = str(schema_node).upper()
+            if "INTEGER" in schema_type or "REAL" in schema_type:
+                return 0
+            elif "BOOLEAN" in schema_type:
+                return False
+            else: # TEXT/String
+                return ""
+    
+    def _parse_upgrade_json_statement(self):
+        """
+        Parses and executes: UPGRADE JSON "input.json" USING SCHEMA "schema.json" INTO "output.json"
+        """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
+        self._expect('UPGRADE'); self._expect('JSON')
+        
+        source_filename = self._parse_expression()
+        
+        self._expect('USING'); self._expect('ID') # Expect SCHEMA
+        if self._current_token()[-2][1].upper() != 'SCHEMA':
+             self._error("Expected SCHEMA after USING")
+        schema_filename = self._parse_expression()
+        
+        self._expect('INTO')
+        output_filename = self._parse_expression()
+
+        try:
+            # 1. Load the Schema
+            with open(schema_filename, 'r', encoding='utf-8') as f:
+                master_schema = json.load(f)
+            
+            # 2. Load the Source Data
+            with open(source_filename, 'r', encoding='utf-8') as f:
+                source_data = json.load(f)
+            
+            # Determine if source is a single object or a list
+            is_list = isinstance(source_data, list)
+            records = source_data if is_list else [source_data]
+            
+            # 3. Process Records
+            upgraded_records = []
+            
+            # Handle the case where the schema file itself is a list (rare but possible root)
+            # or a dict representing a single record structure.
+            record_schema = master_schema
+            if isinstance(master_schema, list) and master_schema:
+                record_schema = master_schema[0]
+
+            print(f"Upgrading JSON records from '{source_filename}'...")
+            
+            for i, record in enumerate(records):
+                # Apply the recursive upgrade logic
+                new_record = self._upgrade_json_record(record_schema, record)
+                upgraded_records.append(new_record)
+
+            # 4. Write Output
+            final_output = upgraded_records if is_list else (upgraded_records[0] if upgraded_records else {})
+            
+            with open(output_filename, 'w', encoding='utf-8') as f:
+                json.dump(final_output, f, indent=4)
+                
+            print(f"Upgrade complete. Saved to '{output_filename}'.")
+
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
+            self._error(f"File not found: {e.filename}")
+        except json.JSONDecodeError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"Invalid JSON format: {e}")
+        except Exception as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
+            self._error(f"Error during UPGRADE JSON: {e}")
             
     def _parse_analyze_json_statement(self):
-        """Parses and executes ANALYZE JSON, reporting on structural consistency and format."""
+        """
+        Parses and executes ANALYZE JSON.
+        Now supports: ANALYZE JSON "file.json" SAVE SCHEMA TO "schema.json"
+        """
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ANALYZE JSON')
         filename = self._parse_expression()
 
         into_hash_name = None
-        if self._current_token() and self._current_token()[0] == 'INTO':
-            self._next_token()
-            into_hash_name = self._expect('ID')[1]
-            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+        save_schema_path = None
+
+        # Parse optional clauses (INTO, SAVE SCHEMA TO)
+        while self._current_token() and self._current_token()[0] in ['INTO', 'ID']:
+            token = self._current_token()
+            
+            if token[0] == 'INTO':
+                self._next_token()
+                into_hash_name = self._expect('ID')[1]
+                if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
+                     self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
+            
+            elif token[0] == 'ID' and token[1].upper() == 'SAVE':
+                self._next_token() # Consume SAVE
+                if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'SCHEMA'):
+                    self._error("Expected SCHEMA after SAVE")
+                self._next_token() # Consume SCHEMA
+                if not (self._current_token() and self._current_token()[0] == 'TO'):
+                    self._error("Expected TO after SAVE SCHEMA")
+                self._next_token() # Consume TO
+                save_schema_path = self._parse_expression()
+            else:
+                break
 
         report = {}
         try:
             with open(filename, 'r', encoding='utf-8') as infile:
                 data = json.load(infile)
             
-            # If the JSON is a single object, treat it as an array with one element
+            # Normalize to a list of records
             records_to_analyze = data if isinstance(data, list) else [data]
 
             report['TOTAL_RECORDS'] = len(records_to_analyze)
             
-            # Analyze the consistency of keys across all objects
+            # Analyze consistency
             key_sets = [tuple(sorted(d.keys())) for d in records_to_analyze if isinstance(d, dict)]
             key_distribution = {}
             for ks in key_sets:
@@ -10666,6 +11836,19 @@ class Interpreter:
             report['IS_CONSISTENT'] = -1.0 if len(key_distribution) <= 1 else 0.0
             report['KEY_SET_DISTRIBUTION'] = self._python_to_basic_data(key_distribution)
             
+            # --- SCHEMA GENERATION LOGIC ---
+            if save_schema_path:
+                master_schema = {}
+                for record in records_to_analyze:
+                    self._merge_json_structure(master_schema, record)
+                
+                try:
+                    with open(save_schema_path, 'w', encoding='utf-8') as f:
+                        json.dump(master_schema, f, indent=4)
+                    print(f"JSON Schema saved to {save_schema_path}")
+                except Exception as e:
+                    self._error(f"Could not save schema file: {e}")
+
             if into_hash_name:
                 self.variables[into_hash_name] = self._python_to_basic_data(report)
             else:
@@ -10678,10 +11861,8 @@ class Interpreter:
                     for key_set, count in report['KEY_SET_DISTRIBUTION'].items():
                         print(f"    - {int(count)} record(s) with keys: {key_set}")
                 
-                # --- NEW: Automatically print the structure map ---
                 print(f"\n  --- Simplified Structure ---")
                 self._describe_json_node(data)
-
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
@@ -11303,7 +12484,16 @@ class Interpreter:
     '''
     def _parse_show_statement(self):
         self._expect('SHOW')
-        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'TABLES':
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'VARIABLES':
+            self._next_token()
+            print("--- Current Variables ---")
+            for name, val in self.variables.items():
+                val_type = type(val).__name__
+                # Truncate long strings/lists for display
+                val_str = str(val)
+                if len(val_str) > 50: val_str = val_str[:47] + "..."
+                print(f"{name} ({val_type}): {val_str}")
+        elif self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'TABLES':
             self._next_token()
             into_array_name = None
             # --- NEW: Check for an optional INTO clause ---
@@ -11667,15 +12857,6 @@ class Interpreter:
             self.variables['ERR'] = -1.0; self.variables['ERRMSG$'] = str(e)
             
 
-TEST_PROGRAM_SOURCE = """
-REM --- Test complex IF statement ---
-PRINT "DbBasic Interpreter By Data Design Group, Inc." 
-PRINT "Written by Dan Bailey"
-PRINT
-PRINT "Usage: dbbasic -                for stdin"
-PRINT "       dbasic myprogram.bas     to run script" 
-"""
-
 def run_interpreter(source_code, cmd_args=None, source_name="script", debug=False, dump_tokens=False):
     #print(f"--- Running {source_name} ---")
     if cmd_args is None: cmd_args = []
@@ -11698,13 +12879,48 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
         if interpreter: interpreter.close()
         #print(f"\n--- Finished {source_name} ---", file=sys.stderr)
 
-# Replace your entire main function with this one.
+
+def run_repl(debug=False):
+    print("DbBasic REPL (Type 'EXIT' to quit)")
+    print("Supports single-line loops (e.g., FOR I=1 TO 5: PRINT I: NEXT)")
+    
+    # Initialize with empty source to set up DB and variables
+    interpreter = None
+    try:
+        # Initialize with a dummy newline to create valid state
+        dummy_lexer = Lexer("\n")
+        interpreter = Interpreter(dummy_lexer, cmd_args=[], debug=debug)
+    except Exception as e:
+        print(f"Failed to initialize REPL: {e}")
+        return
+
+    while True:
+        try:
+            # Get input
+            try:
+                code_line = input("DbBasic> ").strip()
+            except EOFError: # Handle Ctrl+Z/Ctrl+D gracefully
+                break
+            
+            # Handle REPL commands
+            if code_line.upper() in ['EXIT', 'QUIT']:
+                break
+            if code_line == "":
+                continue
+                
+            # Execute
+            interpreter.repl_execute(code_line)
+            
+        except KeyboardInterrupt:
+            print("\nType 'EXIT' to quit.")
+            
+    if interpreter:
+        interpreter.close()
 
 def main():
-    if len(sys.argv) < 2:
-        run_interpreter(TEST_PROGRAM_SOURCE, source_name="Internal Test Program")
-        print("\n" + "="*50)
-        print("Usage: python basic.py <filename.bas | -> [args...] [--debug] [--dump-tokens]", file=sys.stderr)
+    # If no args (or explicit flag), run REPL
+    if len(sys.argv) < 2 or (len(sys.argv) == 2 and sys.argv[1] == '--repl'):
+        run_repl(debug="--debug" in sys.argv)
         return
  
     args = sys.argv[1:]
@@ -11732,7 +12948,6 @@ def main():
         source_code = sys.stdin.read()
         source_name = "stdin"
         cmd_args = args[1:]
-        # For stdin, the base path for includes is the current working directory.
         base_dir = os.getcwd()
     else:
         filepath = args[0]
@@ -11747,16 +12962,11 @@ def main():
         except Exception as e:
             print(f"An error occurred reading file: {e}", file=sys.stderr)
             return
-        # For a file, the base path is the directory containing that file.
         base_dir = os.path.dirname(os.path.abspath(filepath))
 
     processed_source_code = preprocess_includes(source_code, base_path=base_dir)
-    #print("DEBUG:","MAIN",processed_source_code)
-    
-    # This line will no longer fail because processed_source_code will be a string.
     new_source_code = preprocess_continuations(processed_source_code)
     
-    # This check now correctly uses the final processed code.
     if processed_source_code and processed_source_code.strip():
         run_interpreter(new_source_code, cmd_args, source_name, debug=is_debug, dump_tokens=dump_tokens_flag)
     else:
