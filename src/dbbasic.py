@@ -566,9 +566,40 @@ class HelpRegistry:
             "examples": ['REVERSE my_list']
         },
         "SORT": {
-            "syntax": 'SORT array [ON "key"] [ASC|DESC]',
-            "desc": "Sorts an array. Use ON to sort arrays of hashes by a specific key.",
-            "examples": ['SORT names ASC', 'SORT users ON "age" DESC']
+            "syntax": 'SORT array [ON "key" | WITH key_fn] [ASC|DESC]',
+            "desc": "Sorts an array. Use ON to sort an array of hashes by a string key. Use WITH to sort by a function (UDF or built-in) that returns each element's sort key.",
+            "examples": [
+                'SORT names ASC',
+                'SORT users ON "age" DESC',
+                'SORT items WITH sort_key$ ASC      ` UDF returns the key',
+                'SORT names WITH UCASE$             ` case-insensitive sort'
+            ]
+        },
+        "FILTER": {
+            "syntax": 'FILTER(array, criteria$ | predicate_fn, [include_flag])',
+            "desc": "Returns a new array with elements that match the criteria. The criteria can be a substring (case-sensitive match against str(item)) or a bare user-defined function name (called with each item; truthy result includes the item). Optional include_flag = 0 inverts (returns NON-matches).",
+            "examples": [
+                'small = FILTER(words, "small")',
+                'big   = FILTER(words, "small", 0)        ` exclude matches',
+                'active = FILTER(leads, is_active)        ` UDF predicate'
+            ]
+        },
+        "MAP": {
+            "syntax": 'MAP(array, transform_fn)',
+            "desc": "Returns a new array with each element passed through a user-defined transform function. The function is called once per element with that element as its single argument.",
+            "examples": [
+                'doubled = MAP(nums, dbl)',
+                'cleaned = MAP(rows, normalize_row)'
+            ]
+        },
+        "REDUCE": {
+            "syntax": 'REDUCE(array, accumulator_fn, [initial])',
+            "desc": "Folds an array into a single value. The accumulator function takes (acc, item) and returns the new accumulator. If initial is omitted, the first element is used as the initial accumulator and iteration begins at the second element (errors if array is empty).",
+            "examples": [
+                'total  = REDUCE(nums, add, 0)',
+                'maxval = REDUCE(nums, max_of)            ` no initial -- uses nums(0)',
+                'joined$ = REDUCE(words, concat$, "")'
+            ]
         },
         
         # --- FILE OPERATIONS ---
@@ -638,14 +669,36 @@ class HelpRegistry:
             "examples": ['LOAD CSV "data.csv" INTO TABLE users']
         },
         "LOAD CSV": {
-            "syntax": 'LOAD CSV "file" INTO TABLE "tbl" OPTIONS "header=true, delimiter=,"',
-            "desc": "Loads a CSV file. Supports APPEND, TRUNCATE, UPSERT.",
-            "examples": ['LOAD CSV "data.csv" INTO TABLE my_table TRUNCATE OPTIONS "header=true"']
+            "syntax": 'LOAD CSV "file" CREATE TABLE name | INTO TABLE name [APPEND|TRUNCATE|UPSERT USING KEY col|IGNORE] [OPTIONS "..."] [TRANSFORM col|ROW WITH fn]* [VALIDATE col|ROW WITH fn]* [USING SCHEMA "..."]',
+            "desc": "Imports CSV data into a database table. TRANSFORM col WITH fn rewrites cells; TRANSFORM ROW WITH fn rewrites the whole row hash. VALIDATE col WITH fn / VALIDATE ROW WITH fn skip the row on falsy return. Clauses may be chained; column-level runs before row-level.",
+            "examples": [
+                'LOAD CSV "data.csv" INTO TABLE my_table TRUNCATE OPTIONS "header=true"',
+                'LOAD CSV "raw.csv" CREATE TABLE customers TRANSFORM phone WITH normalize_phone$',
+                'LOAD CSV "leads.csv" CREATE TABLE leads TRANSFORM name WITH PROPER$ VALIDATE email WITH is_valid_email',
+                'LOAD CSV "addrs.csv" CREATE TABLE a TRANSFORM ROW WITH fix_state_from_zip',
+                'LOAD CSV "rows.csv" CREATE TABLE r VALIDATE ROW WITH require_id_or_email'
+            ]
         },
         "LOAD JSON": {
             "syntax": 'LOAD JSON "file" INTO TABLE "tbl" [OPTIONS "normalize=true"]',
             "desc": "Loads a JSON file. Use normalize=true to auto-relationalize nested data.",
             "examples": ['LOAD JSON "data.json" CREATE TABLE users']
+        },
+        "LOAD JSONL": {
+            "syntax": 'LOAD JSONL "file" CREATE TABLE name | INTO TABLE name ... [OPTIONS "..."] [TRANSFORM col|ROW WITH fn]* [VALIDATE col|ROW WITH fn]*',
+            "desc": "Loads a JSON Lines file (one JSON object per line). Headers are inferred by sampling the first 'samplesize' lines (default 1000). TRANSFORM and VALIDATE clauses work identically to LOAD CSV.",
+            "examples": [
+                'LOAD JSONL "events.jsonl" CREATE TABLE events',
+                'LOAD JSONL "leads.jsonl" CREATE TABLE leads TRANSFORM phone WITH normalize_phone$ VALIDATE email WITH is_valid_email'
+            ]
+        },
+        "LOAD PARQUET": {
+            "syntax": 'LOAD PARQUET "file" CREATE TABLE name | INTO TABLE name ... [OPTIONS "..."] [TRANSFORM col|ROW WITH fn]* [VALIDATE col|ROW WITH fn]*',
+            "desc": "Loads an Apache Parquet file. Streams via row groups; complex column types (structs, lists) are serialized to JSON strings. TRANSFORM and VALIDATE clauses work identically to LOAD CSV.",
+            "examples": [
+                'LOAD PARQUET "sales.parquet" CREATE TABLE sales',
+                'LOAD PARQUET "raw.parquet" CREATE TABLE clean VALIDATE ROW WITH is_well_formed'
+            ]
         },
         "LOAD FIXED": {
             "syntax": 'LOAD FIXED "file" INTO TABLE "tbl" OPTIONS "fields=..."',
@@ -1862,6 +1915,12 @@ class Interpreter:
         self.gosub_stack = []
         self.labels = {}
         self.user_functions = {}  # {NAME_UPPER: (body_token_index, [param_names], orig_name)}
+        # Stack of active UDF call frames. Each frame is a dict with:
+        #   'keys_to_restore' - {var_name: original_value} for names that existed pre-call
+        #   'new_names'       - [var_name, ...] for names created by the call (delete on exit)
+        # Used by both _execute_user_function (params + return slot) and _parse_dim_statement
+        # (local DIM declarations inside a function body).
+        self._fn_call_stack = []
         self.form_definitions = {}
         self.db_engine = 'sqlite' # Set SQLite as the default engine
         self.sql_fatal_errors = True
@@ -2232,8 +2291,11 @@ class Interpreter:
         """Pre-scans tokens to find FUNCTION definitions.
         Records each as self.user_functions[NAME_UPPER] = (body_start_index, [param_names], orig_name).
         Syntax: FUNCTION name(param1, param2, ...) ... END FUNCTION
+        Also remembers the token list scanned (self._main_tokens) so UDF calls during
+        temporary token-list swaps (e.g. string interpolation) can restore correctly.
         """
         self.user_functions = {}
+        self._main_tokens = self.tokens  # body_indexes recorded below are relative to this list
         i = 0
         while i < len(self.tokens):
             token = self.tokens[i]
@@ -2335,6 +2397,145 @@ class Interpreter:
         self._expect('RPAREN')
         self._execute_user_function(name, args)  # return value intentionally discarded
 
+    def _get_builtin_fn_names(self):
+        """Return the set of built-in function names (uppercased) usable as first-class refs
+        in FILTER/MAP/REDUCE/SORT WITH. Computed once by introspecting _execute_function's source."""
+        cls = type(self)
+        cached = getattr(cls, '_BUILTIN_FN_NAMES_CACHE', None)
+        if cached is not None:
+            return cached
+        try:
+            import inspect
+            src = inspect.getsource(cls._execute_function)
+            names = set(re.findall(r"name == '([A-Z_][A-Z_0-9]*\$?)'", src))
+        except Exception:
+            # Fallback (when source isn't available, e.g. bytecode-only deployment): a
+            # representative subset. Users can always wrap a built-in in a UDF if needed.
+            names = {'UCASE$','LCASE$','TRIM$','LTRIM$','RTRIM$','LEN','ABS','INT',
+                     'UBOUND','PROPER$','STR$','VAL','ROUND'}
+        cls._BUILTIN_FN_NAMES_CACHE = names
+        return names
+
+    def _call_fn_ref(self, name_upper, call_args):
+        """Invoke a function-by-name, dispatching to either a user-defined function or a built-in.
+        `name_upper` is the canonical uppercase form. Raises if name is unknown."""
+        if name_upper in self.user_functions:
+            return self._execute_user_function(name_upper, call_args)
+        if name_upper in self._get_builtin_fn_names():
+            return self._execute_function(name_upper, call_args)
+        self._error(f"Unknown function reference: '{name_upper}'")
+
+    def _interpolate_backtick_string(self, content):
+        """Process ${expr} interpolation in a backtick-string's content (no surrounding backticks).
+        - ${expr} evaluates expr in the current interpreter context and substitutes the result.
+        - $$ produces a literal '$'.
+        - Lone '{' and '}' are always literal (allowing JSON, code snippets, etc. in templates).
+        Expressions are evaluated by lexing the expr text and running it through _parse_expression.
+        """
+        result = []
+        i = 0
+        n = len(content)
+        while i < n:
+            c = content[i]
+            if c == '$':
+                # Doubled '$$' = literal '$'
+                if i + 1 < n and content[i+1] == '$':
+                    result.append('$')
+                    i += 2
+                    continue
+                # '${' starts interpolation
+                if i + 1 < n and content[i+1] == '{':
+                    j = content.find('}', i + 2)
+                    if j == -1:
+                        self._error("Unclosed '${' in interpolated string")
+                    expr_src = content[i+2:j]
+                    if expr_src.strip() == "":
+                        self._error("Empty interpolation: '${}'")
+                    value = self._evaluate_interpolation_expr(expr_src)
+                    result.append(self._format_interpolation_value(value))
+                    i = j + 1
+                    continue
+                # Lone '$' (e.g. inside a variable name or just literal)
+                result.append('$')
+                i += 1
+            else:
+                result.append(c)
+                i += 1
+        return ''.join(result)
+
+    def _evaluate_interpolation_expr(self, expr_src):
+        """Tokenize and evaluate a single interpolation expression using the current interpreter state.
+        Saves and restores parser position so the outer parse continues correctly."""
+        sub_lexer = Lexer(expr_src)
+        # Filter out trailing NEWLINE tokens; we want a clean expression token stream.
+        sub_tokens = [t for t in sub_lexer.tokens if t[0] != 'NEWLINE']
+        if not sub_tokens:
+            self._error(f"Interpolation expression produced no tokens: '{expr_src}'")
+        saved_tokens = self.tokens
+        saved_index = self.token_index
+        self.tokens = sub_tokens
+        self.token_index = 0
+        try:
+            value = self._parse_expression()
+            if self._current_token() is not None:
+                # Expression didn't consume the whole stream — extra tokens left over.
+                remaining = self._current_token()[1]
+                # Restore before erroring so error position is sensible
+                self.tokens = saved_tokens
+                self.token_index = saved_index
+                self._error(f"Unexpected '{remaining}' after interpolation expression: '{expr_src}'")
+        finally:
+            self.tokens = saved_tokens
+            self.token_index = saved_index
+        return value
+
+    def _format_interpolation_value(self, value):
+        """Render a value for inclusion in an interpolated string."""
+        if value is None:
+            return ""
+        if isinstance(value, bool):
+            # Match BASIC's idiom: -1 for true, 0 for false (most existing code uses this).
+            return "-1" if value else "0"
+        if isinstance(value, float):
+            # Render integer-valued floats without trailing '.0'
+            if value == int(value) and abs(value) < 1e16:
+                return str(int(value))
+            return str(value)
+        if isinstance(value, (list, dict)):
+            # Mirror what PRINT does for these (a readable repr); rarely the user's intent
+            # to interpolate one of these, but better than crashing.
+            return str(value)
+        return str(value)
+
+    def _shadow_variable(self, name):
+        """Register `name` for save-on-entry / restore-on-exit handling in the current UDF call
+        frame. Called by parameter binding, return-slot init, and (inside a function body) DIM.
+        Safe to call multiple times for the same name — only the first call records the snapshot.
+        Returns True if the call stack is nonempty (i.e. we're inside a UDF), False otherwise.
+        """
+        if not self._fn_call_stack:
+            return False
+        frame = self._fn_call_stack[-1]
+        name_upper = name.upper()
+        # Has any case-variant of this name already been shadowed in this frame?
+        already_tracked = False
+        for k in frame['keys_to_restore']:
+            if k.upper() == name_upper:
+                already_tracked = True
+                break
+        if not already_tracked and name not in frame['new_names']:
+            # Look for an existing variable to snapshot.
+            existing_key = None
+            for k in list(self.variables.keys()):
+                if k.upper() == name_upper:
+                    existing_key = k
+                    break
+            if existing_key is not None:
+                frame['keys_to_restore'][existing_key] = self.variables[existing_key]
+            else:
+                frame['new_names'].append(name)
+        return True
+
     def _execute_user_function(self, name, args):
         """Execute a user-defined function with shadow-only parameter scoping.
         Returns the function's return value (the value of the variable named after the function)."""
@@ -2346,26 +2547,17 @@ class Interpreter:
         if len(args) != len(params):
             self._error(f"Function '{orig_name}' expects {len(params)} argument(s), got {len(args)}.")
 
-        # Determine which variable names to shadow: params + the return-slot (function name).
-        # We shadow case-insensitively by matching any existing variable with the same uppercase form.
-        shadow_names = list(params) + [orig_name]
-        # Build a snapshot of any existing variables (by exact key) that would be clobbered.
-        # For each shadow_name, find all existing keys matching case-insensitively.
-        keys_to_restore = {}
-        for shadow in shadow_names:
-            shadow_upper = shadow.upper()
-            for existing_key in list(self.variables.keys()):
-                if existing_key.upper() == shadow_upper and existing_key not in keys_to_restore:
-                    keys_to_restore[existing_key] = self.variables[existing_key]
-        # Also remember which names DIDN'T exist before (so we can delete them on exit).
-        new_names = []
-        for shadow in shadow_names:
-            shadow_upper = shadow.upper()
-            if not any(k.upper() == shadow_upper for k in self.variables):
-                new_names.append(shadow)
+        # Push a new call frame. _shadow_variable below records snapshots into this frame.
+        frame = {'keys_to_restore': {}, 'new_names': []}
+        self._fn_call_stack.append(frame)
 
-        # Bind parameters (overwrites any existing same-named variable; snapshot above will restore).
-        # Delete any case-variant of the param first so the binding is clean.
+        # Register the param names and the return-slot name for shadowing.
+        for p in params:
+            self._shadow_variable(p)
+        self._shadow_variable(orig_name)
+
+        # Bind parameters (overwrites any existing same-named variable; the snapshot above
+        # will restore on exit). Delete any case-variant first so the binding is clean.
         for p, v in zip(params, args):
             p_upper = p.upper()
             for existing_key in list(self.variables.keys()):
@@ -2374,7 +2566,6 @@ class Interpreter:
             self.variables[p] = v
 
         # Initialize the return slot (function's own name) to a type-appropriate default.
-        # Same case-cleanup as for params.
         orig_upper = orig_name.upper()
         for existing_key in list(self.variables.keys()):
             if existing_key.upper() == orig_upper:
@@ -2383,8 +2574,13 @@ class Interpreter:
 
         # Save token position and gosub_stack depth (so a RETURN-without-GOSUB inside a UDF
         # doesn't accidentally pop a frame from an outer GOSUB).
+        # Also save the current token list: if we were called during a temporary swap (e.g. from
+        # inside a string-interpolation expression), body_index is relative to the main program
+        # tokens, not the current swapped-in list.
         saved_index = self.token_index
+        saved_tokens = self.tokens
         saved_gosub_depth = len(self.gosub_stack)
+        self.tokens = self._main_tokens
         self.token_index = body_index
 
         try:
@@ -2400,19 +2596,22 @@ class Interpreter:
                     result = self.variables[k]
                     break
         finally:
-            # Restore token position
+            # Restore token list and position
+            self.tokens = saved_tokens
             self.token_index = saved_index
             # Trim gosub_stack to its pre-call depth in case the UDF didn't balance GOSUB/RETURN
             if len(self.gosub_stack) > saved_gosub_depth:
                 self.gosub_stack = self.gosub_stack[:saved_gosub_depth]
+            # Pop the call frame and restore variables from it.
+            popped = self._fn_call_stack.pop()
             # Remove anything created during the call that didn't exist before
-            for n in new_names:
+            for n in popped['new_names']:
                 n_upper = n.upper()
                 for existing_key in list(self.variables.keys()):
                     if existing_key.upper() == n_upper:
                         del self.variables[existing_key]
             # Restore originals
-            for k, v in keys_to_restore.items():
+            for k, v in popped['keys_to_restore'].items():
                 self.variables[k] = v
 
         return result
@@ -3888,16 +4087,27 @@ class Interpreter:
 
         elif name == 'FILTER':
             if not (2 <= len(args) <= 3):
-                self._error("FILTER requires 2 or 3 arguments: array, criteria$, [include_flag].")
-            
-            source_array, criteria = args[0], str(args[1])
-            include = True # Default to include matches
+                self._error("FILTER requires 2 or 3 arguments: array, criteria$|predicate_fn, [include_flag].")
+            source_array = args[0]
+            if not isinstance(source_array, list):
+                self._error("First argument to FILTER must be an array.")
+            include = True
             if len(args) == 3:
                 include = (args[2] != 0)
 
-            if not isinstance(source_array, list):
-                self._error("First argument to FILTER must be an array.")
+            predicate = args[1]
+            # Function predicate (UDF or built-in): captured upstream as {'__fn_ref__': NAME}.
+            if isinstance(predicate, dict) and '__fn_ref__' in predicate:
+                fn_name = predicate['__fn_ref__']
+                result_array = []
+                for item in source_array:
+                    is_match = bool(self._call_fn_ref(fn_name, [item]))
+                    if (is_match and include) or (not is_match and not include):
+                        result_array.append(item)
+                return result_array
 
+            # EXISTING: string criteria (substring match), unchanged.
+            criteria = str(predicate)
             result_array = []
             for item in source_array:
                 item_str = str(item)
@@ -3905,6 +4115,40 @@ class Interpreter:
                 if (is_match and include) or (not is_match and not include):
                     result_array.append(item)
             return result_array
+
+        elif name == 'MAP':
+            if len(args) != 2:
+                self._error("MAP requires 2 arguments: array, transform_fn.")
+            source_array = args[0]
+            if not isinstance(source_array, list):
+                self._error("First argument to MAP must be an array.")
+            fn = args[1]
+            if not (isinstance(fn, dict) and '__fn_ref__' in fn):
+                self._error("Second argument to MAP must be a function name (e.g. MAP(arr, my_func) or MAP(arr, UCASE$)).")
+            fn_name = fn['__fn_ref__']
+            return [self._call_fn_ref(fn_name, [item]) for item in source_array]
+
+        elif name == 'REDUCE':
+            if not (2 <= len(args) <= 3):
+                self._error("REDUCE requires 2 or 3 arguments: array, accumulator_fn, [initial].")
+            source_array = args[0]
+            if not isinstance(source_array, list):
+                self._error("First argument to REDUCE must be an array.")
+            fn = args[1]
+            if not (isinstance(fn, dict) and '__fn_ref__' in fn):
+                self._error("Second argument to REDUCE must be a function name (e.g. REDUCE(arr, my_func, 0)).")
+            fn_name = fn['__fn_ref__']
+            if len(args) == 3:
+                acc = args[2]
+                items = source_array
+            else:
+                if not source_array:
+                    self._error("REDUCE with no initial value requires a non-empty array.")
+                acc = source_array[0]
+                items = source_array[1:]
+            for item in items:
+                acc = self._call_fn_ref(fn_name, [acc, item])
+            return acc
 
         # --- Utility & Type Functions ---
         elif name == 'TYPENAME$':
@@ -4138,7 +4382,8 @@ class Interpreter:
             self._next_token(); raw_value = token[1]
             if raw_value.startswith('"'): 
                 return raw_value[1:-1].replace('""', '"')
-            return raw_value[1:-1]
+            # Backtick-delimited string: strip backticks and run {expr} interpolation.
+            return self._interpolate_backtick_string(raw_value[1:-1])
         elif token[0] == 'LPAREN':
             if self._peek_token() and self._peek_token()[0] == 'SQL_STRING':
                 results = self._execute_sql(self._extract_sql_from_parens(), is_query=True)
@@ -4210,10 +4455,28 @@ class Interpreter:
                 if token[0] == 'LPAREN':
                     self._next_token()
                     if not isinstance(current_value, (list, dict)):
-                        args = [];
+                        args = []
+                        # Built-ins FILTER/MAP/REDUCE take a function reference at arg position 1.
+                        # When parsing those calls, if the next token is a bare function name
+                        # (either a UDF or a built-in, NOT followed by LPAREN), capture it as
+                        # a function-reference sentinel instead of evaluating.
+                        hof_name = var_name.upper() if var_name.upper() in ('FILTER', 'MAP', 'REDUCE') else None
                         if self._current_token()[0] != 'RPAREN':
                             while True:
-                                args.append(self._parse_expression())
+                                cur = self._current_token()
+                                pk  = self._peek_token()
+                                is_fn_ref_position = (hof_name is not None and len(args) == 1
+                                                      and cur is not None and cur[0] == 'ID'
+                                                      and (pk is None or pk[0] != 'LPAREN'))
+                                if is_fn_ref_position:
+                                    cand = cur[1].upper()
+                                    if cand in self.user_functions or cand in self._get_builtin_fn_names():
+                                        args.append({'__fn_ref__': cand})
+                                        self._next_token()
+                                    else:
+                                        args.append(self._parse_expression())
+                                else:
+                                    args.append(self._parse_expression())
                                 if self._current_token()[0] == 'RPAREN': break
                                 self._expect('COMMA')
                         self._expect('RPAREN')
@@ -5750,6 +6013,7 @@ class Interpreter:
             return # Array is empty, nothing to do.
 
         sort_key = None
+        sort_fn_name = None  # If set, use this function to compute each element's sort key.
         
         if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1] == 'ON':
             self._next_token() # Consume ON
@@ -5757,6 +6021,15 @@ class Interpreter:
             if not isinstance(sort_key_expr, str):
                 self._error("Sort key provided with ON must be a string expression.")
             sort_key = self._normalize_hash_key(sort_key_expr) if self.hash_keys_mode == 'IGNORE_CASE' else sort_key_expr
+        elif self._current_token() and self._current_token()[0] == 'WITH':
+            # SORT array WITH fn_name [ASC|DESC]
+            # fn_name is a UDF or built-in taking one element and returning its sort key.
+            self._next_token() # Consume WITH
+            fn_token = self._expect('ID')
+            cand = fn_token[1].upper()
+            if cand not in self.user_functions and cand not in self._get_builtin_fn_names():
+                self._error(f"SORT WITH: unknown function '{fn_token[1]}'.")
+            sort_fn_name = cand
 
         reverse_order = False
         if self._current_token() and self._current_token()[0] == 'ID':
@@ -5767,7 +6040,18 @@ class Interpreter:
                 self._next_token()
 
         try:
-            if sort_key:
+            if sort_fn_name:
+                # Compute keys ahead of time (one call per element) so each item is mapped once.
+                # Falls back to str() comparison on TypeError (mixed types).
+                keys = [self._call_fn_ref(sort_fn_name, [item]) for item in the_array]
+                paired = list(zip(keys, the_array))
+                try:
+                    paired.sort(key=lambda p: p[0], reverse=reverse_order)
+                except TypeError:
+                    paired.sort(key=lambda p: str(p[0]), reverse=reverse_order)
+                # Write back into the original array slot
+                self.variables[array_var_name] = [item for _, item in paired]
+            elif sort_key:
                 the_array.sort(key=lambda item: item.get(sort_key, 0) if isinstance(item, dict) else 0, reverse=reverse_order)
             else:
                 the_array.sort(reverse=reverse_order)
@@ -8395,6 +8679,12 @@ class Interpreter:
                         col_name, rule_defs = parts[0].strip('[]'), parts[1]
                         validation_rules[col_name] = rule_defs.split(':')
 
+            # First-class TRANSFORM/VALIDATE clauses (parsed in _parse_load_statement)
+            udf_transforms = options.get('__udf_transforms__', {})
+            udf_validates  = options.get('__udf_validates__', {})
+            row_transforms = options.get('__row_transforms__', [])
+            row_validates  = options.get('__row_validates__', [])
+
             # --- 2. Generic Field Mapping (`FIELDS` clause) ---
             final_headers, column_map = original_headers, list(range(len(original_headers)))
 
@@ -8652,6 +8942,43 @@ class Interpreter:
                             continue
                         processed_row = [updated_rec.get(h) for h in final_headers]
 
+                    # --- 6. Apply first-class TRANSFORM ... WITH fn and VALIDATE ... WITH fn clauses ---
+                    if udf_transforms:
+                        for i, header_name in enumerate(final_headers):
+                            fn_upper = udf_transforms.get(header_name.lower())
+                            if fn_upper and i < len(processed_row):
+                                processed_row[i] = self._call_fn_ref(fn_upper, [processed_row[i]])
+                    if udf_validates:
+                        skip_row = False
+                        for i, header_name in enumerate(final_headers):
+                            fn_upper = udf_validates.get(header_name.lower())
+                            if fn_upper and i < len(processed_row):
+                                if not bool(self._call_fn_ref(fn_upper, [processed_row[i]])):
+                                    skip_row = True
+                                    break
+                        if skip_row:
+                            continue
+
+                    # --- 7. Whole-row TRANSFORM/VALIDATE ---
+                    # Build the row hash once, apply each TRANSFORM ROW WITH fn in order
+                    # (each gets the most recent row hash), then run VALIDATE ROW WITH fn checks.
+                    if row_transforms or row_validates:
+                        row_hash = dict(zip(final_headers, processed_row))
+                        for fn_upper in row_transforms:
+                            result = self._call_fn_ref(fn_upper, [row_hash])
+                            if not isinstance(result, dict):
+                                self._error(f"TRANSFORM ROW WITH {fn_upper}: function must return a hash, got {type(result).__name__}.")
+                            row_hash = result
+                        skip_row = False
+                        for fn_upper in row_validates:
+                            if not bool(self._call_fn_ref(fn_upper, [row_hash])):
+                                skip_row = True
+                                break
+                        if skip_row:
+                            continue
+                        # Write the (possibly modified) hash back into column order
+                        processed_row = [row_hash.get(h) for h in final_headers]
+
                     yield processed_row
             
             # --- Generic Database Loading ---
@@ -8732,6 +9059,80 @@ class Interpreter:
         dest_info = self._parse_load_destination_clause() 
         dest_info['load_type'] = load_type 
         options = self._parse_load_options()
+
+        # --- Parse optional first-class TRANSFORM and VALIDATE clauses ---
+        # Per-column form:
+        #   TRANSFORM col_name WITH fn_name        (fn(cell_value) -> new_cell_value)
+        #   VALIDATE  col_name WITH fn_name        (fn(cell_value); falsy -> skip row)
+        # Whole-row form:
+        #   TRANSFORM ROW      WITH fn_name        (fn(row_hash) -> new_row_hash)
+        #   VALIDATE  ROW      WITH fn_name        (fn(row_hash); falsy -> skip row)
+        # Multiple clauses can be chained and mix the two forms.
+        udf_transforms = {}    # lowercased col_name -> uppercased fn_name
+        udf_validates  = {}
+        row_transforms = []    # ordered list of uppercased fn_names; applied after column transforms
+        row_validates  = []
+        while self._current_token() is not None:
+            tok = self._current_token()
+            if tok[0] == 'ID' and tok[1].upper() in ('TRANSFORM', 'VALIDATE'):
+                kind = tok[1].upper()
+                self._next_token()  # consume TRANSFORM or VALIDATE
+                next_tok = self._current_token()
+                # Whole-row form: TRANSFORM ROW WITH fn / VALIDATE ROW WITH fn
+                is_row_form = (next_tok is not None and next_tok[0] == 'ID'
+                               and next_tok[1].upper() == 'ROW')
+                if is_row_form:
+                    self._next_token()  # consume ROW
+                    if self._current_token() is None or self._current_token()[0] != 'WITH':
+                        self._error(f"{kind} ROW requires WITH fn_name.")
+                    self._next_token()  # consume WITH
+                    fn_tok = self._current_token()
+                    if fn_tok is None or fn_tok[0] != 'ID':
+                        self._error(f"{kind} ROW WITH: expected a function name.")
+                    self._next_token()
+                    fn_upper = fn_tok[1].upper()
+                    if fn_upper not in self.user_functions and fn_upper not in self._get_builtin_fn_names():
+                        self._error(f"{kind} ROW WITH: unknown function '{fn_tok[1]}'.")
+                    if kind == 'TRANSFORM':
+                        row_transforms.append(fn_upper)
+                    else:
+                        row_validates.append(fn_upper)
+                    continue
+                # Per-column form
+                col_tok = next_tok
+                if col_tok is None or col_tok[0] in ('NEWLINE', 'COMMA', 'RPAREN', 'LPAREN', 'COLON', 'WITH'):
+                    self._error(f"{kind} requires a column name (or ROW for whole-row form).")
+                if col_tok[0] == 'STRING':
+                    col_name = col_tok[1][1:-1].replace('""', '"')
+                else:
+                    col_name = col_tok[1]
+                self._next_token()
+                if self._current_token() is None or self._current_token()[0] != 'WITH':
+                    self._error(f"{kind} {col_name} requires WITH fn_name.")
+                self._next_token()  # consume WITH
+                fn_tok = self._current_token()
+                if fn_tok is None or fn_tok[0] != 'ID':
+                    self._error(f"{kind} {col_name} WITH: expected a function name.")
+                self._next_token()
+                fn_upper = fn_tok[1].upper()
+                if fn_upper not in self.user_functions and fn_upper not in self._get_builtin_fn_names():
+                    self._error(f"{kind} {col_name} WITH: unknown function '{fn_tok[1]}'.")
+                if kind == 'TRANSFORM':
+                    udf_transforms[col_name.lower()] = fn_upper
+                else:
+                    udf_validates[col_name.lower()] = fn_upper
+                continue
+            break  # not a TRANSFORM/VALIDATE clause; stop
+
+        # Stash for the pipeline to pick up.
+        if udf_transforms:
+            options['__udf_transforms__'] = udf_transforms
+        if udf_validates:
+            options['__udf_validates__'] = udf_validates
+        if row_transforms:
+            options['__row_transforms__'] = row_transforms
+        if row_validates:
+            options['__row_validates__'] = row_validates
         
         schema = None
         if self._current_token() and self._current_token()[0] == 'USING':
@@ -9269,6 +9670,10 @@ class Interpreter:
         self._expect('DIM')
         while True:
             var_name = self._expect('ID')[1]
+            # If we're inside a UDF call, register the name for save-on-exit/restore-on-exit
+            # treatment. This makes DIM act as a local-scope declaration: the outer variable
+            # of the same name (if any) is preserved across the call.
+            self._shadow_variable(var_name)
             token_after_var = self._current_token()
 
             # Case 1: Array with specific size, e.g., DIM x(10)
