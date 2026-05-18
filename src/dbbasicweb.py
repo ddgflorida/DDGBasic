@@ -95,11 +95,9 @@ class DbBasicHTTPRequestHandler(http.server.BaseHTTPRequestHandler):
         i = 0
         
         def escape_for_print(text):
-            """Escape text for use in PRINT statements."""
-            # First try backticks if no backticks in the text
-            if '`' not in text:
-                return f'`{text}`'
-            # Otherwise escape double quotes
+            """Escape text for use in PRINT statements. Always use double-quoted strings:
+            backtick strings now perform ${expr} interpolation, which would be wrong for
+            literal HTML content that happens to contain '$' (e.g. '${variable}', '$5.00')."""
             escaped = text.replace('"', '""')
             return f'"{escaped}"'
         
@@ -345,4 +343,3 @@ if __name__ == '__main__':
     httpd.shutdown()
     httpd.server_close()
     print("Server stopped.")
-    
