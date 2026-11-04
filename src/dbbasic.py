@@ -3137,6 +3137,48 @@ class Interpreter:
         self._expect('RPAREN')
         return sql_token[1]
 
+    _BIND_NAME_RE = re.compile(r'[a-zA-Z_][a-zA-Z0-9_]*\$?(?:\.[a-zA-Z_][a-zA-Z0-9_]*\$?)*')
+
+    @classmethod
+    def _find_bind_variables(cls, sql):
+        """Return (start, end, name) for each :name bind variable in sql, in order.
+        Skips text inside '...' strings, "..." identifiers and -- / /* */ comments, and
+        colons that follow another colon or a name character, so DuckDB casts (x::INTEGER),
+        list slices (arr[a:b]) and literals such as ':memory:' are not taken as variables."""
+        spans, i, n = [], 0, len(sql)
+        while i < n:
+            c = sql[i]
+            if c in ("'", '"'):
+                i += 1
+                while i < n:
+                    if sql[i] == c:
+                        if i + 1 < n and sql[i + 1] == c:
+                            i += 2
+                            continue
+                        break
+                    i += 1
+            elif c == '-' and sql.startswith('--', i):
+                i = sql.find('\n', i)
+                if i == -1:
+                    break
+            elif c == '/' and sql.startswith('/*', i):
+                i = sql.find('*/', i + 2)
+                if i == -1:
+                    break
+                i += 1
+            elif c == ':':
+                if sql.startswith('::', i):
+                    i += 2                      # DuckDB cast operator
+                    continue
+                prev = sql[i - 1] if i > 0 else ''
+                m = cls._BIND_NAME_RE.match(sql, i + 1)
+                if m and not (prev.isalnum() or prev in '_$'):
+                    spans.append((i, m.end(), m.group()))
+                    i = m.end()
+                    continue
+            i += 1
+        return spans
+
     def _execute_sql(self, sql_string, is_query=False, params=None):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': "", 'SQL_ROWCOUNT': 0.0, 'SQL_FOUND': 0.0, 'SQL_NOTFOUND': -1.0})
 
@@ -3166,7 +3208,8 @@ class Interpreter:
                 
         # 1. Always find the bind variables from the SQL string first.
         # This gives us the expected order and count.
-        bind_vars = re.findall(r':([a-zA-Z_][a-zA-Z0-9_]*\$?(?:\.[a-zA-Z_][a-zA-Z0-9_]*\$?)*)', sql_string)
+        bind_spans = self._find_bind_variables(sql_string)
+        bind_vars = [name for _, _, name in bind_spans]
 
         # 2. Determine the final list of parameter values.
         resolved_params = []
@@ -3192,7 +3235,9 @@ class Interpreter:
                 return # Stop execution
 
         # 4. Finally, always substitute the named variables with '?' for the DB driver.
-        final_sql = re.sub(r':([a-zA-Z_][a-zA-Z0-9_]*\$?(?:\.[a-zA-Z_][a-zA-Z0-9_]*\$?)*)', '?', sql_string)
+        final_sql = sql_string
+        for start, end, _ in reversed(bind_spans):
+            final_sql = final_sql[:start] + '?' + final_sql[end:]
 
         #print(f"Executing SQL: {final_sql}")
         #print(f"With Parameters: {resolved_params}")

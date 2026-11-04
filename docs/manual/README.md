@@ -62,7 +62,7 @@ The web runner (`src/dbbasicweb.py`) imports `cgi`, so it needs Python 3.12 or e
 
 ## Known issues at a glance
 
-Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), blank lines in `LOAD CSV`, `;` inside SQL string literals, keyword joining inside strings (`"TO FILE"` used to print as `TOFILE`), `END TRANSACTION;`, user-defined `FUNCTION`s in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL, `ECHO` rewriting lines such as `echo_count = 5`, `PRINT #n, USING` crashing or writing no line ending, and SQL operators such as `||` failing with `Unexpected character`. These are marked *(fixed)* in the chapter notes.
+Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), blank lines in `LOAD CSV`, `;` inside SQL string literals, keyword joining inside strings (`"TO FILE"` used to print as `TOFILE`), `END TRANSACTION;`, user-defined `FUNCTION`s in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL, `ECHO` rewriting lines such as `echo_count = 5`, `PRINT #n, USING` crashing or writing no line ending, SQL operators such as `||` failing with `Unexpected character`, and `:` inside SQL literals or DuckDB `::` casts being read as bind variables. These are marked *(fixed)* in the chapter notes.
 
 The issues below were found while writing the manual. They are the most likely to catch you out; each chapter's final section has the full list.
 
@@ -77,7 +77,6 @@ The issues below were found while writing the manual. They are the most likely t
 - Any `identifier :` on a line is taken as a label, so `a = b : c = d` can fail with "Duplicate label".
 
 **SQL**
-- `:name` inside literals and DuckDB `::TYPE` casts are treated as bind variables.
 - `SET NULL_HANDLING` has no effect, and unknown `SET` options are not rejected.
 
 **Functions**
