@@ -1136,7 +1136,7 @@ These were found while checking the source against behaviour. Line numbers refer
 7. **`INPUT` syntax.** `HELP INPUT` shows `INPUT "Prompt", var`, but the parser requires a semicolon. Only a literal prompt and a single variable are supported, and numeric input is converted with `float()` with no retry.
 8. **`LINE INPUT #` and `PRINT #`** on a handle that is not open raise a bare `KeyError`, which prints as `Runtime Error: 5`, instead of a descriptive message. `LINE INPUT` past EOF silently returns `""`.
 9. **`NAME`** and **`OPEN`** do not expand `~`, whereas `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES` and `COPY` do.
-10. **`FILES RECURSIVE`** includes every directory whatever the pattern (unless `WITH FILESONLY`), while `FOR ... IN FILES(... RECURSIVE)` filters directories by the pattern. Arrays filled by `FILES ... INTO` start at index 0, unlike the 1-based convention assumed by `SHIFT`/`UNSHIFT`.
+10. **`FILES RECURSIVE`** includes every directory whatever the pattern (unless `WITH FILESONLY`), while `FOR ... IN FILES(... RECURSIVE)` filters directories by the pattern. Arrays filled by `FILES ... INTO` start at index 0, like every other array.
 11. **Multi-word keywords inside strings** (fixed). The lexer used to collapse `WITH DETAILS`, `TO FILE`, `READ FILE` and similar pairs even inside string literals, so `PRINT "TO FILE"` printed `TOFILE`. Strings and comments are now left unchanged.
 12. **FETCH.**
     * `ERR` is 200 on success, not 0.

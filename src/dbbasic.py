@@ -7207,7 +7207,7 @@ class Interpreter:
         if array_name not in self.variables or not isinstance(self.variables[array_name], list):
             self._error(f"'{array_name}' is not an array.")
         
-        self.variables[array_name].insert(1, value)   # 1 based, so ignore 0
+        self.variables[array_name].insert(0, value)
 
     def _parse_shift_statement(self):
         self._expect('SHIFT')
@@ -7216,16 +7216,15 @@ class Interpreter:
         if array_name not in self.variables or not isinstance(self.variables[array_name], list):
             self._error(f"'{array_name}' is not an array.")
         
-        # Check if there are user-accessible elements (need at least 2 elements: index 0 reserved, index 1+)
-        if len(self.variables[array_name]) < 2:
+        if not self.variables[array_name]:
             self._error(f"Cannot SHIFT from empty array '{array_name}'.")
         
         if self._current_token() and self._current_token()[0] == 'INTO':
             self._next_token()
             var_name = self._expect('ID')[1]
-            self.variables[var_name] = self.variables[array_name].pop(1)  # 1 based
+            self.variables[var_name] = self.variables[array_name].pop(0)
         else:
-            self.variables[array_name].pop(1)
+            self.variables[array_name].pop(0)
 
     def _parse_splice_statement(self):
         self._expect('SPLICE')

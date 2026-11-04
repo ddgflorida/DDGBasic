@@ -984,11 +984,10 @@ All of these statements change the array **in place**. The array name must
 match an existing array variable **exactly** (including case), or the error is
 `'name' is not an array.`
 
-> **1-based SHIFT/UNSHIFT.** `UNSHIFT` and `SHIFT` work on index **1**, not
-> index 0. The source treats element 0 as a reserved slot. This suits arrays
-> made with `DIM a(n)` and used from index 1, but it is surprising for arrays
-> made with `ARRAY(...)` or `PUSH`, which start at index 0. `PUSH`, `POP`,
-> `SPLICE`, `REVERSE` and `SORT` work on the whole array, including index 0.
+All array statements treat the first element as index 0. `UNSHIFT` and
+`SHIFT` work on the front of the array (index 0), and `PUSH` and `POP` work on
+the end. For an array made with `DIM a(n)` and used from index 1, remember that
+`SHIFT` returns the unused element 0 first.
 
 ### PUSH
 
@@ -1029,9 +1028,8 @@ Output:
 UNSHIFT array, expression
 ```
 
-Inserts the value at **index 1**, moving the existing element 1 and later ones
-up by one. Element 0 is not touched. On an empty array the value goes to
-index 0.
+Inserts the value at the front of the array (index 0), moving the existing
+elements up by one.
 
 ### SHIFT
 
@@ -1039,9 +1037,9 @@ index 0.
 SHIFT array [INTO variable]
 ```
 
-Removes the element at **index 1**, optionally storing it in `variable`. The
-array must have at least two elements, or the error is
-`Cannot SHIFT from empty array 'a'.`
+Removes the first element (index 0), optionally storing it in `variable`.
+Shifting an empty array is an error (`Cannot SHIFT from empty array 'a'.`).
+`PUSH` plus `SHIFT` makes a first-in, first-out queue.
 
 ```basic
 q = ARRAY("x", "a", "b")
@@ -1056,7 +1054,7 @@ Output:
 
 ```
 [x, a, b]
-[x, NEW, a, b]
+[NEW, x, a, b]
 NEW -> [x, a, b]
 ```
 
@@ -1429,10 +1427,10 @@ the existing documentation:
    common words (`size`, `type`, `title`, `label`, `message`, `source`, `text`,
    `body`, `host`, `port`) are also reserved and cannot be used as plain
    variable names.
-6. **`SHIFT`/`UNSHIFT` use index 1.** The `HELP` text says "Removes the first
-   element" and "Adds an element to the beginning", but the code works on index
-   1 ("1 based, so ignore 0"). Arrays made with `ARRAY()`/`PUSH` start at
-   index 0.
+6. **`SHIFT`/`UNSHIFT`** (changed to 0-based). They used to work on index 1,
+   treating element 0 as reserved, so on arrays from `ARRAY()`, `PUSH` or
+   `SPLIT` they skipped the real first element, and `SHIFT` refused a
+   one-element array. They now work on index 0, as the `HELP` text describes.
 7. **`DIM x AS <other type>`** (for example `AS INTEGER` or `AS STRING`) is
    accepted but creates no variable.
 8. **`SORT` modifiers are case-sensitive.** `ON`, `ASC` and `DESC` are compared
