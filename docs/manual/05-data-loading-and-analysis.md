@@ -1757,11 +1757,7 @@ The following points were found while checking the source and running the exampl
 1. **No INTO-variable or TO-file destination.** `_parse_load_destination_clause` (7346) accepts only `CREATE [TABLE]` and `INTO [TABLE] ... APPEND|TRUNCATE|UPSERT|IGNORE`. `LOAD` always targets a database table. To write files, use `SET OUTPUT` (5.13).
 2. **The `INTO TABLE` mode is mandatory.** There is no default `APPEND`, as the in-code comment admits.
 3. **The README ETL example** writes `LOAD ... CREATE TABLE leads` and `OPTIONS ...` / `TRANSFORM ...` on separate lines **without** `_` continuation. As written, it fails with `Unknown statement: OPTIONS`.
-4. **Several examples use syntax that is no longer supported:**
-   - `LOAD FIXED ... FIELDS "..."` (`examples/loadfixed.bas`)
-   - `fields=[col] as new` (`examples/loadinto.bas`, `examples/loadexcelex.bas`, and a commented line in `loadcsvnohead.bas`)
-   - `transform=trimall,State:upper` with commas instead of semicolons (`examples/analyzecsv.bas`)
-   - `LOAD HTML LINKS` / `LOAD HTML IMAGES` (`examples/loadhtmllink.bas`, `examples/loadhtmlimage.bas`). These must use `OPTIONS "element_type=links|images"`.
+4. **Examples updated to current syntax** (fixed). `examples/loadfixed.bas`, `loadinto.bas`, `loadexcelex.bas`, `analyzecsv.bas`, `loadhtmllink.bas`, `loadhtmlimage.bas` and `npilinks.bas` used `LOAD FIXED ... FIELDS`, `fields=[col] as new`, comma-separated transform rules, or `LOAD HTML LINKS/IMAGES`. They now use the syntax described in this chapter. `examples/loadinto.bas` also gained the `example.csv` file it reads. A commented-out line in `loadcsvnohead.bas` still shows the old `fields=` form.
 5. **`ANALYZE FIXED` prints an invalid example command** (`FIELDS "..."` instead of `OPTIONS "fields=..."`).
 6. **Option parsing breaks on values that contain `word=`.** The `\b(\w+)=` scan cannot tell them apart from keys. Values cannot be escaped.
 7. **The option `transform` rule split** uses `split(':')` and requires exactly two parts. So `date()` masks containing `:` silently do nothing, and a `format()` mask containing `:` also fails.
@@ -1778,7 +1774,7 @@ The following points were found while checking the source and running the exampl
 15. **HTML `LINKS` resolves `href` against the filename**, not `source_url` or `base_url`. For local files, links stay relative. The extractor builds `data_row` twice; the first assignment is dead code.
 16. **Excel `.xlsx` with `header=false` fails** with "Could not determine any columns". Headers are only derived lazily inside the row loop, after the headers have already been yielded. The `.xls` path handles this correctly.
 17. **Parquet nested columns are mislabelled.** `pq.ParquetFile.schema.names` returns *leaf* column names. A `list<string>` column named `tags` therefore appears as `element`, and its values come out empty. `schema_arrow.names` would give the top-level names.
-18. **CSV rows with fewer fields than the header abort the whole load.** Rows with more fields lose the extras silently. A failed `CREATE TABLE` load leaves an empty table behind.
+18. **Blank lines in a CSV file are skipped** (fixed: a trailing blank line used to abort the load with `Incorrect number of bindings supplied`). **CSV rows with fewer fields than the header still abort the whole load.** Rows with more fields lose the extras silently. A failed `CREATE TABLE` load leaves an empty table behind.
 19. **`IGNORE` mode reports rows sent, not rows inserted.**
 20. **Successful loads do not reset `ERR`.** Example scripts that check `IF ERR <> 0` after `LOAD` can see a stale value.
 21. **`SET NULL_HANDLING` is not applied.** Its help text says it "controls how empty strings/nulls are handled during data loading", but `g_null_handling_settings` is written and never read.
@@ -1822,4 +1818,4 @@ The following points were found while checking the source and running the exampl
     - `RECNO` counts blank lines;
     - one invalid line aborts the loop (whereas `LOAD JSONL` skips it);
     - non-object lines are bound as arrays or scalars, without a check.
-40. **`PARSE JSON ... INTO` is not implemented.** `PARSE` is a lexer token with no statement handler, so `tests/parsejson.bas` fails with `Unknown statement: PARSE`. Use `PARSEJSON()`.
+40. **`PARSE JSON ... INTO` is not implemented.** `PARSE` is a lexer token with no statement handler. Use `PARSEJSON()`; `tests/parsejson.bas` has been updated to do so.

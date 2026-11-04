@@ -457,7 +457,7 @@ Extracted 3 files from out.zip
   -> x/z.bas
 ```
 
-The forms used in `tests/zip.bas` (`ZIP "a.zip", "f1", "f2"` and `ZIP "a.zip" FILES "dir/*"`) are not accepted; use `FROM`.
+Only the `FROM` form is accepted. Older forms such as `ZIP "a.zip", "f1", "f2"` and `ZIP "a.zip" FILES "dir/*"` fail; `tests/zip.bas` has been updated to use `FROM`.
 
 ### UNZIP
 

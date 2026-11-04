@@ -23,7 +23,7 @@ IF ERR <> 0 THEN PRINT "Load failed!": END
 
 REM --- Append data from the second, headerless, semicolon-delimited file ---
 PRINT "Appending more customer data..."
-LOAD CSV "customers_part2.csv" INTO "customers" APPEND OPTIONS "delimiter=;"
+LOAD CSV "customers_part2.csv" INTO "customers" APPEND OPTIONS "header=false, delimiter=;, fields=C1:ID,C2:Name,C3:City"
 IF ERR <> 0 THEN PRINT "Append failed!": END
 
 PRINT

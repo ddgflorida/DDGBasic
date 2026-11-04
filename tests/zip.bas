@@ -39,7 +39,7 @@ PRINT
 
 REM Test ZIP command with individual files
 PRINT "Testing ZIP with individual files..."
-ZIP "test_archive.zip", "zip_test/file1.txt", "zip_test/file2.txt"
+ZIP "test_archive.zip" FROM "zip_test/file1.txt", "zip_test/file2.txt"
 
 IF ERR = 0 THEN
     PRINT "ZIP completed successfully"
@@ -50,7 +50,7 @@ END IF
 
 REM Test ZIP with FILES pattern
 PRINT "Testing ZIP with FILES pattern..."
-ZIP "all_files.zip" FILES "zip_test/*"
+ZIP "all_files.zip" FROM "zip_test/*"
 
 IF ERR = 0 THEN
     PRINT "ZIP with pattern completed successfully"

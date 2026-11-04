@@ -54,7 +54,7 @@ ELSE
 END IF
 
 REM Test 3.3: Using the NOT operator
-a = 0 ' In BASIC, 0 is false
+a = 0 -- In BASIC, 0 is false
 IF NOT a THEN
     PRINT "Test 3.3 Passed: NOT operator with false (0) value."
 ELSE

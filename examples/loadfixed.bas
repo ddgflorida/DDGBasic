@@ -29,7 +29,7 @@ SHELL "type employees.txt"
 
 REM Load the fixed-width file into a SQLite table
 PRINT "Loading fixed-width file into SQLite table..."
-LOAD FIXED "employees.txt" CREATE "employees" FIELDS "name:1-20,department:21-31,salary:32-39"
+LOAD FIXED "employees.txt" CREATE TABLE employees OPTIONS "fields=name:1-20,department:21-31,salary:32-39"
 
 IF ERR = 0 THEN
     PRINT "Fixed-width file loaded successfully into 'employees' table"

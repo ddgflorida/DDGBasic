@@ -8,7 +8,7 @@ WHILE i <= 5
     PRINT "  i ="; i
     i = i + 1
 WEND
-PRINT "After loop, i ="; i ' Should be 6
+PRINT "After loop, i ="; i -- Should be 6
 PRINT
 
 REM --- SECTION 2: Edge Cases ---
@@ -19,7 +19,7 @@ WHILE j < 5
     PRINT "  This should not be printed."
     j = j + 1
 WEND
-PRINT "After loop, j ="; j ' Should still be 10
+PRINT "After loop, j ="; j -- Should still be 10
 PRINT
 
 REM Test 2.2: A loop that executes only once
@@ -27,9 +27,9 @@ k = 5
 PRINT "Test 2.2: Loop while k = 5"
 WHILE k = 5
     PRINT "  k ="; k
-    k = k + 1 ' Condition becomes false after this
+    k = k + 1 -- Condition becomes false after this
 WEND
-PRINT "After loop, k ="; k ' Should be 6
+PRINT "After loop, k ="; k -- Should be 6
 PRINT
 
 REM --- SECTION 3: EXIT WHILE ---
@@ -44,7 +44,7 @@ WHILE counter < 100
     END IF
     counter = counter + 1
 WEND
-PRINT "After loop, counter ="; counter ' Should be 3
+PRINT "After loop, counter ="; counter -- Should be 3
 PRINT
 
 REM --- SECTION 4: Nested Loops ---

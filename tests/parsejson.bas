@@ -1,6 +1,6 @@
 DIM data AS HASH
 json$ = "{""name"":""John"",""age"":30,""scores"":[95,87,92]}"
-PARSE JSON json$ INTO data
+data = PARSEJSON(json$)
 
 PRINT "Name: "; data.name
 PRINT "Age: "; data.age

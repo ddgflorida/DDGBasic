@@ -28,7 +28,7 @@ BEGIN TRANSACTION;
 ROLLBACK;
 
 LET total_employees = (SELECT COUNT(*) FROM employees)
-PRINT "Employee count after rollback:", total_employees ' Should be 2
+PRINT "Employee count after rollback:", total_employees -- Should be 2
 
 IF total_employees = 2 THEN
     PRINT "OK: Rollback successful."
@@ -38,9 +38,9 @@ END IF
 
 LET bobs_salary = (SELECT salary FROM employees WHERE name = 'Bob')
 IF bobs_salary = 65000 THEN
-    PRINT "OK: Bob''s salary was not updated."
+    PRINT "OK: Bob's salary was not updated."
 ELSE
-    PRINT "FAIL: Bob''s salary was updated despite rollback."
+    PRINT "FAIL: Bob's salary was updated despite rollback."
 END IF
 
 REM --- Test Case 2: IF EXISTS and NOT EXISTS ---

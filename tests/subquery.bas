@@ -77,8 +77,12 @@ REM --- SECTION 3: Intentional Failure Test ---
 PRINT "--- SECTION 3: Testing Error Handling ---"
 PRINT "The next test is EXPECTED to fail."
 PRINT "It tests if the interpreter correctly rejects a subquery that returns more than one value."
-REM This line should cause a fatal error and stop the script.
+REM This line should raise an error, which the handler below reports as a pass.
+ON ERROR GOTO expected_failure
 LET bad_result = (SELECT name FROM products)
-PRINT "-> FAILED: This line should not be reached. The query should have caused a fatal error."
+PRINT "-> FAILED: This line should not be reached. The query should have caused an error."
+END
 
+expected_failure:
+PRINT "-> PASSED: "; ERRMSG$
 END

@@ -48,7 +48,7 @@ The web runner (`src/dbbasicweb.py`) imports `cgi`, so it needs Python 3.12 or e
 
 ## Known issues at a glance
 
-Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, and the function-reference list in compiled builds. These are marked *(fixed)* in the chapter notes.
+Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), and blank lines in `LOAD CSV`. These are marked *(fixed)* in the chapter notes.
 
 The issues below were found while writing the manual. They are the most likely to catch you out; each chapter's final section has the full list.
 
@@ -64,7 +64,6 @@ The issues below were found while writing the manual. They are the most likely t
 - Common words are reserved and cannot be used as variable names: `user`, `size`, `type`, `title`, `label`, `message`, `source`, `text`, `body`, `host`, `port`.
 - Any `identifier :` on a line is taken as a label, so `a = b : c = d` can fail with "Duplicate label".
 - User-defined `FUNCTION`s are not available in the REPL or in `RUN`/`CHAIN` targets.
-- The process exit status is 0 even after a runtime error.
 
 **SQL**
 - The SQL line scanner stops at the first `;`, even inside a string literal.
@@ -79,4 +78,7 @@ The issues below were found while writing the manual. They are the most likely t
 - `FORMAT$` has no `%` support.
 
 **Example and test scripts**
-- Several scripts in `examples/` and `tests/` use syntax the current interpreter rejects, for example `'` comments, `LOAD FIXED ... FIELDS`, `fields=[col] as new` and `DIM user`. They are listed in the discrepancy sections of chapters 1, 2 and 5.
+- The scripts in `tests/` and `examples/` have been updated to current syntax and run cleanly. The exceptions:
+  - `examples/analyzecsv.bas`, `loadexcelex.bas`, `loadtext.bas`, `npimonthly.bas` and `tests/loadexcel.bas` read data from `c:\ddg\...` paths that are not in the repository.
+  - `examples/onerror.bas` ends with a deliberate fatal error.
+  - `examples/loadjson.bas` and the form examples need an interactive terminal.

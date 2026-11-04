@@ -16,7 +16,7 @@ PRINT "1. sheetname: Specify the exact sheet to load."
 PRINT "2. fields: Select and rename columns."
 PRINT "3. transform: Clean up the data by trimming and uppercasing the Region."
 PRINT "4. format: Specify the output format as JSON."
-options$ = `sheetname="SalesData" fields=[Product ID] as product_id,[Region],[Sales Amount] as amount transform=trimall;Region:upper`
+options$ = `sheetname="SalesData" fields=Product ID:product_id,Region,Sales Amount:amount transform=trimall;Region:upper`
 PRINT "Source File: "; excel_file$
 PRINT "Using Options: "; options$
 PRINT

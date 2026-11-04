@@ -1406,7 +1406,8 @@ the existing documentation:
 1. **`'` comments are not supported.** The lexer has no apostrophe-comment rule.
    A lone `'` stops the program with `Unexpected character '''`. Text between
    two single quotes becomes a `SINGLE_Q_STRING` token, which no statement or
-   expression accepts. `tests/for_in_csv.bas` contains `'`-commented lines.
+   expression accepts. The scripts in `tests/` and `examples/` that used
+   `'` comments have been converted to `REM` and `--`.
    The `SORT` entry in the built-in `HELP` uses `` ` `` as a trailing comment
    (`` SORT items WITH sort_key$ ASC      ` UDF returns the key ``), but a
    backtick starts a string, so that example does not work as written.
@@ -1421,8 +1422,9 @@ the existing documentation:
    `tests/hashtest.bas` describe BASIC variables as case-insensitive. That holds
    for reads only. Assignments, `DIM`, `REDIM` and all array statements use the
    exact spelling.
-5. **`tests/hashtest.bas` does not run.** It uses `DIM user AS HASH`, and
-   `USER` is a reserved keyword token (added for `SET EMAIL`). Several other
+5. **Reserved words.** `USER` is a reserved keyword token (added for
+   `SET EMAIL`), so `DIM user AS HASH` fails. `tests/hashtest.bas` has been
+   updated to use `person` instead. Several other
    common words (`size`, `type`, `title`, `label`, `message`, `source`, `text`,
    `body`, `host`, `port`) are also reserved and cannot be used as plain
    variable names.

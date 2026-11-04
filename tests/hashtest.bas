@@ -5,61 +5,61 @@ PRINT "=== TESTING PRESERVE_CASE MODE (Default) ==="
 PRINT
 
 REM Test 1: Basic dot notation assignment and access
-DIM user AS HASH
-user.firstName = "Alice"
-user.lastName = "Smith"
-user.age = 30
+DIM person AS HASH
+person.firstName = "Alice"
+person.lastName = "Smith"
+person.age = 30
 
 PRINT "Stored hash:"
-PRINT user
+PRINT person
 PRINT
 
 PRINT "Dot notation access tests (should all PASS - dot notation is forgiving):"
-result$ = user.firstName
-IF result$ = "Alice" THEN PRINT "PASS: user.firstName" ELSE PRINT "FAIL: user.firstName"
+result$ = person.firstName
+IF result$ = "Alice" THEN PRINT "PASS: person.firstName" ELSE PRINT "FAIL: person.firstName"
 
-result$ = user.FIRSTNAME  
-IF result$ = "Alice" THEN PRINT "PASS: user.FIRSTNAME" ELSE PRINT "FAIL: user.FIRSTNAME"
+result$ = person.FIRSTNAME  
+IF result$ = "Alice" THEN PRINT "PASS: person.FIRSTNAME" ELSE PRINT "FAIL: person.FIRSTNAME"
 
-result$ = user.firstname
-IF result$ = "Alice" THEN PRINT "PASS: user.firstname" ELSE PRINT "FAIL: user.firstname"
+result$ = person.firstname
+IF result$ = "Alice" THEN PRINT "PASS: person.firstname" ELSE PRINT "FAIL: person.firstname"
 
-result$ = user.FirstName
-IF result$ = "Alice" THEN PRINT "PASS: user.FirstName" ELSE PRINT "FAIL: user.FirstName"
+result$ = person.FirstName
+IF result$ = "Alice" THEN PRINT "PASS: person.FirstName" ELSE PRINT "FAIL: person.FirstName"
 PRINT
 
 REM Test 2: Bracket notation (should be case-sensitive in PRESERVE_CASE)
 PRINT "Bracket notation access tests:"
-result$ = user("firstName")
-IF result$ = "Alice" THEN PRINT "PASS: user(""firstName"")" ELSE PRINT "FAIL: user(""firstName"")"
+result$ = person("firstName")
+IF result$ = "Alice" THEN PRINT "PASS: person(""firstName"")" ELSE PRINT "FAIL: person(""firstName"")"
 
-result$ = user("FIRSTNAME$")
-IF result$ = "" THEN PRINT "PASS: user(""FIRSTNAME"") should fail" ELSE PRINT "FAIL: user(""FIRSTNAME"") should be empty:"; result$
+result$ = person("FIRSTNAME$")
+IF result$ = "" THEN PRINT "PASS: person(""FIRSTNAME"") should fail" ELSE PRINT "FAIL: person(""FIRSTNAME"") should be empty:"; result$
 
-result$ = user("firstname$") 
-IF result$ = "" THEN PRINT "PASS: user(""firstname"") should fail" ELSE PRINT "FAIL: user(""firstname"") should be empty:"; result$
+result$ = person("firstname$") 
+IF result$ = "" THEN PRINT "PASS: person(""firstname"") should fail" ELSE PRINT "FAIL: person(""firstname"") should be empty:"; result$
 PRINT
 
 REM Test 3: HASH_EXISTS function
 PRINT "HASH_EXISTS tests in PRESERVE_CASE mode:"
-result = HASH_EXISTS(user(), "firstName")
+result = HASH_EXISTS(person(), "firstName")
 IF result = -1 THEN PRINT "PASS: HASH_EXISTS exact case" ELSE PRINT "FAIL: HASH_EXISTS exact case"
 
-result = HASH_EXISTS(user(), "FIRSTNAME")
+result = HASH_EXISTS(person(), "FIRSTNAME")
 IF result = 0 THEN PRINT "PASS: HASH_EXISTS wrong case should fail" ELSE PRINT "FAIL: HASH_EXISTS wrong case"
 
-result = HASH_EXISTS(user(), "missing")
+result = HASH_EXISTS(person(), "missing")
 IF result = 0 THEN PRINT "PASS: HASH_EXISTS missing key" ELSE PRINT "FAIL: HASH_EXISTS missing key"
 PRINT
 
 REM Test 4: Mixed case assignment via bracket notation
-user("mixedCase") = "test1"
-user("MIXEDCASE") = "test2"
+person("mixedCase") = "test1"
+person("MIXEDCASE") = "test2"
 PRINT "After mixed case bracket assignments:"
-PRINT user
+PRINT person
 PRINT "Should have both 'mixedCase' and 'MIXEDCASE' as separate keys:"
-exists1 = HASH_EXISTS(user(), "mixedCase")
-exists2 = HASH_EXISTS(user(), "MIXEDCASE")
+exists1 = HASH_EXISTS(person(), "mixedCase")
+exists2 = HASH_EXISTS(person(), "MIXEDCASE")
 IF exists1 = -1 AND exists2 = -1 THEN PRINT "PASS: Separate keys created" ELSE PRINT "FAIL: Keys should be separate"
 PRINT
 

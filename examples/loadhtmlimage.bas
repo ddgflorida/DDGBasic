@@ -16,7 +16,7 @@ PRINT
 REM --- Step 2: Load the data from the HTML table ---
 PRINT "Loading image references in images.html..."
 REM The command finds <img> tags in an html table.
-LOAD HTML IMAGES "images.html" CREATE TABLE college_images
+LOAD HTML "images.html" CREATE TABLE college_images OPTIONS "element_type=images"
 IF ERR <> 0 THEN
     PRINT "An error occurred during the LOAD HTML IMAGES command:"
     PRINT ERRMSG$

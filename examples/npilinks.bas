@@ -12,11 +12,11 @@ IF NOT (ERR = 0 OR ERR = 200) THEN
     END
 END IF
 
-PRINT "Download successful to", loca_file$," Parsing HTML links..."
+PRINT "Download successful to", local_file$," Parsing HTML links..."
 
 REM Step 3: Use LOAD HTML LINKS to parse the file and create a table named 'npi_links'.
 REM This command automatically creates the table with columns: source, text, and href.
-LOAD HTML LINKS local_file$ CREATE TABLE npi_links
+LOAD HTML local_file$ CREATE TABLE npi_links OPTIONS "element_type=links"
 
 PRINT "Table 'npi_links' created successfully."
 PRINT 

@@ -27,7 +27,7 @@ PRINT USING "#.##^^^^"; 0.000789
 
 PRINT "Test 1.6: Handling negative numbers"
 PRINT USING "#####.##"; num2
-PRINT USING "-#####.##"; 123.45 ' Should show space
+PRINT USING "-#####.##"; 123.45 -- Should show space
 PRINT
 
 PRINT "--- SECTION 2: String Formatting ---"

@@ -42,7 +42,7 @@ These points about how the interpreter runs a program apply to every statement i
   Because of this pass, you can `GOTO` or `GOSUB` a label defined further down, and you can call a function before its definition appears.
 - **Function bodies are skipped.** When the main flow of control reaches a `FUNCTION` definition, it jumps past the matching `END FUNCTION`. Function bodies run only when the function is called.
 - **Stopping.** A program stops when it runs out of lines, when it executes `END`, or when an untrapped error occurs. A bare `END` on its own line at the top level also stops the main loop. This is why subroutines and error handlers are usually placed after an `END`.
-- **Runtime errors.** An untrapped error prints `Runtime Error: <message>` (or, for some errors, `Error: <message>`) to **stderr**, usually followed by the line, column and a token context. Execution then stops. The process exit status is still 0 (see 2.17).
+- **Runtime errors.** An untrapped error prints `Runtime Error: <message>` (or, for some errors, `Error: <message>`) to **stderr**, usually followed by the line, column and a token context. Execution then stops, and the process exits with status 1 (see 2.17).
 
 ---
 
@@ -1340,7 +1340,14 @@ Before the program is tokenized, the source goes through two preprocessing steps
 
 If the file does not exist, the interpreter prints `Error: File 'x' not found.` If the file is empty, it prints `No source code provided.`
 
-**Exit status.** The process exits with status 0 even when the program stopped with a runtime error, because errors are only printed to stderr. The exceptions are errors raised while loading the program, such as malformed `FUNCTION` definitions. They escape as Python exceptions with status 1. Scripts that need to signal failure must do so another way, for example by writing a status file.
+**Exit status.** The process exits with status 0 when the program finishes or stops at `END`. It exits with status 1 when:
+
+- the program stops with an untrapped runtime error, including an error raised inside an `ON ERROR` handler;
+- the lexer rejects the source;
+- the script file is missing or unreadable;
+- a `FUNCTION` definition is malformed. This error escapes as a Python exception.
+
+An error trapped by `ON ERROR GOTO` and resumed does not affect the exit status. A failing SQL statement under `SET SQL_FATAL_ERRORS OFF` doesn't either.
 
 ### Program arguments: COMMAND$
 
@@ -1443,7 +1450,7 @@ Each of the following was confirmed by running the interpreter.
 10. **`END` inside a `RUN` child or an `EVAL` string** terminates the whole process, because `END` calls `sys.exit` and is not caught.
 11. **`INCLUDE`** (fixed): it used to fail for every file that existed, because its marker lines began with `'`. See [1.4.1](01-language-fundamentals.md#141-include).
 12. **`RECNO` numbering is inconsistent.** In `FOR ... IN CSV` it starts at 2 even without a header row. In `JSONL` it counts blank lines. It is deleted at the end of every loop, which also hides the outer loop's `RECNO` when loops are nested.
-13. **Exit status is always 0** after a runtime error, and runtime errors go only to stderr. `EXIT FUNCTION` outside a function gives an empty `Runtime Error:` message.
+13. **Exit status** (fixed): it was always 0, even after a runtime error; it is now 1 (see 2.17). `EXIT FUNCTION` outside a function still gives an empty `Runtime Error:` message.
 14. **`HELP` prints the raw token tuple** before every entry, for example `('GOSUB', 'GOSUB', 5)`. This looks like leftover debug output.
 15. `PRINT x;` immediately followed by `:` is a syntax error (`Unexpected token in factor: COLON`), so `FOR i = 1 TO 3: PRINT i;: NEXT` fails. Write `PRINT i : NEXT`, or split the line.
 16. `CHAIN` always prints its `CHAIN: ...` status lines to stdout, which cannot be turned off.

@@ -15,9 +15,9 @@ PRINT "--- 2. Testing headerless iteration (access by index) ---"
 TRON
 FOR rec IN CSV ("test_data.csv")
     REM Skip the header row manually
-	'IF rec(1) <> "ID" THEN
+	REM IF rec(1) <> "ID" THEN
 	   PRINT "Record:", rec(1); ", "; rec(2); ", "; rec(3)
-	'END IF
+	REM END IF
 NEXT
 TROFF
 PRINT "-> Headerless test complete."

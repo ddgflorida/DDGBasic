@@ -1941,6 +1941,7 @@ class Interpreter:
         self.sql_fatal_errors = True
         self.trace_mode = False   # FOR TRON AND TROFF
         self.program_terminated = False # Termination flag
+        self.exit_code = 0  # Process exit status; 1 after an unhandled runtime error
         self.hash_keys_mode = 'PRESERVE_CASE'  # Default to preserve case
         self.run_stack = []
         self.last_sql_statement = ""
@@ -3559,8 +3560,13 @@ class Interpreter:
                             break
                 except ProgramEnd:
                     pass
+                except Exception as handler_error:
+                    # Errors raised inside the handler are not trapped again
+                    print(f"Runtime Error: {handler_error}", file=sys.stderr)
+                    self.exit_code = 1
             else:
                 print(f"Runtime Error: {e}", file=sys.stderr)
+                self.exit_code = 1
 
     def _parse_execute_statement(self):
         self._expect('EXECUTE')
@@ -7545,6 +7551,9 @@ class Interpreter:
             for row in reader:
                 if limit != -1 and row_num >= limit:
                     break
+                # Skip blank lines (e.g. a trailing newline at the end of the file)
+                if not row or (len(headers) > 1 and len(row) == 1 and not row[0].strip()):
+                    continue
                 
                 yield {
                     'type': 'data',
@@ -13309,6 +13318,7 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
     if cmd_args is None: cmd_args = []
     
     interpreter = None
+    exit_code = 0
     try:
         lexer = Lexer(preprocess_continuations(source_code))
 
@@ -13320,11 +13330,14 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
 
         interpreter = Interpreter(lexer, cmd_args, debug=debug)
         interpreter.run()
+        exit_code = interpreter.exit_code
     except (RuntimeError, ValueError, sqlite3.Error) as e:
         print(f"Error: {e}", file=sys.stderr)
+        exit_code = 1
     finally:
         if interpreter: interpreter.close()
         #print(f"\n--- Finished {source_name} ---", file=sys.stderr)
+    return exit_code
 
 
 def run_repl(debug=False):
@@ -13387,7 +13400,7 @@ def main():
     
     if not args:
          print("Error: No source file specified.", file=sys.stderr)
-         return
+         return 1
 
     filepath = None 
     base_dir = ''
@@ -13402,13 +13415,13 @@ def main():
         cmd_args = args[1:]
         if not os.path.exists(filepath):
             print(f"Error: File '{filepath}' not found.", file=sys.stderr)
-            return
+            return 1
         try:
             with open(filepath, 'r', encoding='utf-8') as f:
                 source_code = f.read()
         except Exception as e:
             print(f"An error occurred reading file: {e}", file=sys.stderr)
-            return
+            return 1
         base_dir = os.path.dirname(os.path.abspath(filepath))
 
     top_level_files = {os.path.abspath(filepath)} if filepath else set()
@@ -13416,9 +13429,10 @@ def main():
     new_source_code = preprocess_continuations(processed_source_code)
     
     if processed_source_code and processed_source_code.strip():
-        run_interpreter(new_source_code, cmd_args, source_name, debug=is_debug, dump_tokens=dump_tokens_flag)
+        return run_interpreter(new_source_code, cmd_args, source_name, debug=is_debug, dump_tokens=dump_tokens_flag)
     else:
         print("No source code provided.", file=sys.stderr)
+        return 1
         
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

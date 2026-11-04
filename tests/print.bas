@@ -5,13 +5,13 @@ PRINT "This is a string literal."
 PRINT 123.45
 x = 99
 PRINT "The value of x is"; x
-PRINT ' This should print a blank line
+PRINT -- This should print a blank line
 
 PRINT "--- SECTION 2: Comma and Semicolon Separators ---"
 PRINT "Comma,", "separated,", "output."
 PRINT "Semicolon;" ; "separated;" ; "output."
 PRINT "This line will";
-PRINT " continue." ' Semicolon at the end suppresses the newline
+PRINT " continue." -- Semicolon at the end suppresses the newline
 PRINT
 
 PRINT "--- SECTION 3: Printing Expressions and Functions ---"

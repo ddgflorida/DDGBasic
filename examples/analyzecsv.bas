@@ -10,7 +10,7 @@ PRINT "2. Load and clean the data in a single step"
 PRINT " - Skip the first 3 lines"
 PRINT " - Trim all fields"
 PRINT " - Standardize the 'State' column to uppercase"
-options$ = "header=true transform=trimall,State:upper,Status:upper"
+options$ = "header=true transform=trimall;State:upper;Status:upper"
 PRINT " Run LOAD CSV file to table sales"; " using options "; options$
 LOAD CSV filename$ CREATE TABLE "sales" OPTIONS options$
 PRINT

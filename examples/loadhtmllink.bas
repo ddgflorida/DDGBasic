@@ -17,7 +17,7 @@ REM --- Step 2: Load the data from the HTML table ---
 PRINT "Loading data from the first table in colleges.html..."
 REM The command finds the first table (table_index=0) and uses its first row
 REM as the column names (header=true).
-LOAD HTML LINKS "colleges.html" CREATE TABLE college_links
+LOAD HTML "colleges.html" CREATE TABLE college_links OPTIONS "element_type=links"
 IF ERR <> 0 THEN
     PRINT "An error occurred during the LOAD HTML LINKS command:"
     PRINT ERRMSG$
