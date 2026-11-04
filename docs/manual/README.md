@@ -48,12 +48,12 @@ The web runner (`src/dbbasicweb.py`) imports `cgi`, so it needs Python 3.12 or e
 
 ## Known issues at a glance
 
+Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, and the function-reference list in compiled builds. These are marked *(fixed)* in the chapter notes.
+
 The issues below were found while writing the manual. They are the most likely to catch you out; each chapter's final section has the full list.
 
 **Fails outright**
-- `INCLUDE` fails for every file that exists. The preprocessor's marker lines start with `'`, which the lexer no longer accepts as a comment. ([1.17](01-language-fundamentals.md#117-implementation-notes--discrepancies))
-- `COPY ... AS` and `ZIP` cannot run. ([6.9](06-files-system-network-ui.md#69-implementation-notes--discrepancies))
-- `UPGRADE JSON` always fails, and `PARSE JSON ... INTO` is not implemented; use `PARSEJSON()`. ([5.18](05-data-loading-and-analysis.md#518-implementation-notes--discrepancies))
+- `PARSE JSON ... INTO` is not implemented; use `PARSEJSON()`. ([5.18](05-data-loading-and-analysis.md#518-implementation-notes--discrepancies))
 - `END TRANSACTION;` is not recognised. ([4.14](04-database-sql-and-output.md#414-implementation-notes--discrepancies))
 
 **Surprising behaviour**
@@ -62,7 +62,6 @@ The issues below were found while writing the manual. They are the most likely t
 - Variable names are case-insensitive when read but case-sensitive when assigned.
 - `SHIFT` and `UNSHIFT` operate on index 1; arrays from `ARRAY()`/`PUSH` start at 0.
 - Common words are reserved and cannot be used as variable names: `user`, `size`, `type`, `title`, `label`, `message`, `source`, `text`, `body`, `host`, `port`.
-- Some nested loops misbehave: `FOR EACH` inside `FOR ... TO`, `DO WHILE` inside `WHILE`, and more than one `EXIT DO` in a loop. ([2.18](02-control-flow-and-procedures.md#218-implementation-notes-and-discrepancies))
 - Any `identifier :` on a line is taken as a label, so `a = b : c = d` can fail with "Duplicate label".
 - User-defined `FUNCTION`s are not available in the REPL or in `RUN`/`CHAIN` targets.
 - The process exit status is 0 even after a runtime error.
@@ -78,7 +77,6 @@ The issues below were found while writing the manual. They are the most likely t
 - `DAYSINMONTH` takes `(month, year)`.
 - `WEEKDAYNAME$(1)` is Monday, while `WEEKDAY` counts 1 as Sunday.
 - `FORMAT$` has no `%` support.
-- In a compiled (Nuitka) build, `MAP`/`FILTER`/`REDUCE`/`SORT WITH` accept only 13 built-ins as function references, because the list is found by reading the Python source at run time. ([3.16](03-built-in-functions.md#316-implementation-notes-and-discrepancies) item 27)
 
 **Example and test scripts**
 - Several scripts in `examples/` and `tests/` use syntax the current interpreter rejects, for example `'` comments, `LOAD FIXED ... FIELDS`, `fields=[col] as new` and `DIM user`. They are listed in the discrepancy sections of chapters 1, 2 and 5.

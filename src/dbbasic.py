@@ -65,7 +65,7 @@ def preprocess_includes(source_code, base_path='.', included_files=None):
         absolute_path = os.path.abspath(include_path)
 
         if absolute_path in included_files:
-            return f"' SKIPPING CIRCULAR INCLUDE: \"{include_filename}\""
+            return f"REM SKIPPING CIRCULAR INCLUDE: \"{include_filename}\""
 
         included_files.add(absolute_path)
         try:
@@ -74,9 +74,9 @@ def preprocess_includes(source_code, base_path='.', included_files=None):
             new_base_path = os.path.dirname(include_path)
             processed_included_code = preprocess_includes(included_code, new_base_path, included_files)
             return (
-                f'\' <<< START INCLUDE: "{include_filename}"\n'
+                f'REM <<< START INCLUDE: "{include_filename}"\n'
                 f'{processed_included_code}\n'
-                f'\' <<< END INCLUDE: "{include_filename}"'
+                f'REM <<< END INCLUDE: "{include_filename}"'
             )
         except FileNotFoundError:
             return f'ERROR 2, "INCLUDE file not found: {include_filename} in folder {absolute_path}"'
@@ -925,6 +925,20 @@ class Lexer:
         col = pos - self.line_starts[line-1] + 1
         return line, col
 
+    @staticmethod
+    def _is_basic_copy(raw_tokens, i):
+        """True if the line starting at raw_tokens[i] is 'COPY src AS dest' rather than SQL COPY."""
+        has_as = False
+        j = i + 1
+        while j < len(raw_tokens) and raw_tokens[j][0] != 'NEWLINE':
+            kind, value = raw_tokens[j][0], raw_tokens[j][1]
+            if kind == 'TO' or str(value).upper() == 'FROM':
+                return False
+            if kind == 'AS':
+                has_as = True
+            j += 1
+        return has_as
+
     def _tokenize(self, source_code_to_process):
         replacements = {
             r'\bEND\s+IF\b': 'ENDIF', r'\bLINE\s+INPUT\b': 'LINEINPUT', r'\bEND\s+LOOP\b': 'ENDLOOP',
@@ -1063,7 +1077,8 @@ class Lexer:
                 continue
 
             # Handle line-level SQL (e.g., SELECT * FROM mytable;)
-            if is_start_of_line and kind in Interpreter.SQL_KEYWORDS:
+            # COPY src AS dest (file copy) is BASIC; SQL COPY always has TO or FROM.
+            if is_start_of_line and kind in Interpreter.SQL_KEYWORDS and not (kind == 'COPY' and self._is_basic_copy(raw_tokens, i)):
                 semicolon_pos = self.modified_source_code.find(';', pos)
                 if semicolon_pos != -1:
                     sql_end_pos = semicolon_pos + 1
@@ -1993,6 +2008,9 @@ class Interpreter:
                 self.jump_map[index] = {'loop': None}
 
             elif token_type == 'LOOP':
+                # The LOOP in 'EXIT LOOP' doesn't close a block.
+                if index > 0 and self.tokens[index - 1][0] == 'EXIT':
+                    continue
                 # LOOP should only match with DO
                 if not stack or stack[-1][0] != 'DO':
                     # This might be an error in the source, but let the parser handle it
@@ -2397,6 +2415,28 @@ class Interpreter:
         self._expect('RPAREN')
         self._execute_user_function(name, args)  # return value intentionally discarded
 
+    # Built-in function names usable as first-class refs (FILTER/MAP/REDUCE/SORT WITH).
+    # Used when _execute_function's source can't be read (e.g. a Nuitka build);
+    # compilenuitka.sh checks this list against the source before building.
+    BUILTIN_FN_NAMES = frozenset({
+        'ABS', 'ARRAY', 'ARRAY_JOIN', 'ARRAY_SIZE', 'ASC', 'ATAN2', 'ATN', 'BASENAME$', 'CEIL',
+        'CENTER$', 'CHR$', 'COMMAND$', 'CONTAINS', 'COS', 'CURDIR$', 'DATE$', 'DATEADD',
+        'DATEDIFF', 'DATESERIAL', 'DAY', 'DAYSINMONTH', 'DAYSINYEAR', 'DEGREES', 'DISKSPACE',
+        'ENDSWITH', 'ENVIRON$', 'EOF', 'EXP', 'EXTRACT$', 'FILEATTR', 'FILESIZE', 'FILETIME',
+        'FILE_EXISTS', 'FILTER', 'FIND', 'FIX', 'FLOOR', 'FORMAT$', 'FORMATDATE$', 'FREEFILE',
+        'HASH_COUNT', 'HASH_DELETE', 'HASH_EXISTS', 'HASH_JOIN', 'HASH_KEYS', 'HASH_RENAME',
+        'HASH_VALUES', 'HEX$', 'HOUR', 'HTMLDECODE$', 'HTMLENCODE$', 'INSTR', 'INSTRREV',
+        'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
+        'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
+        'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
+        'OCT$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
+        'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
+        'RTRIM$', 'SECOND', 'SGN', 'SIN', 'SOUNDEX$', 'SPACE$', 'SPLIT', 'SQR', 'STARTSWITH',
+        'STR$', 'STRIPHTML$', 'TAN', 'TIME$', 'TRIM$', 'TYPENAME$', 'UBOUND', 'UCASE$',
+        'URLDECODE$', 'URLENCODE$', 'URL_FILENAME$', 'URL_HOSTNAME$', 'URL_PATH$',
+        'URL_SCHEME$', 'VAL', 'WEEKDAY', 'WEEKDAYNAME$', 'YEAR', 'YEARCAL$',
+    })
+
     def _get_builtin_fn_names(self):
         """Return the set of built-in function names (uppercased) usable as first-class refs
         in FILTER/MAP/REDUCE/SORT WITH. Computed once by introspecting _execute_function's source."""
@@ -2409,10 +2449,8 @@ class Interpreter:
             src = inspect.getsource(cls._execute_function)
             names = set(re.findall(r"name == '([A-Z_][A-Z_0-9]*\$?)'", src))
         except Exception:
-            # Fallback (when source isn't available, e.g. bytecode-only deployment): a
-            # representative subset. Users can always wrap a built-in in a UDF if needed.
-            names = {'UCASE$','LCASE$','TRIM$','LTRIM$','RTRIM$','LEN','ABS','INT',
-                     'UBOUND','PROPER$','STR$','VAL','ROUND'}
+            # Source isn't available (e.g. compiled build): use the static list.
+            names = set(cls.BUILTIN_FN_NAMES)
         cls._BUILTIN_FN_NAMES_CACHE = names
         return names
 
@@ -3105,13 +3143,22 @@ class Interpreter:
             if self.program_terminated: break
 
     def _skip_block(self, start_token, end_token):
+        # FOR, FOR EACH and FOR ... IN all close with NEXT, so any of them nests.
+        start_tokens = {'FOR', 'FOR EACH'} if end_token == 'NEXT' else {start_token}
         level = 1
         while self._current_token() and level > 0:
             current_token = self._current_token()
+            # Only a keyword that begins a statement opens a block; this ignores
+            # the WHILE in DO WHILE / LOOP WHILE and the FOR/DO in EXIT FOR/EXIT DO.
+            prev_token = self.tokens[self.token_index - 1] if self.token_index > 0 else None
+            starts_statement = prev_token is None or prev_token[0] in ('NEWLINE', 'COLON', 'THEN', 'ELSE')
             self._next_token()
             if not current_token: break
-            if current_token[0] == start_token: level += 1
+            if current_token[0] in start_tokens and starts_statement: level += 1
             elif current_token[0] == end_token: level -= 1
+        # Consume the optional loop variable in 'NEXT var'.
+        if end_token == 'NEXT' and level == 0 and self._current_token() and self._current_token()[0] == 'ID':
+            self._next_token()
 
     def _find_next_line_index(self, start_index):
         """Finds the index of the token that starts the next line."""
@@ -3382,7 +3429,7 @@ class Interpreter:
             self._parse_troff_statement()
         elif token[0] in ['ELSE', 'ELSEIF', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
             self._error(f"Unexpected '{token[0]}'")
-        elif token[0] == 'ID' and token[1].upper() == 'COPY':
+        elif token[0] == 'COPY':
             self._parse_copy_statement()
         elif token[0] == 'CLEAR':                                 # Clear all variables
             self._parse_clear_statement()
@@ -5616,7 +5663,7 @@ class Interpreter:
  
     def _parse_copy_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
-        self._expect('ID')  # COPY
+        self._expect('COPY')
         source_filename = self._parse_expression()
         self._expect('AS')
         dest_filename = self._parse_expression()
@@ -5873,16 +5920,8 @@ class Interpreter:
                 self.run_block(end_tokens={'LOOP'})
             except LoopExit as e:
                 if e.args[0] in ['DO', 'LOOP']:
-                    # EXIT LOOP was called. Scan forward to find the matching LOOP token.
-                    self._skip_block('DO', 'LOOP')
-                    
-                    # We are now positioned *after* the LOOP token. We still need
-                    # to skip any post-loop condition (e.g., UNTIL x > 5).
-                    if self._current_token() and self._current_token()[0] in ['WHILE', 'UNTIL']:
-                        self._next_token() # Consume WHILE or UNTIL
-                        # Scan forward past the condition until the end of the line.
-                        while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
-                            self._next_token()
+                    # EXIT DO: jump past the matching LOOP (and any LOOP WHILE/UNTIL condition).
+                    self._skip_to_loop_end(start_index)
                     return
                 else:
                     # This was an EXIT for a different loop (e.g. EXIT FOR), so re-raise it.
@@ -6712,9 +6751,10 @@ class Interpreter:
         if not isinstance(archive_name, str):
             self._error("ZIP requires a string archive name.")
         
-        self._expect('ID')  # Expect FROM keyword
-        if self._current_token()[-2][1].upper() != 'FROM':
+        tok = self._current_token()
+        if not tok or tok[0] != 'ID' or tok[1].upper() != 'FROM':
             self._error("Expected FROM after archive name in ZIP statement.")
+        self._next_token()  # FROM
         
         files_to_zip = []
         
@@ -6751,6 +6791,7 @@ class Interpreter:
             self.variables['ERRMSG$'] = "No files found to zip"
             if self.sql_fatal_errors:
                 self._error("No files found to zip")
+            return
         
         try:
             with zipfile.ZipFile(archive_name, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -12133,9 +12174,10 @@ class Interpreter:
         
         source_filename = self._parse_expression()
         
-        self._expect('USING'); self._expect('ID') # Expect SCHEMA
-        if self._current_token()[-2][1].upper() != 'SCHEMA':
+        self._expect('USING')
+        if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'SCHEMA'):
              self._error("Expected SCHEMA after USING")
+        self._next_token()  # SCHEMA
         schema_filename = self._parse_expression()
         
         self._expect('INTO')
@@ -13369,7 +13411,8 @@ def main():
             return
         base_dir = os.path.dirname(os.path.abspath(filepath))
 
-    processed_source_code = preprocess_includes(source_code, base_path=base_dir)
+    top_level_files = {os.path.abspath(filepath)} if filepath else set()
+    processed_source_code = preprocess_includes(source_code, base_path=base_dir, included_files=top_level_files)
     new_source_code = preprocess_continuations(processed_source_code)
     
     if processed_source_code and processed_source_code.strip():

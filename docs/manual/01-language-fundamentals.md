@@ -219,30 +219,45 @@ the `INCLUDE`.
 - Included files are processed recursively, so they can contain their own
   `INCLUDE` lines. Nested paths are resolved relative to the included file's
   own directory.
-- A file that has already been included is not included again. Its line is
-  replaced with `' SKIPPING CIRCULAR INCLUDE: "name"`.
+- A file that has already been included, including the main program file,
+  is not included again. Its line is replaced with
+  `REM SKIPPING CIRCULAR INCLUDE: "name"`.
+- The included text is wrapped in `REM <<< START INCLUDE: "file"` and
+  `REM <<< END INCLUDE: "file"` marker lines.
 - If the file is missing, the line is replaced with
   `ERROR 2, "INCLUDE file not found: ..."`, which raises a runtime error when
-  the program reaches it:
+  the program reaches it.
 
-  ```basic
-  PRINT "before"
-  INCLUDE "missing.bas"
-  PRINT "after"
-  ```
+**Example.** `lib.bas`:
 
-  ```
-  before
-  Runtime Error: Error 2: INCLUDE file not found: missing.bas in folder /path/to/missing.bas
-  ```
+```basic
+PRINT "from lib"
+```
 
-> **Warning: INCLUDE does not currently work for files that exist.** The
-> preprocessor puts the included text between marker lines that start with a
-> single quote (`' <<< START INCLUDE: "file"` ... `' <<< END INCLUDE: "file"`).
-> The lexer does not treat `'` as a comment character. The two markers' quotes
-> become one single-quoted token that swallows the included code, and the
-> program fails with `Unknown statement: SINGLE_Q_STRING` or
-> `Unexpected character '''`. See [1.17](#117-implementation-notes--discrepancies).
+`main.bas`:
+
+```basic
+INCLUDE "lib.bas"
+PRINT "main"
+```
+
+```
+from lib
+main
+```
+
+A missing file:
+
+```basic
+PRINT "before"
+INCLUDE "missing.bas"
+PRINT "after"
+```
+
+```
+before
+Runtime Error: Error 2: INCLUDE file not found: missing.bas in folder /path/to/missing.bas
+```
 
 ### 1.4.2 Line continuation
 
@@ -1395,11 +1410,10 @@ the existing documentation:
    The `SORT` entry in the built-in `HELP` uses `` ` `` as a trailing comment
    (`` SORT items WITH sort_key$ ASC      ` UDF returns the key ``), but a
    backtick starts a string, so that example does not work as written.
-2. **INCLUDE is broken for files that exist.** `preprocess_includes` wraps the
-   included code in `' <<< START INCLUDE ...` / `' <<< END INCLUDE ...` marker
-   lines and uses `' SKIPPING CIRCULAR INCLUDE` for repeats. Because of item 1,
-   these markers break tokenizing. Only the missing-file case behaves sensibly
-   (it raises `Error 2`).
+2. **INCLUDE** (fixed): the preprocessor's marker lines used to start with
+   `'`, so every successful include failed (see item 1). They now use `REM`.
+   The main program file is also registered, so a circular include can no
+   longer pull it in a second time.
 3. **ECHO preprocessing does not check for a word boundary.** Any line starting
    with the letters `ECHO` is rewritten. For example, `echo_count = 5` prints
    `_count = 5`.

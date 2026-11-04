@@ -317,9 +317,27 @@ ft/sub
 COPY source AS destination
 ```
 
-The intended behaviour is to copy a file with `shutil.copy2`, which keeps timestamps. It would set `ERR` = 2 for a missing source and 1 for other errors, and expand `~`.
+Copies a file with `shutil.copy2`, which keeps timestamps. Both names are expressions, and `~` is expanded. A missing source sets `ERR` = 2; other failures set `ERR` = 1. Both are runtime errors, so trap them with `ON ERROR GOTO` if needed.
 
-> **Not currently usable.** The lexer turns `COPY` into its own `COPY` token, but the statement dispatcher only recognises `COPY` as an identifier. As a result, `COPY "a" AS "b"` fails with `Unknown statement: COPY`, or is sent to the database as SQL when it follows other statements. Until this is fixed, use `SHELL "cp ..."` / `SHELL "copy ..."`, or `READ FILE` + `PRINT #`.
+`COPY` is also a SQL keyword (DuckDB `COPY table TO 'file'`). A line is treated as the file-copy statement when it contains `AS` and no `TO` or `FROM`; otherwise it is sent to the database as SQL.
+
+```basic
+COPY "src.txt" AS "dst.txt"
+PRINT "copied:"; FILE_EXISTS("dst.txt")
+s$ = "src.txt"
+COPY s$ AS "dst2.txt"
+PRINT FILESIZE("dst2.txt")
+DATABASE ENGINE DUCKDB
+CREATE TABLE t AS SELECT 1 AS a;
+COPY t TO 'out.csv' (HEADER);
+PRINT FILE_EXISTS("out.csv")
+```
+
+```
+copied:-1
+ 3
+-1
+```
 
 ### NAME ... AS
 
@@ -396,8 +414,8 @@ handler ERR= 39 [Errno 66] Directory not empty: 'work'
 | ERR | Meaning | Set by |
 |---|---|---|
 | 0 | Success | all |
-| 1 | General error | OPEN, READ FILE, NAME, MKDIR, CHDIR, RMDIR, KILL, ZIP, UNZIP |
-| 2 | File / directory not found | OPEN, READ FILE, NAME, CHDIR, RMDIR, KILL |
+| 1 | General error | OPEN, READ FILE, COPY, NAME, MKDIR, CHDIR, RMDIR, KILL, ZIP, UNZIP |
+| 2 | File / directory not found | OPEN, READ FILE, COPY, NAME, CHDIR, RMDIR, KILL |
 | 17 | Target already exists | NAME |
 | 20 | Not a directory | CHDIR |
 | 39 | Directory not empty or other OS error | RMDIR |
@@ -412,15 +430,34 @@ handler ERR= 39 [Errno 66] Directory not empty: 'work'
 ZIP archive$ FROM file_or_pattern$ [, file_or_pattern$ ...]
 ```
 
-According to the source, the intended behaviour is as follows:
+Behaviour:
 
 * Each item that contains `*` or `?` is expanded with `glob`. Other items are added if they exist.
 * Missing items print `Warning: ...` and are skipped.
 * Entries are stored under their **base name** only, so the directory structure is flattened, using DEFLATE compression.
 * Each file added prints `Added: path -> name`. The statement finishes with `Created <archive> with N files`.
-* If no files are found, `ERR` = 1 and `ERRMSG$` = `No files found to zip`. This is fatal when `SQL_FATAL_ERRORS` is ON, which is the default.
 
-> **Not currently usable.** The check for the `FROM` keyword compares the second character of the token after `FROM` with the word `"FROM"`, and that comparison can never succeed. Every `ZIP` statement therefore fails with `Expected FROM after archive name in ZIP statement.`. The forms used in `tests/zip.bas` (`ZIP "a.zip", "f1", "f2"` and `ZIP "a.zip" FILES "dir/*"`) are not accepted by the parser either. Use `SHELL "zip ..."` or `SHELL "tar ..."` instead.
+* If no files are found, `ERR` = 1 and `ERRMSG$` = `No files found to zip`, and no archive is created. This is fatal when `SQL_FATAL_ERRORS` is ON, which is the default.
+
+```basic
+ZIP "out.zip" FROM "a.txt", "*.bas"
+PRINT "ERR="; ERR
+UNZIP "out.zip" TO "x"
+```
+
+```
+Added: a.txt -> a.txt
+Added: b.bas -> b.bas
+Added: z.bas -> z.bas
+Created out.zip with 3 files
+ERR= 0
+Extracted 3 files from out.zip
+  -> x/a.txt
+  -> x/b.bas
+  -> x/z.bas
+```
+
+The forms used in `tests/zip.bas` (`ZIP "a.zip", "f1", "f2"` and `ZIP "a.zip" FILES "dir/*"`) are not accepted; use `FROM`.
 
 ### UNZIP
 
@@ -1093,15 +1130,15 @@ The web runner drives the interpreter through `Interpreter.execute(code)`. This 
 
 These were found while checking the source against behaviour. Line numbers refer to `src/dbbasic.py` unless stated otherwise.
 
-1. **`COPY ... AS` cannot run.** The lexer emits a `COPY` token (line ~995), but the dispatcher tests `token[0] == 'ID' and token[1].upper() == 'COPY'` (line ~3378). The result is `Unknown statement: COPY`, or the line is sent to the database as SQL.
-2. **`ZIP` always fails.** `_parse_zip_statement` checks `self._current_token()[-2][1].upper() != 'FROM'`, which compares one character of the *next* token's value. That test is always true, so every ZIP statement fails with `Expected FROM after archive name`. `tests/zip.bas` also uses two syntaxes the parser does not accept (`ZIP "a.zip", "f"...` and `ZIP "a.zip" FILES "pat"`).
+1. **`COPY ... AS`** (fixed): the dispatcher looked for an identifier, but the lexer emits a `COPY` token, so the statement never ran.
+2. **`ZIP`** (fixed): the `FROM` check compared the wrong token and could never pass. It also created an empty archive and reset `ERR` to 0 when no files matched.
 3. **`UNZIP` docstring** says `INTO "dir"`, but the code (and `HELP UNZIP`) uses `TO "dir"`. For a missing archive, `ERR` is set to 2 but then overwritten with 1 by the generic exception handler. UNZIP errors are fatal unless `SET SQL_FATAL_ERRORS OFF`, which ties archive handling to a SQL setting.
 4. **`PRINT #n, USING ...` without a trailing `;`** fails with `cannot access local variable 'parts'`: the file branch appends to `parts` before it is defined (lines ~5713-5719). Even if fixed as written, the line ending would be added to `parts` and never written.
 5. **`OPEN` / `READ FILE` generic error path** is mis-coded: `self.variables['ERR'],` on its own line, followed by `self.variables['ERRMSG$'] = 1.0, str(e)`, sets `ERRMSG$` to a tuple and leaves `ERR` at 0. `OPEN` also prints `DEBUG OPEN EXCEPTION` in this path.
 6. **`WRITE #n` line endings** are `\r\n` on all platforms (the `csv.writer` default), while `PRINT #n` uses `os.linesep`. Mixing them in one file gives mixed line endings. `WITH OPTIONS` values are passed to `csv.writer` as strings, so non-string dialect options (for example `quoting=1`) fail.
 7. **`INPUT` syntax.** `HELP INPUT` shows `INPUT "Prompt", var`, but the parser requires a semicolon. Only a literal prompt and a single variable are supported, and numeric input is converted with `float()` with no retry.
 8. **`LINE INPUT #` and `PRINT #`** on a handle that is not open raise a bare `KeyError`, which prints as `Runtime Error: 5`, instead of a descriptive message. `LINE INPUT` past EOF silently returns `""`.
-9. **`NAME`** and **`OPEN`** do not expand `~`, whereas `KILL`, `MKDIR`, `CHDIR`, `RMDIR` and `FILES` do. `COPY` would as well, if it could run.
+9. **`NAME`** and **`OPEN`** do not expand `~`, whereas `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES` and `COPY` do.
 10. **`FILES RECURSIVE`** includes every directory whatever the pattern (unless `WITH FILESONLY`), while `FOR ... IN FILES(... RECURSIVE)` filters directories by the pattern. Arrays filled by `FILES ... INTO` start at index 0, unlike the 1-based convention assumed by `SHIFT`/`UNSHIFT`.
 11. **Multi-word keywords inside strings.** The lexer collapses `WITH DETAILS`, `TO FILE`, `READ FILE`, `LINE INPUT`, `OPEN FORM`, and similar pairs *before* tokenizing, including inside string literals. `PRINT "TO FILE"` prints `TOFILE`.
 12. **FETCH.**

@@ -20,6 +20,23 @@ mkdir -p "$BUILD_DIR" "$INSTALL_DIR"
 BUILD_ID="$(date +%Y%m%d%H%M%S)"
 
 cd "$SRC_DIR"
+
+# The compiled binary can't read its own source, so it relies on
+# Interpreter.BUILTIN_FN_NAMES for function references; make sure it's current.
+"$PYTHON" - <<'EOF'
+import inspect, re, sys
+sys.argv = ['dbbasic']
+import dbbasic
+src = inspect.getsource(dbbasic.Interpreter._execute_function)
+actual = set(re.findall(r"name == '([A-Z_][A-Z_0-9]*\$?)'", src))
+listed = set(dbbasic.Interpreter.BUILTIN_FN_NAMES)
+if actual != listed:
+    print("BUILTIN_FN_NAMES in src/dbbasic.py is out of date.", file=sys.stderr)
+    print("  missing:", sorted(actual - listed), file=sys.stderr)
+    print("  extra:  ", sorted(listed - actual), file=sys.stderr)
+    sys.exit(1)
+EOF
+
 "$PYTHON" -m nuitka \
     --onefile \
     --onefile-tempdir-spec="{CACHE_DIR}/dbbasic/$BUILD_ID" \

@@ -1676,7 +1676,7 @@ Both files now have the same columns in the same order, even though `a.csv` had 
 UPGRADE JSON source_file USING SCHEMA schema_file INTO output_file
 ```
 
-The intended behaviour, as implemented in `_upgrade_json_record`, is to rebuild each record so it contains exactly the keys in the schema:
+Rebuilds each record so it contains exactly the keys in the schema (for example, one written by `ANALYZE JSON ... SAVE SCHEMA TO`):
 
 - Keys that are not in the schema are dropped.
 - Missing leaves get defaults: `0` for INTEGER/REAL, `false` for BOOLEAN, `""` otherwise.
@@ -1684,12 +1684,23 @@ The intended behaviour, as implemented in `_upgrade_json_record`, is to rebuild 
 - A source that is an array produces an array; a single object produces a single object.
 - The output is pretty-printed JSON.
 
-**In the current source, the statement cannot run.** After it consumes `USING SCHEMA`, it checks `self._current_token()[-2][1]`. That expression is the *second character* of the next token, not the keyword, so the check always fails:
+```basic
+DIM r AS HASH
+ANALYZE JSON "in.json" SAVE SCHEMA TO "schema.json" INTO r
+UPGRADE JSON "in.json" USING SCHEMA "schema.json" INTO "out.json"
+PRINT "ERR="; ERR
+```
+
+With `in.json` containing `[{"name":"Ann","age":30},{"name":"Bob","tags":["x"]}]`, the saved schema is `{"name": "TEXT", "age": "INTEGER", "tags": []}`, and the run prints:
 
 ```
-Runtime Error: Expected SCHEMA after USING at line 4, col 40.
-  Context: 'SCHEMA' -> ['"users_schema.json"' (STRING)] <- 'INTO'
+JSON Schema saved to schema.json
+Upgrading JSON records from 'in.json'...
+Upgrade complete. Saved to 'out.json'.
+ERR= 0
 ```
+
+`out.json` gives every record all three keys: Ann gets `"tags": []` and Bob gets `"age": 0`.
 
 ### 5.17.3 UPGRADE XML
 
@@ -1785,7 +1796,7 @@ The following points were found while checking the source and running the exampl
 
 28. **`UPGRADE CSV` cannot read `ANALYZE CSV`'s saved schema** (it is an object, not an array). The in-code documentation says the two are designed to work together. `_parse_upgrade_csv_statement` is also defined twice (10786 and 10813); the first definition is only a docstring and is overridden.
 29. **Single quotes in schema `source` expressions.** The `ANALYZE CSV` docstring suggests expressions like `"FirstName & ' ' & LastName"`. Single quotes are only converted when the whole source is one quoted literal, so such expressions raise a parse error. Use backtick strings.
-30. **`UPGRADE JSON` always fails** with "Expected SCHEMA after USING" because of the faulty token check (12137). The underlying upgrade logic (`_upgrade_json_record`) looks correct but cannot be reached.
+30. **`UPGRADE JSON`** (fixed): it always failed with "Expected SCHEMA after USING" because the `SCHEMA` check compared the wrong token.
 
 **ANALYZE**
 

@@ -553,8 +553,6 @@ pre-test can run zero times
  1 2 3 | post-test UNTIL
 ```
 
-> **Caution:** Use only one `EXIT DO` in a loop body. A second `EXIT DO` later in the same body can make the loop exit jump to the wrong place. See 2.18.
-
 ---
 
 ## 2.9 EXIT
@@ -1428,17 +1426,22 @@ Each of the following was confirmed by running the interpreter.
 
 **Bugs and limitations**
 
-1. **`FOR EACH` inside `FOR ... TO`.** When a `FOR ... TO` loop finishes, or is skipped because it has zero passes, the interpreter looks for its matching `NEXT` by counting `FOR` and `NEXT` tokens. `FOR EACH` is a different token, so its `NEXT` is mistaken for the outer loop's `NEXT`. The program then fails with `Unexpected 'NEXT'`. The same scan is used when an empty `FOR ... IN` loop is skipped.
-2. **`DO WHILE` or `LOOP WHILE` inside `WHILE ... WEND`.** Skipping a `WHILE` loop counts every `WHILE` token, including the one in `DO WHILE` or `LOOP WHILE`. When the outer loop ends, the skip runs past the `WEND` and the rest of the program is silently not executed.
-3. **More than one `EXIT DO` in a loop body.** After the first `EXIT DO` runs, the search for `LOOP` counts the `DO` in any later `EXIT DO` as a new loop. Execution then never reaches the code after the loop.
-4. **`EXIT FOR` with `NEXT var`.** In `FOR ... IN` and `FOR EACH` loops, `EXIT FOR` leaves the variable name after `NEXT` unconsumed, which causes `Invalid assignment statement`. Use a plain `NEXT`.
+1. **Nested loops** (fixed). Skipping to the end of a loop used to count every `FOR`, `WHILE` and `DO` token. As a result:
+   - `FOR EACH` inside `FOR ... TO` failed with `Unexpected 'NEXT'`.
+   - `DO WHILE` or `LOOP WHILE` inside `WHILE ... WEND` silently skipped the rest of the program.
+   - A second `EXIT DO` or `EXIT LOOP` in a loop body jumped to the wrong place.
+
+   Only keywords that begin a statement now open a block, and `NEXT` closes `FOR`, `FOR EACH` and `FOR ... IN` alike.
+2. *(merged into item 1)*
+3. *(merged into item 1)*
+4. **`EXIT FOR` with `NEXT var`** (fixed). In `FOR ... IN` and `FOR EACH` loops, the variable name after `NEXT` used to be left unconsumed, which caused `Invalid assignment statement`.
 5. **Labels.** Any `identifier :` sequence is recorded as a label, even mid-line, for example `a = b : ...` or `GOSUB s : ...`. Duplicates prevent the program from loading.
 6. **`GOTO` out of a loop** leaves the loop active, which eventually causes `Expected token NEXT but got None`.
 7. **Return value case.** The return value must be assigned with the exact case used in the `FUNCTION` line. Otherwise the function returns `0` or `""`. This happens because assignment matches names exactly while function calls do not.
 8. **Functions are not available in `RUN` or `CHAIN` targets, or in the REPL.** `RUN`, `CHAIN` and the REPL never scan the new source for `FUNCTION` definitions, so calls fail with `Unknown function`. `EVAL` strings can use functions only if they define them themselves.
 9. **`RUN` arguments** are converted with Python `str()`, so `42` arrives as `"42.0"`.
 10. **`END` inside a `RUN` child or an `EVAL` string** terminates the whole process, because `END` calls `sys.exit` and is not caught.
-11. **`INCLUDE` does not work.** The preprocessor wraps included code in marker lines that begin with `'`. The lexer reads `'` as the start of a single-quoted string, not a comment, so any program that uses `INCLUDE` fails with `Unknown statement: SINGLE_Q_STRING`. A missing include file is meant to become `ERROR 2, "INCLUDE file not found..."`.
+11. **`INCLUDE`** (fixed): it used to fail for every file that existed, because its marker lines began with `'`. See [1.4.1](01-language-fundamentals.md#141-include).
 12. **`RECNO` numbering is inconsistent.** In `FOR ... IN CSV` it starts at 2 even without a header row. In `JSONL` it counts blank lines. It is deleted at the end of every loop, which also hides the outer loop's `RECNO` when loops are nested.
 13. **Exit status is always 0** after a runtime error, and runtime errors go only to stderr. `EXIT FUNCTION` outside a function gives an empty `Runtime Error:` message.
 14. **`HELP` prints the raw token tuple** before every entry, for example `('GOSUB', 'GOSUB', 5)`. This looks like leftover debug output.
