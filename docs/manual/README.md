@@ -37,6 +37,20 @@ dbbasic script.bas [args...]                  # compiled build (see compilenuitk
 
 Running with no script starts the interactive REPL. Type `HELP` there for the built-in help topics. See [2.17 Running DbBasic](02-control-flow-and-procedures.md#217-running-dbbasic).
 
+## Running the tests
+
+`tests/run_tests.py` runs each test script in its own temporary copy of its folder and reports PASS, FAIL or SKIP. A script passes when it exits with status 0; untrapped runtime errors exit with 1. The runner itself exits with 1 if anything failed.
+
+```bash
+python3 tests/run_tests.py                       # tests/ with src/dbbasic.py
+python3 tests/run_tests.py --examples            # also examples/
+python3 tests/run_tests.py --examples --offline  # skip scripts that download data
+python3 tests/run_tests.py --binary              # test the compiled dbbasic on PATH
+python3 tests/run_tests.py -v while zip          # selected scripts, full output
+```
+
+Interactive scripts (forms, `GRIDEDIT`, `BROWSER`) are always skipped. Scripts that read `c:\ddg\...` data run only where that data exists.
+
 ## Requirements
 
 Python 3.10+ with: `requests`, `duckdb`, `xlrd3`, `openpyxl`, `beautifulsoup4`, `xmltodict`, `pyarrow`.
