@@ -1244,6 +1244,79 @@ class Lexer:
             #print("DEBUG:", tokens)
         return tokens
         
+_ONES = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
+         'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
+         'eighteen', 'nineteen']
+_TENS = ['', '', 'twenty', 'thirty', 'forty', 'fifty', 'sixty', 'seventy', 'eighty', 'ninety']
+_SCALES = ['', 'thousand', 'million', 'billion', 'trillion', 'quadrillion', 'quintillion']
+
+
+def _whole_number_words(n):
+    """English words for a non-negative integer, e.g. 1234 -> 'one thousand two hundred thirty-four'."""
+    if n < 20:
+        return _ONES[n]
+    groups = []
+    while n > 0:
+        groups.append(n % 1000)
+        n //= 1000
+    if len(groups) > len(_SCALES):
+        raise ValueError("number too large")
+    words = []
+    for scale_index in range(len(groups) - 1, -1, -1):
+        group = groups[scale_index]
+        if group == 0:
+            continue
+        hundreds, rest = divmod(group, 100)
+        part = []
+        if hundreds:
+            part.append(f"{_ONES[hundreds]} hundred")
+        if rest >= 20:
+            part.append(_TENS[rest // 10] + (f"-{_ONES[rest % 10]}" if rest % 10 else ''))
+        elif rest:
+            part.append(_ONES[rest])
+        if _SCALES[scale_index]:
+            part.append(_SCALES[scale_index])
+        words.append(' '.join(part))
+    return ' '.join(words)
+
+
+def number_to_words(value):
+    """CARDINAL$: 12 -> 'twelve', -5 -> 'negative five', 3.14 -> 'three point one four'."""
+    from decimal import Decimal
+    text = format(Decimal(str(value)), 'f') if not isinstance(value, str) else format(Decimal(value.strip()), 'f')
+    negative = text.startswith('-')
+    text = text.lstrip('-')
+    whole, _, fraction = text.partition('.')
+    fraction = fraction.rstrip('0')
+    words = _whole_number_words(int(whole or '0'))
+    if fraction:
+        words += ' point ' + ' '.join(_ONES[int(d)] for d in fraction)
+    if negative and (int(whole or '0') or fraction):
+        words = 'negative ' + words
+    return words
+
+
+_ORDINAL_EXCEPTIONS = {'one': 'first', 'two': 'second', 'three': 'third', 'five': 'fifth',
+                       'eight': 'eighth', 'nine': 'ninth', 'twelve': 'twelfth'}
+
+
+def number_to_ordinal_words(value):
+    """ORDINAL$: 1 -> 'first', 21 -> 'twenty-first', 100 -> 'one hundredth'."""
+    number = float(value) if not isinstance(value, str) else float(value.strip())
+    if number != int(number):
+        raise ValueError("not a whole number")
+    words = number_to_words(int(number))
+    head, sep, last = words.rpartition(' ')
+    prefix, hyphen, last = last.rpartition('-')
+    if last in _ORDINAL_EXCEPTIONS:
+        last = _ORDINAL_EXCEPTIONS[last]
+    elif last.endswith('y'):
+        last = last[:-1] + 'ieth'
+    else:
+        last += 'th'
+    return head + sep + prefix + hyphen + last
+
+
 class Formatter:
     @staticmethod
     def format(format_string, values):
@@ -1259,14 +1332,27 @@ class Formatter:
                 match = mask_regex.match(format_string, fmt_idx)
                 if match:
                     mask = match.group(0)
-                    output += Formatter._format_value(values[val_idx], mask)
-                    val_idx += 1; fmt_idx += len(mask)
+                    value = values[val_idx]
+                    end = fmt_idx + len(mask)
+                    # A numeric field followed by % shows the value as a percentage
+                    if end < len(format_string) and format_string[end] == '%' and isinstance(value, (int, float)):
+                        value = value * 100
+                    output += Formatter._format_value(value, mask)
+                    val_idx += 1; fmt_idx = end
                 else:
                     output += char
                     fmt_idx += 1
             else:
                 output += char
                 fmt_idx += 1
+
+        # After the last value, keep the literal text up to the next field (e.g. "%" or " units")
+        while fmt_idx < len(format_string):
+            char = format_string[fmt_idx]
+            if char in '#09*!&\\$<>^':
+                break
+            output += char
+            fmt_idx += 1
             
         return output
     
@@ -2511,7 +2597,7 @@ class Interpreter:
     # compilenuitka.sh checks this list against the source before building.
     BUILTIN_FN_NAMES = frozenset({
         'ABS', 'ARRAY', 'ARRAY_JOIN', 'ARRAY_SIZE', 'ASC', 'ATAN2', 'ATN', 'BASENAME$', 'CEIL',
-        'CENTER$', 'CHR$', 'COMMAND$', 'CONTAINS', 'COS', 'CURDIR$', 'DATE$', 'DATEADD',
+        'CARDINAL$', 'CENTER$', 'CHR$', 'COMMAND$', 'CONTAINS', 'COS', 'CURDIR$', 'DATE$', 'DATEADD',
         'DATEDIFF', 'DATESERIAL', 'DAY', 'DAYSINMONTH', 'DAYSINYEAR', 'DEGREES', 'DISKSPACE',
         'ENDSWITH', 'ENVIRON$', 'EOF', 'EXP', 'EXTRACT$', 'FILEATTR', 'FILESIZE', 'FILETIME',
         'FILE_EXISTS', 'FILTER', 'FIND', 'FIX', 'FLOOR', 'FORMAT$', 'FORMATDATE$', 'FREEFILE',
@@ -2520,7 +2606,7 @@ class Interpreter:
         'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
         'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
         'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
-        'OCT$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
+        'OCT$', 'ORDINAL$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
         'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
         'RTRIM$', 'SECOND', 'SGN', 'SIN', 'SOUNDEX$', 'SPACE$', 'SPLIT', 'SQR', 'STARTSWITH',
         'STR$', 'STRIPHTML$', 'TAN', 'TIME$', 'TRIM$', 'TYPENAME$', 'UBOUND', 'UCASE$',
@@ -4132,6 +4218,8 @@ class Interpreter:
             try:
                 month = int(args[0])
                 year = int(args[1])
+                if month > 12 and 1 <= year <= 12:
+                    month, year = year, month   # also accept (year, month)
                 # calendar.monthrange returns (weekday of 1st day, num_days)
                 num_days = calendar.monthrange(year, month)[1]
                 return float(num_days)
@@ -4175,6 +4263,20 @@ class Interpreter:
                 return calendar.calendar(year)
             except (ValueError, TypeError):
                 self._error("Invalid year provided to YEARCAL$.")
+        elif name == 'CARDINAL$':
+            if len(args) != 1:
+                self._error("CARDINAL$ requires 1 argument: number.")
+            try:
+                return number_to_words(args[0])
+            except (ValueError, TypeError, ArithmeticError):
+                self._error(f"CARDINAL$ requires a number, got: {args[0]}")
+        elif name == 'ORDINAL$':
+            if len(args) != 1:
+                self._error("ORDINAL$ requires 1 argument: whole number.")
+            try:
+                return number_to_ordinal_words(args[0])
+            except (ValueError, TypeError, ArithmeticError):
+                self._error(f"ORDINAL$ requires a whole number, got: {args[0]}")
         elif name == 'FORMAT$':
             if len(args) != 2:
                 self._error("FORMAT$ requires 2 arguments: value, mask$.")
@@ -4211,7 +4313,10 @@ class Interpreter:
         elif name == 'HOUR' or name == 'MINUTE' or name == 'SECOND':
             if len(args) != 1:
                 self._error(f"{name} requires 1 time string argument.")
-            time_str = str(args[0])
+            time_str = str(args[0]).strip()
+            # For a datetime ("2024-07-04 13:45:10" or "2024-07-04T13:45:10") use the time part
+            if ' ' in time_str or 'T' in time_str:
+                time_str = re.split(r'[ T]', time_str)[-1]
             parts = time_str.split(':')
             try:
                 if name == 'HOUR':
@@ -4253,7 +4358,7 @@ class Interpreter:
                 if not 1 <= day_num <= 7:
                     self._error("Day number must be between 1 (Sunday) and 7 (Saturday).")
                 # Map from (Sun=1...Sat=7) to Python's calendar index (Mon=0...Sun=6)
-                python_index = (day_num % 7) - 1 if day_num < 7 else 6
+                python_index = (day_num + 5) % 7
                 return calendar.day_name[python_index]
             except (ValueError, TypeError):
                 self._error("Invalid day number for WEEKDAYNAME$.")

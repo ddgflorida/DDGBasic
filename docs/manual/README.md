@@ -10,7 +10,7 @@ Where the code and the older documents (`README.md`, `docs/DbBasicCommandRerence
 |---|---------|--------|
 | 1 | [Language Fundamentals](01-language-fundamentals.md) | Running programs, source format, comments, `INCLUDE`, line continuation, `ECHO`, the lexer, data types, variables, `LET`, `DIM`/`REDIM`, arrays, hashes, array statements (`PUSH`, `POP`, `SHIFT`, `UNSHIFT`, `SPLICE`, `REVERSE`, `SORT`), operators, truth values, case sensitivity |
 | 2 | [Control Flow, Procedures & Program Control](02-control-flow-and-procedures.md) | `IF`, `FOR`/`NEXT`, the `FOR ... IN` family, `FOR EACH`, `WHILE`, `DO`/`LOOP`, `EXIT`, labels, `GOTO`, `GOSUB`, `FUNCTION`, functions as arguments, error handling (`ON ERROR`, `RESUME`, `ERROR`), `END`/`RUN`/`CHAIN`/`EVAL`/`EXECUTE`/`CLEAR`, debugging, command line, REPL and `HELP` |
-| 3 | [Built-in Functions](03-built-in-functions.md) | All 122 built-in functions with an alphabetical index, `FORMAT$` masks, `FORMATDATE$` tokens, and the 15 extra functions available inside SQLite queries |
+| 3 | [Built-in Functions](03-built-in-functions.md) | All 124 built-in functions with an alphabetical index, `FORMAT$` masks, `FORMATDATE$` tokens, and the 15 extra functions available inside SQLite queries |
 | 4 | [Database, SQL & Output](04-database-sql-and-output.md) | `DATABASE`, embedded SQL, bind variables, subqueries, `FOR row IN (SELECT ...)`, `EXECUTE`, `SHOW`/`DESCRIBE`, SQL errors, every `SET` option, the output pipeline and its 11 formats, SQLite vs DuckDB, `PRINT`, `PRINT USING`, `WRITE` |
 | 5 | [Data Loading, Conversion & Analysis](05-data-loading-and-analysis.md) | `LOAD` (all 9 formats, destination modes, every `OPTIONS` key, `fields=`, transform/validate rules, `TRANSFORM`/`VALIDATE ... WITH`), `USING SCHEMA`, JSON/XML normalisation, file-to-file conversion, `PARSEJSON`, `FOR ... IN` file loops, `ANALYZE`, `UPGRADE` |
 | 6 | [Files, System, Network & User Interface](06-files-system-network-ui.md) | Sequential file I/O, `FILES`, file and directory statements, `ZIP`/`UNZIP`/`UNPACK`, `SHELL`, `BROWSER`, `BELL`, `INPUT`, `FETCH`, `SET EMAIL`/`EMAIL`, TUI forms (`FORM`, `OPENFORM`, `GRIDEDIT`), the web runner |
@@ -62,7 +62,7 @@ The web runner (`src/dbbasicweb.py`) imports `cgi`, so it needs Python 3.12 or e
 
 ## Known issues at a glance
 
-Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), blank lines in `LOAD CSV`, `;` inside SQL string literals, keyword joining inside strings (`"TO FILE"` used to print as `TOFILE`), `END TRANSACTION;`, user-defined `FUNCTION`s in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL, `ECHO` rewriting lines such as `echo_count = 5`, `PRINT #n, USING` crashing or writing no line ending, SQL operators such as `||` failing with `Unexpected character`, and `:` inside SQL literals or DuckDB `::` casts being read as bind variables. These are marked *(fixed)* in the chapter notes.
+Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), blank lines in `LOAD CSV`, `;` inside SQL string literals, keyword joining inside strings (`"TO FILE"` used to print as `TOFILE`), `END TRANSACTION;`, user-defined `FUNCTION`s in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL, `ECHO` rewriting lines such as `echo_count = 5`, `PRINT #n, USING` crashing or writing no line ending, SQL operators such as `||` failing with `Unexpected character`, `:` inside SQL literals or DuckDB `::` casts being read as bind variables, and the function bugs: `CARDINAL$`/`ORDINAL$` missing, `WEEKDAYNAME$` off by one, `HOUR` of a datetime, `DAYSINMONTH` argument order, and `FORMAT$`/`PRINT USING` dropping `%` and trailing text. These are marked *(fixed)* in the chapter notes.
 
 The issues below were found while writing the manual. They are the most likely to catch you out; each chapter's final section has the full list.
 
@@ -78,12 +78,6 @@ The issues below were found while writing the manual. They are the most likely t
 
 **SQL**
 - `SET NULL_HANDLING` has no effect, and unknown `SET` options are not rejected.
-
-**Functions**
-- `CARDINAL$` and `ORDINAL$` (listed in `README.md`) do not exist.
-- `DAYSINMONTH` takes `(month, year)`.
-- `WEEKDAYNAME$(1)` is Monday, while `WEEKDAY` counts 1 as Sunday.
-- `FORMAT$` has no `%` support.
 
 **Example and test scripts**
 - The scripts in `tests/` and `examples/` have been updated to current syntax and run cleanly. The exceptions:

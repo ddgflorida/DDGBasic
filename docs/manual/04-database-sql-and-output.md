@@ -1285,7 +1285,8 @@ The mask is any string expression. Values are separated by **commas**. A trailin
 
 - Literal characters are copied to the output.
 - When the walker reaches a character from `# 0 9 * ! & \ $ < > ^`, it tries to match a field. The next value is formatted into that field.
-- **Formatting stops when the values run out.** Any literal text after the last field used is **not** printed, and a mask with no values prints an empty line.
+- **After the last value**, literal text is copied until the next field character, so `PRINT USING "Total: ### units"; 42` prints `Total:  42 units`. A mask with no values prints an empty line.
+- **A numeric field directly followed by `%`** shows the value multiplied by 100: `PRINT USING "##.#%"; 0.256` prints `25.6%`.
 - If there are more values than fields, the extra values are ignored. The mask is not reused.
 
 **Numeric fields.** A field is a run of the characters `$ * # 0 9 , space`, optionally followed by `.` and more `#`/`0` characters, optionally followed by `^^^^`.
@@ -1342,30 +1343,30 @@ PRINT " <- same line"
 ```
 
 ```
-[1234.57
-[  88.00
-[ -78.90
-[00012.30
-[ 1,234,567.89
-[**42.50
-[**$9.00
-[*-$9.00
-[$1,500.50
-[  $25.00
-[1.23E+05
-[7.89E-4
-[12345.68
-[    2
-[H
-[Hi      
-[Hello 
-[    Hi
-[  Hi  
+[1234.57]
+[  88.00]
+[ -78.90]
+[00012.30]
+[ 1,234,567.89]
+[**42.50]
+[**$9.00]
+[*-$9.00]
+[$1,500.50]
+[  $25.00]
+[1.23E+05]
+[7.89E-4]
+[12345.68]
+[    2]
+[H]
+[Hi      ]
+[Hello ]
+[    Hi]
+[  Hi  ]
 Item: Widget  Qty: 10  Price: $49.99
 a= 1 b= 2 <- same line
 ```
 
-None of the bracketed lines has a closing `]`, because literal text after the last value is dropped. A mask such as `"## ##"` is a **single** five-character field, because space is a numeric-field character. Separate numeric fields with some other literal character.
+Literal text after the last value (the closing `]` here) is printed up to the next field character. A mask such as `"## ##"` is a **single** five-character field, because space is a numeric-field character. Separate numeric fields with some other literal character.
 
 **File output:** `PRINT #n, USING mask; values` writes the same text as the console form, followed by the system line ending (`os.linesep`). A trailing `;` suppresses the line ending.
 
@@ -1466,7 +1467,6 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 **PRINT and PRINT USING**
 
 22. **`PRINT USING` has several gaps:**
-    - It drops literal text after the last value used.
     - It prints an empty line when there are no values.
     - It does not reuse the mask for extra values.
     - It treats spaces as part of numeric fields.

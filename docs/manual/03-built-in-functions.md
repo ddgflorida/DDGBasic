@@ -1,6 +1,6 @@
 # Chapter 3: Built-in Functions
 
-This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **122 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQLite queries; these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
+This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **124 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQLite queries; these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
 
 The examples in this chapter were run against the interpreter, and the output shown is what it printed. Output from functions that depend on the clock, the file system or the environment (`DATE$`, `FILETIME`, `CURDIR$` and so on) will differ on your machine.
 
@@ -72,6 +72,7 @@ Related chapters:
 | [`ATAN2`](#fn-atan2) | Math | Number | Arctangent of y/x, quadrant-aware |
 | [`ATN`](#fn-atn) | Math | Number | Arctangent |
 | [`BASENAME$`](#fn-basename-str) | File | String | File-name part of a path |
+| [`CARDINAL$`](#fn-cardinal-str) | String | String | Number in English words |
 | [`CEIL`](#fn-ceil) | Math | Number | Round up |
 | [`CENTER$`](#fn-center-str) | String | String | Centre text in a field |
 | [`CHR$`](#fn-chr-str) | String | String | Character for a code point |
@@ -144,6 +145,7 @@ Related chapters:
 | [`NOW`](#fn-now) | Date | String | Current date and time |
 | [`NVL`](#fn-nvl) | Utility | Any | First non-empty argument |
 | [`OCT$`](#fn-oct-str) | String | String | Octal text |
+| [`ORDINAL$`](#fn-ordinal-str) | String | String | Ordinal in English words |
 | [`PADLEFT$`](#fn-padleft-str) | String | String | Left-pad to a width |
 | [`PADRIGHT$`](#fn-padright-str) | String | String | Right-pad to a width |
 | [`PARSEJSON`](#fn-parsejson) | JSON | Hash or Array | Parse JSON text |
@@ -274,6 +276,27 @@ PRINT "[" + PROPER$("hello wORLD o'neil") + "]"
 ```
 ```
 [Hello World O'Neil]
+```
+
+<a id="fn-cardinal-str"></a>
+### CARDINAL$
+
+`CARDINAL$(number)` returns a **String**: the number in English words. Negative numbers start with `negative`. Digits after the decimal point are spelled one at a time after `point`. Numbers up to the quintillions are supported. A non-numeric argument gives `CARDINAL$ requires a number`.
+
+<a id="fn-ordinal-str"></a>
+### ORDINAL$
+
+`ORDINAL$(number)` returns a **String**: the ordinal form of a whole number in English words (`first`, `twenty-first`, `one hundredth`). A number with a fractional part gives `ORDINAL$ requires a whole number`.
+
+```basic
+PRINT CARDINAL$(1234)
+PRINT CARDINAL$(-5); " | "; CARDINAL$(3.14); " | "; CARDINAL$(1000000)
+PRINT ORDINAL$(1); " "; ORDINAL$(12); " "; ORDINAL$(21); " "; ORDINAL$(40); " "; ORDINAL$(100); " "; ORDINAL$(1001)
+```
+```
+one thousand two hundred thirty-four
+negative five | three point one four | one million
+first twelfth twenty-first fortieth one hundredth one thousand first
 ```
 
 <a id="fn-center-str"></a>
@@ -598,11 +621,13 @@ Formats a single number or string using a `PRINT USING`-style mask. Exactly two 
 PRINT "[" + FORMAT$(1234.567, "#,##0.00") + "]"
 PRINT "[" + FORMAT$(1234.5, "$#,##0.00") + "]"
 PRINT "[" + FORMAT$(42, "00000") + "]"
+PRINT "[" + FORMAT$(0.256, "0.00%") + "][" + FORMAT$(42, "### units") + "]"
 ```
 ```
 [1,234.57]
 [$1,234.50]
 [00042]
+[25.60%][ 42 units]
 ```
 
 <a id="fn-soundex-str"></a>
@@ -1013,16 +1038,16 @@ PRINT WEEKDAY("2024-07-06")
 
 `SECOND(time$)` returns a **Number**.
 
-These functions split the argument on `:` and return the first, second or third part as a number. A missing or non-numeric part gives 0. **Edge case:** for a full `YYYY-MM-DD HH:MM:SS` string, `MINUTE` and `SECOND` work, but `HOUR` returns 0 because the first part is `"2024-07-04 14"`. Pass `MID$(dt$, 12)` to `HOUR` instead.
+These functions take a time (`HH:MM:SS`) or a datetime (`YYYY-MM-DD HH:MM:SS` or `YYYY-MM-DDTHH:MM:SS`). For a datetime they use the time part. They split it on `:` and return the first, second or third part as a number. A missing or non-numeric part gives 0.
 
 ```basic
 PRINT HOUR("14:35:09"); MINUTE("14:35:09"); SECOND("14:35:09")
 PRINT HOUR("2024-07-04 14:35:09")
-PRINT MINUTE("2024-07-04 14:35:09")
+PRINT MINUTE("2024-07-04T14:35:09")
 ```
 ```
  14 35 9
- 0
+ 14
  35
 ```
 
@@ -1063,15 +1088,15 @@ PRINT ISDATE("2024-07-04"); ISDATE("07/04/2024"); ISDATE("2024-02-30"); ISDATE("
 <a id="fn-daysinmonth"></a>
 ### DAYSINMONTH
 
-`DAYSINMONTH(month, year)` returns a **Number**. **The month comes first.** Note that `MONTHCAL$` uses the opposite order (year, month).
+`DAYSINMONTH(month, year)` returns a **Number**. The documented order is month first, but `DAYSINMONTH(year, month)` also works: if the first argument is greater than 12 and the second is 1 to 12, they are swapped. `MONTHCAL$` takes (year, month).
 
 ```basic
-PRINT DAYSINMONTH(2, 2024); DAYSINMONTH(2, 2023)
+PRINT DAYSINMONTH(2, 2024); DAYSINMONTH(2, 2023); DAYSINMONTH(2024, 2)
 PRINT DAYSINYEAR(2024); DAYSINYEAR(1900)
 PRINT ISLEAP(2000); ISLEAP(1900)
 ```
 ```
- 29 28
+ 29 28 29
  366 365
 -1 0
 ```
@@ -1086,15 +1111,17 @@ PRINT ISLEAP(2000); ISLEAP(1900)
 
 `WEEKDAYNAME$(n)` returns a **String**: an English weekday name. `n` must be 1 to 7.
 
-> **Warning:** the error message and the README say that 1 = Sunday, but the implementation actually returns **1 = Monday, ..., 6 = Saturday, 7 = Sunday** (ISO numbering). This does not match `WEEKDAY`, so `WEEKDAYNAME$(WEEKDAY(d$))` gives the name of the *following* day. For a correct name, use `FORMATDATE$(d$, "%A")` (see [3.14](#314-formatdate-mask-tokens)).
+The numbering matches `WEEKDAY`: **1 = Sunday, 2 = Monday, ..., 7 = Saturday**, so `WEEKDAYNAME$(WEEKDAY(d$))` gives the name of the day `d$` falls on.
 
 ```basic
 PRINT "[" + MONTHNAME$(7) + "]"
 PRINT "[" + WEEKDAYNAME$(1) + "][" + WEEKDAYNAME$(5) + "][" + WEEKDAYNAME$(7) + "]"
+PRINT WEEKDAYNAME$(WEEKDAY("2024-07-04"))
 ```
 ```
 [July]
-[Monday][Friday][Sunday]
+[Sunday][Thursday][Saturday]
+Thursday
 ```
 
 <a id="fn-monthcal-str"></a>
@@ -1690,7 +1717,8 @@ PRINT "[" + NVL("first", "second") + "]"
 
 1. Literal characters are copied to the output until a character that can start a mask field is found. These characters are `# 0 9 * $ ! & \ < > ^`.
 2. The longest valid field at that point is matched and used to format the value.
-3. **After the value has been formatted, formatting stops. Any mask text after the field is discarded.** This means that `FORMAT$(0.256, "0.00%")` returns `"0.26"`. The `%` is dropped, and the value is not multiplied by 100.
+3. After the value has been formatted, literal mask text is copied until the next field character, so `FORMAT$(42, "### units")` returns `" 42 units"`.
+4. A numeric field directly followed by `%` formats the value multiplied by 100: `FORMAT$(0.256, "0.00%")` returns `"25.60%"`.
 
 ### Numeric fields
 
@@ -1921,17 +1949,17 @@ This section lists the places where `README.md` (function table) or `docs/DbBasi
 
 ### Documented but not implemented
 
-1. **`CARDINAL$(number)`** and **`ORDINAL$(number)`** are listed in the README function table, and `CARDINAL$` is used in the README's backtick-interpolation example. Neither exists in the interpreter; calling them gives `Unknown function`.
+1. **`CARDINAL$`** and **`ORDINAL$`** (fixed): listed in the README table but missing from the interpreter. Both are now implemented (see [CARDINAL$](#fn-cardinal-str)).
 
 ### Documented with the wrong signature or behaviour
 
 2. **`EXTRACT$`**: the README gives `EXTRACT$(string$, before$, after$)` ("substring between before$ and after$"). The implementation is `EXTRACT$(s$, position [, delimiter$])` and returns the Nth delimited field.
-3. **`DAYSINMONTH`**: the README gives `(year, month)`, but the code takes `(month, year)`. With the README order, for example `DAYSINMONTH(2024, 2)`, you get an error.
+3. **`DAYSINMONTH`** (fixed): the README gives `(year, month)` but the code took `(month, year)`. Both orders now work.
 4. **`INSTRREV`**: the README gives `INSTRREV([start_pos,] haystack$, needle$)`. The actual signature is `INSTRREV(haystack$, needle$ [, start])`, where `start` limits the end of the search.
 5. **`TYPENAME$`**: the README says it returns `"NUMBER"`. It actually returns `"FLOAT"` for all numbers, and `"UNKNOWN"` for other types.
-6. **`WEEKDAYNAME$`**: the README and the error message say 1-7 is Sunday-Saturday. The mapping in the code makes 1 = Monday and 7 = Sunday, so it does not match `WEEKDAY` (1 = Sunday).
-7. **`FORMAT$`**: the README gives `"0.00%"` as an example mask. There is no percent support. Text after the first field, including `%`, is discarded, and the value is not scaled by 100.
-8. **`HOUR`, `MINUTE`, `SECOND`**: the README says they read "a time/datetime string". `HOUR` returns 0 for a `YYYY-MM-DD HH:MM:SS` datetime; only `MINUTE` and `SECOND` work with that format.
+6. **`WEEKDAYNAME$`** (fixed): it mapped 1 to Monday, not Sunday, so it did not match `WEEKDAY`. It now uses 1 = Sunday ... 7 = Saturday.
+7. **`FORMAT$`** (fixed): it had no percent support and dropped any text after the field. A numeric field followed by `%` now scales by 100, and trailing literal text is kept (3.13).
+8. **`HOUR`, `MINUTE`, `SECOND`** (fixed): `HOUR` returned 0 for a `YYYY-MM-DD HH:MM:SS` datetime. All three now use the time part of a datetime.
 9. **`HASH_DELETE` and `HASH_RENAME`**: `DbBasicFunctionReference.md` shows them as statements (`HASH_DELETE(h, "city")`). That form is a syntax error; you must use the result, for example `r = HASH_DELETE(h, "city")`. `HASH_DELETE` always returns 0, so it cannot tell you whether the key existed. Use `HASH_EXISTS` first.
 10. **`NVL(value, default)`**: the README describes it as "non-null/non-empty". It actually takes any number of arguments (at least two) and also treats `0` as empty.
 11. **`ARRAY_JOIN`**: the code contains a default delimiter of `","`, but it is never used, because the function requires two or three arguments. Any third argument is ignored.
@@ -1956,4 +1984,4 @@ This section lists the places where `README.md` (function table) or `docs/DbBasi
 24. **`FORMAT$` treats the literal characters `0`, `9`, `$`, `*`, `!` and `&` in the mask as field markers**, and a negative exponent in `^^^^` output is not zero-padded (`E-4`).
 25. **Argument-count checking is uneven.** Some of the classic functions (`LEFT$`, `MID$`, `INT`, `SIN` and others) do not validate their arguments, so mistakes show up as Python errors (`list index out of range`, `must be real number, not str`).
 26. **`HASH_JOIN`'s source code contains an unreachable duplicate block** after its `return`. It is harmless.
-27. **Function names usable as references** for `FILTER`, `MAP`, `REDUCE` and `SORT WITH` are found by scanning the source code of `_execute_function` at run time (`_get_builtin_fn_names`). A compiled (Nuitka) build cannot read its source, so it uses the static list `Interpreter.BUILTIN_FN_NAMES`, which contains all 122 built-ins. `compilenuitka.sh` checks that list against the source before building and stops if they differ, so add new functions to it.
+27. **Function names usable as references** for `FILTER`, `MAP`, `REDUCE` and `SORT WITH` are found by scanning the source code of `_execute_function` at run time (`_get_builtin_fn_names`). A compiled (Nuitka) build cannot read its source, so it uses the static list `Interpreter.BUILTIN_FN_NAMES`, which contains all 124 built-ins. `compilenuitka.sh` checks that list against the source before building and stops if they differ, so add new functions to it.
