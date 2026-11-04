@@ -1,0 +1,1137 @@
+# Chapter 6: Files, System, Network & User Interface
+
+This chapter covers the statements DbBasic uses to work with things outside the interpreter: text files, directories, archives, the operating-system shell, the console, HTTP services, e-mail, terminal (TUI) forms, and the built-in web runner.
+
+Everything here is taken from the interpreter source (`src/dbbasic.py`, `src/tui_runner.py`, `src/dbbasicweb.py`). Where an example shows output, the script was run against the current interpreter. Statements that need a terminal UI, a GUI browser or a live mail server (`BROWSER`, `BELL`, `OPENFORM`, `GRIDEDIT`, sending with `EMAIL`) are described from the source only.
+
+Related material in other chapters:
+
+* File functions such as `FILE_EXISTS`, `FILESIZE`, `CURDIR$` and `ENVIRON$`: **Chapter 3, Built-in Functions**.
+* `ON ERROR GOTO`, `ERR` and `ERRMSG$`: **Chapter 2, Control Flow & Procedures**.
+* `PRINT` to the console, `PRINT USING`, `SET OUTPUT`, `SET SQL_FATAL_ERRORS`: **Chapter 4, Database, SQL & Output**.
+* `LOAD`, `FOR ... IN CSV/JSON/JSONL/TEXT` loops and `ANALYZE`: **Chapter 5, Data Loading & Analysis**.
+
+## Contents
+
+1. [Sequential file I/O](#61-sequential-file-io)
+   * [OPEN](#open) · [File handles and FREEFILE](#file-handles-and-freefile) · [PRINT #](#print-) · [WRITE / WRITE #](#write--write-) · [LINE INPUT #](#line-input-) · [EOF()](#eof) · [CLOSE](#close) · [READ FILE](#read-file) · [Complete example](#complete-sequential-file-example)
+2. [File and directory management](#62-file-and-directory-management)
+   * [FILES](#files) · [FOR ... IN FILES()](#for--in-files) · [COPY ... AS](#copy--as) · [NAME ... AS](#name--as) · [KILL](#kill) · [MKDIR](#mkdir) · [CHDIR](#chdir) · [RMDIR](#rmdir) · [Error codes](#error-codes-set-by-file-statements)
+3. [Archives and hash unpacking](#63-archives-and-hash-unpacking)
+   * [ZIP](#zip) · [UNZIP](#unzip) · [UNPACK](#unpack)
+4. [System and console](#64-system-and-console)
+   * [SHELL](#shell) · [BROWSER](#browser) · [BELL](#bell) · [INPUT](#input)
+5. [HTTP: FETCH](#65-http-fetch)
+6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
+7. [TUI forms](#67-tui-forms)
+   * [Requirements](#requirements) · [FORM ... ENDFORM](#form--endform) · [Form elements](#form-elements) · [FIELD attributes and validation](#field-attributes-and-validation) · [BUTTON and actions](#button-and-actions) · [OPENFORM](#openform) · [Returned values](#values-returned-by-openform) · [GRIDEDIT](#gridedit)
+8. [The web runner (dbbasicweb.py)](#68-the-web-runner-dbbasicwebpy)
+9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
+
+---
+
+## 6.1 Sequential file I/O
+
+DbBasic uses the classic BASIC model: you open a file under a numbered handle (`#1`, `#2`, ...), read or write it line by line, then close it.
+
+### OPEN
+
+```
+OPEN filename FOR {INPUT | OUTPUT | APPEND} AS #n [WITH OPTIONS "key=value key=value ..."]
+```
+
+| Part | Meaning |
+|---|---|
+| `filename` | Any string expression. It is passed to the OS unchanged; `~` is **not** expanded here, unlike in the file-management statements. |
+| `INPUT` | Open an existing file for reading (Python mode `r`). |
+| `OUTPUT` | Create the file, or truncate it if it exists (mode `w`). |
+| `APPEND` | Open for writing at the end, creating the file if needed (mode `a`). |
+| `#n` | Any numeric expression. It is truncated to an integer. |
+| `WITH OPTIONS` | A string of space-separated `key=value` pairs. They are stored with the handle and passed to Python's `csv.writer` by `WRITE #n` (see below). Values are always strings, so only string-valued options such as `delimiter=;` or `quotechar='` are useful. A part without `=` raises a Python error. |
+
+Behaviour:
+
+* Files are always opened as UTF-8 text with `newline=''`, which means no newline translation happens.
+* `OPEN` clears `ERR`/`ERRMSG$` first. If the file is missing (`INPUT` mode), `ERR` = 2 and `ERRMSG$` holds the OS message, and the Python `FileNotFoundError` is raised. You can catch it with `ON ERROR GOTO`.
+* Opening a handle number that is already in use is a runtime error: `File #1 is already open.`
+* Modes other than the three keywords (for example `BINARY` or `RANDOM`) give `Expected file mode`.
+
+```basic
+ON ERROR GOTO h
+OPEN "nope.txt" FOR INPUT AS #1
+PRINT "not here"
+END
+h:
+PRINT "ERR="; ERR; " MSG="; ERRMSG$
+```
+```
+ERR= 2 MSG=[Errno 2] No such file or directory: 'nope.txt'
+```
+
+### File handles and FREEFILE
+
+Open files are held in a table keyed by integer handle number. `FREEFILE` (written without parentheses, or as `FREEFILE()`) returns the lowest positive handle number that is not in use, starting at 1. It takes no arguments.
+
+```basic
+n = FREEFILE
+OPEN "out.txt" FOR OUTPUT AS #n
+```
+
+Handles are not closed automatically when an error occurs. Use `CLOSE` with no argument to close every open handle.
+
+### PRINT #
+
+```
+PRINT #n, expression [{; | ,} expression ...] [;]
+PRINT #n, USING format$; value [, value ...] [;]
+```
+
+This works like console `PRINT` (Chapter 4) but writes to handle `n`:
+
+* `;` joins items with nothing between them and `,` puts a TAB between them.
+* A trailing `;` suppresses the line ending.
+* The line ending is `os.linesep`: `\n` on macOS/Linux and `\r\n` on Windows.
+* A hash is written as indented JSON. An array is written as `[a, b, ...]`.
+* Positive numbers get the usual leading space (`PRINT #1, 5` writes ` 5`).
+* Printing to a handle that is not open fails with a bare Python `KeyError` message (for example `Runtime Error: 5`).
+
+> **Bug:** `PRINT #n, USING ...` works only with a trailing semicolon. Without one, the interpreter fails with `cannot access local variable 'parts'`. See [section 6.9](#69-implementation-notes--discrepancies).
+
+```basic
+OPEN "out.txt" FOR OUTPUT AS #1
+PRINT #1, "Hello, World!"
+PRINT #1, "A"; "B", "C"
+PRINT #1, "no newline";
+PRINT #1, " - continued"
+CLOSE #1
+```
+Resulting file bytes: `Hello, World!\nAB\tC\nno newline - continued\n`
+
+### WRITE / WRITE #
+
+```
+WRITE [#n,] expression [, expression ...]
+```
+
+`WRITE` writes one CSV record using Python's `csv.writer`:
+
+* Values are separated by commas, or by the handle's `delimiter` option.
+* Strings are quoted only when they need to be (`QUOTE_MINIMAL`).
+* A float with no fractional part is written as an integer (`25.0` becomes `25`).
+* Without `#n` the record goes to standard output, and the trailing record terminator is stripped before printing.
+* With `#n`, the record ends with `csv.writer`'s default terminator, **`\r\n`**, on every platform.
+* If the handle is not open: `File #n not open.`
+
+```basic
+WRITE "Name", "Age", 3.5, 42
+OPEN "w.csv" FOR OUTPUT AS #1 WITH OPTIONS "delimiter=;"
+WRITE #1, "Alice", 30, "New; York"
+WRITE #1, "Bob", 25.0, "LA"
+CLOSE #1
+READ FILE "w.csv" INTO f$
+PRINT f$
+```
+```
+Name,Age,3.5,42
+Alice;30;"New; York"
+Bob;25;LA
+```
+
+### LINE INPUT #
+
+```
+LINE INPUT #n, var
+```
+
+Reads the next line from handle `n` and stores it in `var` after stripping trailing `\r`/`\n` characters.
+
+* The value is always stored as a string, even when the variable name has no `$` suffix.
+* At end of file it stores `""` and does not raise an error, so test `EOF(n)` before reading.
+* If the handle is not open, the error is a bare `KeyError` message.
+* There is no console form of `LINE INPUT`. Use `INPUT` for the console.
+
+### EOF()
+
+```
+EOF(n)
+```
+
+Returns `-1` (true) if handle `n` is at end of file and `0` otherwise. It works by reading one character and seeking back. Called with no argument it returns `0`. If the handle is not open: `File #n is not open.`
+
+### CLOSE
+
+```
+CLOSE #n      ' close one handle
+CLOSE         ' close all open handles
+```
+
+`CLOSE #n` on a handle that is not open is a runtime error (`File #3 is not open.`).
+
+### READ FILE
+
+```
+READ FILE filename INTO var$
+```
+
+Reads an entire UTF-8 text file into a string variable in one step.
+
+* The destination name must end in `$`. Otherwise the error is `Destination for READ FILE must be a string variable.`
+* A missing file sets `ERR` = 2 and raises `File not found: <name>`.
+
+### Complete sequential-file example
+
+```basic
+n = FREEFILE
+PRINT "FREEFILE ="; n
+OPEN "out.txt" FOR OUTPUT AS #n
+PRINT #n, "Hello, World!"
+PRINT #n, "A"; "B", "C"
+CLOSE #n
+OPEN "out.txt" FOR INPUT AS #1
+PRINT "Next FREEFILE ="; FREEFILE
+WHILE NOT EOF(1)
+  LINE INPUT #1, l$
+  PRINT "["; l$; "]"
+WEND
+CLOSE #1
+OPEN "out.txt" FOR APPEND AS #2
+PRINT #2, "appended"
+CLOSE
+READ FILE "out.txt" INTO all$
+PRINT all$
+```
+```
+FREEFILE = 1
+Next FREEFILE = 2
+[Hello, World!]
+[AB	C]
+Hello, World!
+AB	C
+appended
+```
+
+(`examples/openfile.bas` and `examples/write.bas` in the repository show the same patterns.)
+
+---
+
+## 6.2 File and directory management
+
+The statements in this section clear `ERR`/`ERRMSG$` before they run. Except where noted, they expand a leading `~` in paths.
+
+### FILES
+
+```
+FILES [pattern] [INTO array] [RECURSIVE] [WITH DETAILS] [WITH FULLPATH] [WITH FILESONLY | WITH FOLDERSONLY]
+```
+
+Lists directory entries. The result is printed to the console, or stored in an array when you use `INTO`. The modifiers can appear in any order after the pattern.
+
+| Part | Meaning |
+|---|---|
+| `pattern` | String expression. If it names a directory, every entry in it is listed (`dir/*`). Otherwise it is a glob pattern (`*`, `?`, `[...]`). If omitted, the default is `"."`. |
+| `INTO array` | Store the results instead of printing them. The array must already exist (`DIM arr AS ARRAY`), or the error is `'arr' is not a dimensioned array.` The array is **replaced** by a plain list that starts at index 0. |
+| `RECURSIVE` | Walk subdirectories (`os.walk`). The file-name part of the pattern is matched against file names in every directory. |
+| `WITH DETAILS` | Printed form: name, size (or `<DIR>`) and modification time, separated by TABs. The name is padded to 25 characters, or to 70 with `WITH FULLPATH` or `RECURSIVE`. With `INTO`: each element is a hash with keys `name`, `size`, `date` (`YYYY-MM-DD HH:MM:SS`) and `isdir` (-1/0). |
+| `WITH FULLPATH` | Report absolute paths instead of base names. |
+| `WITH FILESONLY` / `WITH FOLDERSONLY` | Filter to files only or directories only. |
+
+Behaviour notes:
+
+* The output is sorted. In recursive mode it is sorted per directory: subdirectories of a directory come first, then its matching files.
+* In **recursive** mode, directories are always included unless you add `WITH FILESONLY`, even when they do not match the pattern.
+* If nothing matches, the printed form prints `File not found`. The recursive printed form prints `Directory not found` for a missing start directory. With `INTO`, the array is simply set to an empty list.
+* `FILES` sets only `ERR` = 0. It does not clear `ERRMSG$`.
+
+Example. The test tree is `ft/a.txt`, `ft/b.csv`, `ft/sub/c.txt`, `ft/sub/deep/d.txt`.
+
+```basic
+FILES "ft"
+FILES "ft" WITH DETAILS
+FILES "ft/*.txt" RECURSIVE
+FILES "ft/*.xyz"
+DIM arr AS ARRAY
+FILES "ft" INTO arr
+PRINT arr
+PRINT "arr(0)="; arr(0); " UBOUND="; UBOUND(arr)
+FILES "ft" INTO arr WITH DETAILS
+PRINT arr(0).name; arr(0).size
+FILES "ft/*.txt" INTO arr RECURSIVE WITH FILESONLY
+PRINT arr
+```
+```
+a.txt
+b.csv
+sub
+a.txt                    	           2	2026-01-01 12:00:00
+b.csv                    	           3	2026-01-01 12:00:00
+sub                      	       <DIR>	2026-01-01 12:00:00
+sub
+a.txt
+deep
+c.txt
+d.txt
+File not found
+[a.txt, b.csv, sub]
+arr(0)=a.txt UBOUND= 2
+a.txt 2
+[a.txt, c.txt, d.txt]
+```
+
+### FOR ... IN FILES()
+
+```
+FOR var IN FILES(pattern [RECURSIVE] [WITH FULLPATH] [WITH FILESONLY | WITH FOLDERSONLY])
+    ...
+NEXT [var]
+```
+
+Runs the loop body once for each matching path. All modifiers go **inside** the parentheses. Any other token there is an error (`Unexpected token ... inside FILES().`).
+
+* `pattern` must be a string. A directory name means "everything in it". With `RECURSIVE`, a directory becomes `dir/**/*`, and a pattern such as `ft/*.txt` becomes `ft/**/*.txt` (Python `glob` with `recursive=True`).
+* Unlike `FILES RECURSIVE`, directories are filtered by the pattern here.
+* Hidden (dot) files are skipped, as with any glob.
+* The loop variable receives the base name, or the absolute path with `WITH FULLPATH`.
+* Results are sorted by full path.
+* If nothing matches, the body is skipped.
+* `EXIT FOR` is supported.
+* After the loop, the loop variable is restored to its previous value. If it did not exist before the loop, it is removed.
+
+```basic
+FOR f$ IN FILES("ft/*.txt" RECURSIVE)
+  PRINT f$
+NEXT
+FOR f$ IN FILES("ft" WITH FULLPATH WITH FOLDERSONLY)
+  PRINT RIGHT$(f$, 6)
+NEXT
+```
+```
+a.txt
+c.txt
+d.txt
+ft/sub
+```
+
+### COPY ... AS
+
+```
+COPY source AS destination
+```
+
+The intended behaviour is to copy a file with `shutil.copy2`, which keeps timestamps. It would set `ERR` = 2 for a missing source and 1 for other errors, and expand `~`.
+
+> **Not currently usable.** The lexer turns `COPY` into its own `COPY` token, but the statement dispatcher only recognises `COPY` as an identifier. As a result, `COPY "a" AS "b"` fails with `Unknown statement: COPY`, or is sent to the database as SQL when it follows other statements. Until this is fixed, use `SHELL "cp ..."` / `SHELL "copy ..."`, or `READ FILE` + `PRINT #`.
+
+### NAME ... AS
+
+```
+NAME oldname AS newname
+```
+
+Renames or moves a file or directory (`os.rename`). `~` is **not** expanded.
+
+| Condition | ERR | Effect |
+|---|---|---|
+| Source missing | 2 | Error is raised |
+| Target exists (where the OS reports it) | 17 | Error is raised |
+| Any other failure | 1 | Error is raised |
+
+On POSIX systems an existing target file is silently replaced.
+
+### KILL
+
+```
+KILL filename
+```
+
+Deletes one file (`os.remove`). There is no wildcard support.
+
+* If the file is missing, KILL **does not raise an error**. It sets `ERR` = 2 and `ERRMSG$`, then continues.
+* Other failures, such as trying to delete a directory, set `ERR` = 1 and raise.
+* `KILL` with no argument is an error.
+
+### MKDIR
+
+```
+MKDIR path
+```
+
+Creates a directory, including any missing parent directories (`os.makedirs(..., exist_ok=True)`). If the directory already exists, MKDIR does nothing and `ERR` stays 0. Failures set `ERR` = 1 and raise.
+
+### CHDIR
+
+```
+CHDIR path
+```
+
+Changes the current working directory. A missing directory sets `ERR` = 2, a path that is not a directory sets 20, and any other failure sets 1. All of them raise. Read the current directory with `CURDIR$` (Chapter 3).
+
+### RMDIR
+
+```
+RMDIR path
+```
+
+Removes an **empty** directory. A missing directory sets `ERR` = 2. Any other OS error, including "directory not empty", sets `ERR` = 39. Both raise.
+
+```basic
+MKDIR "work/a/b"
+NAME "work/a.copy" AS "work/renamed.txt"
+KILL "work/renamed.txt"
+KILL "work/renamed.txt"
+PRINT "KILL missing ERR="; ERR; " "; ERRMSG$
+RMDIR "work/a/b"
+ON ERROR GOTO h
+RMDIR "work"
+END
+h:
+PRINT "handler ERR="; ERR; " "; ERRMSG$
+```
+```
+KILL missing ERR= 2 [Errno 2] No such file or directory: 'work/renamed.txt'
+handler ERR= 39 [Errno 66] Directory not empty: 'work'
+```
+
+### Error codes set by file statements
+
+| ERR | Meaning | Set by |
+|---|---|---|
+| 0 | Success | all |
+| 1 | General error | OPEN, READ FILE, NAME, MKDIR, CHDIR, RMDIR, KILL, ZIP, UNZIP |
+| 2 | File / directory not found | OPEN, READ FILE, NAME, CHDIR, RMDIR, KILL |
+| 17 | Target already exists | NAME |
+| 20 | Not a directory | CHDIR |
+| 39 | Directory not empty or other OS error | RMDIR |
+
+---
+
+## 6.3 Archives and hash unpacking
+
+### ZIP
+
+```
+ZIP archive$ FROM file_or_pattern$ [, file_or_pattern$ ...]
+```
+
+According to the source, the intended behaviour is as follows:
+
+* Each item that contains `*` or `?` is expanded with `glob`. Other items are added if they exist.
+* Missing items print `Warning: ...` and are skipped.
+* Entries are stored under their **base name** only, so the directory structure is flattened, using DEFLATE compression.
+* Each file added prints `Added: path -> name`. The statement finishes with `Created <archive> with N files`.
+* If no files are found, `ERR` = 1 and `ERRMSG$` = `No files found to zip`. This is fatal when `SQL_FATAL_ERRORS` is ON, which is the default.
+
+> **Not currently usable.** The check for the `FROM` keyword compares the second character of the token after `FROM` with the word `"FROM"`, and that comparison can never succeed. Every `ZIP` statement therefore fails with `Expected FROM after archive name in ZIP statement.`. The forms used in `tests/zip.bas` (`ZIP "a.zip", "f1", "f2"` and `ZIP "a.zip" FILES "dir/*"`) are not accepted by the parser either. Use `SHELL "zip ..."` or `SHELL "tar ..."` instead.
+
+### UNZIP
+
+```
+UNZIP archive$ [TO target_dir$]
+```
+
+Extracts every entry of a ZIP archive into `target_dir$`, or into the current directory if no target is given. The target directory is created if it does not exist. The statement prints a summary and one line per entry, and sets `ERR` = 0 on success.
+
+| Failure | Result |
+|---|---|
+| Archive missing | `ERR` = 1, `ERRMSG$` = `Archive not found: ...` (see note) |
+| Not a ZIP file | `ERR` = 1, `ERRMSG$` = `Invalid ZIP file: ...` |
+| Other error | `ERR` = 1, `ERRMSG$` = the message |
+
+If `SQL_FATAL_ERRORS` is ON (the default), each failure also raises a runtime error. Use `SET SQL_FATAL_ERRORS OFF` to handle failures through `ERR` instead.
+
+```basic
+UNZIP "z.zip" TO "out1"
+PRINT "UNZIP ERR="; ERR
+SET SQL_FATAL_ERRORS OFF
+UNZIP "bad.zip" TO "out1"
+PRINT "bad ERR="; ERR; " "; ERRMSG$
+```
+```
+Extracted 5 files from z.zip
+  -> out1/a.txt
+  -> out1/sub/
+  -> out1/sub/deep/
+  -> out1/sub/deep/d.txt
+  -> out1/sub/c.txt
+UNZIP ERR= 0
+bad ERR= 1 Invalid ZIP file: File is not a zip file
+```
+
+The keyword is `TO`. `INTO`, which appears in the function's docstring, is rejected.
+
+### UNPACK
+
+```
+UNPACK hash
+```
+
+Turns each key of a hash into a stand-alone variable:
+
+* String values go into `key$` and other values into `key`. Any existing `$` on the key is removed first.
+* `None`/null values become `""`.
+* Keys that are not valid identifiers, such as `"bad key"`, are skipped.
+* The argument must evaluate to a hash. Otherwise the error is `UNPACK statement requires a HASH variable.`
+
+UNPACK is handy after `OPENFORM` (`UNPACK FORM_DATA`) or after parsing JSON.
+
+```basic
+DIM h AS HASH
+h("name") = "Ann"
+h("age") = 42
+h("bad key") = 1
+UNPACK h
+PRINT name$; " "; age
+```
+```
+Ann  42
+```
+
+---
+
+## 6.4 System and console
+
+### SHELL
+
+```
+SHELL command$ [INTO out$]
+```
+
+Runs `command$` through the operating-system shell (`subprocess.run(..., shell=True)`).
+
+* **Without `INTO`**, the command's standard output and standard error go straight to the terminal. They are not captured, and `SET OUTPUT` does not redirect them.
+* **With `INTO out$`**, standard output is captured as text (UTF-8, with invalid bytes replaced) into `out$`. If the command wrote anything to standard error, that text goes into `ERRMSG$`. The destination must be a string variable.
+* `ERR` is set to the command's exit code. If the process could not be started, `ERR` = -1 and an error is raised.
+* Commands are OS-specific. `dir` and `type`, as used in some of the examples, exist only on Windows.
+
+```basic
+SHELL "echo hello from shell"
+PRINT "ERR="; ERR
+SHELL "echo captured; echo oops 1>&2; exit 3" INTO out$
+PRINT "out$=["; out$; "] ERR="; ERR; " ERRMSG$=["; ERRMSG$; "]"
+```
+```
+hello from shell
+ERR= 0
+out$=[captured
+] ERR= 3 ERRMSG$=[oops
+]
+```
+
+### BROWSER
+
+```
+BROWSER url$ [OPTIONS "new=1" | "new=2"]
+```
+
+Opens `url$` in the system default web browser (Python `webbrowser.open`). The URL can be a `file:///` path.
+
+* `OPTIONS "new=1"` asks for a new window and `"new=2"` asks for a new tab. The default (0) reuses the current window.
+* If no browser can be launched, `ERR` = 52 and `ERRMSG$` = `Could not open a web browser. Check system configuration.` An exception sets `ERR` = 1. Neither case stops the program.
+* A non-string argument is a runtime error.
+
+```basic
+LET full_path$ = "file:///" + CURDIR$() + "/" + report_file$
+BROWSER full_path$                     ' from examples/browser.bas
+```
+
+### BELL
+
+```
+BELL
+```
+
+Writes the ASCII BEL character (`\a`) to standard output with no newline, and flushes it. Whether this makes a sound depends on the terminal.
+
+### INPUT
+
+```
+INPUT ["prompt";] var
+```
+
+Reads one line from standard input.
+
+* The prompt must be a **string literal** followed by a **semicolon**. If there is no prompt, a single space is shown. No `?` is added.
+* If `var` ends in `$` the text is stored as-is. Otherwise it is converted with `float()`, and non-numeric input causes a runtime error (`could not convert string to float`).
+* Only one variable per statement is supported.
+
+```basic
+INPUT "Name? "; n$
+INPUT "Age? "; a
+PRINT n$; a * 2
+```
+Given the input `Bob` and `21`:
+```
+Name? Age? Bob 42
+```
+
+(The built-in `HELP INPUT` shows a comma after the prompt, but a comma is rejected with `Expected token SEMICOLON but got COMMA`.)
+
+---
+
+## 6.5 HTTP: FETCH
+
+```
+FETCH url$
+      [POST body | PUT body | PATCH body | DELETE [body]]
+      [USING HEADERS req_hash]
+      [USING FILE field$ = path$]
+      { INTO var$ | TO FILE path$ }
+      [HEADERS INTO resp_hash]
+```
+
+`FETCH` sends an HTTP request with the Python `requests` library. The clauses between the URL and the destination can appear in any order.
+
+| Clause | Meaning |
+|---|---|
+| *(no method)* | `GET`. |
+| `POST body` / `PUT body` / `PATCH body` | Send the hash variable `body` as the request body, **form-encoded** (`application/x-www-form-urlencoded`). The body is required for these three methods. Write the hash name on its own (`Payload`) or with empty parentheses (`Payload()`). |
+| `DELETE [body]` | Send a DELETE request. The body is optional. |
+| `USING HEADERS h` | Use the hash `h` as request headers. |
+| `USING FILE field$ = path$` | Multipart upload of the local file `path$` under form field `field$`. Any POST/PUT/PATCH body is sent as extra form fields. The upload is ignored for GET and DELETE. |
+| `INTO var$` | Store the response body, decoded as UTF-8, in `var$`. If the body is not valid UTF-8, the variable gets the literal text `Binary data received`. |
+| `TO FILE path$` | Stream the response body to `path$`, writing it in binary mode in 8 KB chunks. |
+| `HEADERS INTO h` | Must come after the destination. Stores the response headers in a hash, with key case exactly as the server sent it. |
+
+Timeouts are 15 seconds, or 30 seconds when a file is uploaded. They cannot be configured.
+
+**Result in `ERR`:**
+
+| Situation | `INTO var$` | `TO FILE path$` |
+|---|---|---|
+| Any HTTP response | `ERR` = status code (200, 404, ...). The body is stored even for error statuses. | 2xx: `ERR` = status code and the file is written. 4xx/5xx: `ERR` = **-1** and the file is not created (`raise_for_status`). |
+| Network error, timeout or bad host | `ERR` = -1 | `ERR` = -1 |
+| Upload file not found | `ERR` = -2 | `ERR` = -2 |
+
+`ERRMSG$` is not set by FETCH, and FETCH never raises an error for HTTP or network failures. Always test `ERR`. Note that a successful request leaves `ERR` = 200, **not 0**.
+
+Notes:
+
+* Hash values are sent in their string form, so the number `42` is sent as `"42.0"`. Convert numbers explicitly (for example `STR$` or `FORMAT$`, Chapter 3) if the server needs integers.
+* Header keys keep the server's case. Many servers, including HTTP/2 servers, send lowercase names, so `h("Content-Type")` returns `0` while `h("content-type")` works. Under `SET HASH_KEYS IGNORE_CASE` lookups are upper-cased, but the stored keys are not, so lookups fail. Inspect the hash with `PRINT h` first.
+* `BODY` is a reserved word (used by `EMAIL`), so it cannot be used as a hash name.
+* To parse a JSON response, use `PARSEJSON` (Chapter 3).
+
+Example (run against httpbin.org; part of the output omitted):
+
+```basic
+FETCH "https://httpbin.org/get?x=1" INTO r$ HEADERS INTO h
+PRINT "GET ERR="; ERR; "  "; h("content-type")
+
+DIM payload AS HASH
+payload("name") = "Ann"
+payload("age") = 42
+DIM hdr AS HASH
+hdr("X-Test") = "abc"
+FETCH "https://httpbin.org/post" POST payload USING HEADERS hdr INTO r$
+j = PARSEJSON(r$)
+PRINT "POST ERR="; ERR
+PRINT j("form")
+PRINT j("headers")("X-Test")
+
+FETCH "https://httpbin.org/put" PUT payload() INTO r$
+FETCH "https://httpbin.org/delete" DELETE INTO r$
+FETCH "https://httpbin.org/post" POST payload USING FILE "file" = "up.txt" INTO r$
+PRINT "UPLOAD ERR="; ERR; " "; PARSEJSON(r$)("files")
+
+FETCH "https://httpbin.org/status/404" INTO r$
+PRINT "404 INTO ERR="; ERR
+FETCH "https://httpbin.org/status/404" TO FILE "x.out"
+PRINT "404 TO FILE ERR="; ERR
+FETCH "https://httpbin.org/image/png" TO FILE "img.png" HEADERS INTO h2
+PRINT "TO FILE ERR="; ERR; " size="; FILESIZE("img.png")
+FETCH "https://no-such-host.invalid/" INTO r$
+PRINT "bad host ERR="; ERR
+FETCH "https://httpbin.org/post" POST payload USING FILE "file" = "missing.txt" INTO r$
+PRINT "missing upload ERR="; ERR
+```
+```
+GET ERR= 200  application/json
+POST ERR= 200
+{
+  "age": "42.0",
+  "name": "Ann"
+}
+abc
+UPLOAD ERR= 200 {
+  "file": "hello upload\n"
+}
+404 INTO ERR= 404
+404 TOFILE ERR=-1
+TOFILE ERR= 200 size= 8090
+bad host ERR=-1
+missing upload ERR=-2
+```
+
+(`TOFILE` in the output is not a typo. The lexer collapses the words `TO FILE` even inside string literals; see [section 6.9](#69-implementation-notes--discrepancies), item 11.)
+
+`examples/convertcsv.io.fetch.bas` (multipart upload with headers) and `examples/npilinks.bas` (`FETCH url$ TO FILE local_file$`) show real-world use.
+
+---
+
+## 6.6 E-mail: SET EMAIL and EMAIL
+
+### SET EMAIL
+
+```
+SET EMAIL keyword value [keyword value ...]
+```
+
+Sets the e-mail configuration. Each value is an expression. Settings **accumulate** across `SET EMAIL` statements: a later statement adds to or replaces individual keys and never clears the others. Each `SET EMAIL` prints `Email provider configured.` to standard error.
+
+| Keyword | Used by | Notes |
+|---|---|---|
+| `PROVIDER` | all | `"SMTP"`, `"SENDGRID"` or `"MAILGUN"` (case-insensitive). The value is checked only when `EMAIL` runs. |
+| `SENDER` | all | The From address. |
+| `APIKEY` | SendGrid, Mailgun | |
+| `DOMAIN` | Mailgun | The sending domain, used in `https://api.mailgun.net/v3/<domain>/messages`. |
+| `HOST` | SMTP | |
+| `PORT` | SMTP | Converted to an integer. |
+| `USER`, `PASSWORD` | SMTP | Login credentials. SMTP always logs in. |
+| `SECURITY` | SMTP | `"SSL"` uses `SMTP_SSL` (typically port 465). `"TLS"` uses plain SMTP followed by `STARTTLS` (typically 587). Anything else, or omitting it, uses an unencrypted connection. |
+
+Required keys are checked when `EMAIL` runs:
+
+* SendGrid: `APIKEY`, `SENDER`
+* Mailgun: `APIKEY`, `SENDER`, `DOMAIN`
+* SMTP: `HOST`, `PORT`, `USER`, `PASSWORD`, `SENDER`
+
+A missing key or an unsupported provider is a runtime error.
+
+```basic
+SET EMAIL PROVIDER "SMTP" HOST "smtp.example.com" PORT 587 _
+          USER "me@example.com" PASSWORD pw$ SENDER "me@example.com" SECURITY "TLS"
+
+SET EMAIL PROVIDER "SENDGRID" APIKEY ENVIRON$("SENDGRID_KEY") SENDER "noreply@example.com"
+
+SET EMAIL PROVIDER "MAILGUN" APIKEY key$ DOMAIN "mg.example.com" SENDER "app@mg.example.com"
+```
+
+### EMAIL
+
+```
+EMAIL [TO to$] [CC cc$] [BCC bcc$] [SUBJECT subject$] [BODY text$] [HTMLBODY html$] [ATTACH files$]
+```
+
+Sends one message through the configured provider. The clauses can appear in any order and the statement ends at the end of the line (or a `:`).
+
+* `TO`, `CC`, `BCC` and `ATTACH` take **comma-separated lists in a single string**.
+* `SUBJECT` defaults to `(No Subject)`.
+* `BODY` is the plain-text part and `HTMLBODY` is the HTML part. You can supply both.
+* Attachments are given as file paths. Each file is attached under its base name.
+* `EMAIL` without a prior `SET EMAIL PROVIDER` is a runtime error.
+
+How each provider sends the message:
+
+| Provider | Mechanism |
+|---|---|
+| SendGrid | JSON POST to `https://api.sendgrid.com/v3/mail/send` with a Bearer token. Attachments are base64-encoded. |
+| Mailgun | Form POST with basic authentication (`api`, key). Attachments are sent as multipart `attachment` fields. |
+| SMTP | A `MIMEMultipart` message. BCC addresses are added to the envelope recipients only, never to the headers. |
+
+**Result:** `ERR` = 0 on success. For SendGrid and Mailgun, a non-2xx response sets `ERR` to the HTTP status and `ERRMSG$` to the response text. Any exception sets `ERR` = -1 and `ERRMSG$` to the message without stopping the program. This includes SMTP connection, login and send failures, and a missing attachment file. SMTP has no HTTP status, so a message that the server accepted simply leaves `ERR` = 0.
+
+```basic
+SET EMAIL PROVIDER "SMTP" HOST "smtp.example.com" PORT 587 USER u$ PASSWORD p$ _
+          SENDER "reports@example.com" SECURITY "TLS"
+EMAIL TO "alice@example.com, bob@example.com" CC "mgr@example.com" _
+      SUBJECT "Monthly report" BODY "See attached." _
+      HTMLBODY "<p>See <b>attached</b>.</p>" ATTACH "report.pdf, data.csv"
+IF ERR <> 0 THEN PRINT "Send failed: "; ERRMSG$
+```
+
+The following was tested without sending anything, against a closed local port:
+
+```basic
+SET EMAIL PROVIDER "SMTP" HOST "127.0.0.1" PORT 1 USER "u" PASSWORD "p" SENDER "me@example.com" SECURITY "tls"
+EMAIL TO "a@example.com" SUBJECT "x" BODY "y" ATTACH "missing.pdf"
+PRINT "ERR="; ERR; " MSG="; LEFT$(ERRMSG$, 45)
+EMAIL TO "a@example.com" SUBJECT "x" BODY "y"
+PRINT "ERR="; ERR; " MSG="; ERRMSG$
+```
+```
+Email provider configured.
+ERR=-1 MSG=Attachment file not found: missing.pdf at lin
+ERR=-1 MSG=[Errno 61] Connection refused
+```
+
+---
+
+## 6.7 TUI forms
+
+DbBasic can define data-entry forms and data grids declaratively and display them as full-screen terminal applications. The terminal UI lives in `src/tui_runner.py` and is built on the **Textual** library.
+
+### Requirements
+
+`dbbasic.py` imports `FormRunner` from `tui_runner` inside a `try` block. If the `textual` package is not installed, the import fails silently and `FormRunner` becomes `None`. You can still *define* forms, but `OPENFORM` and `GRIDEDIT` then fail with `Runtime Error: 'NoneType' object is not callable`. Install the package (`pip install textual`) and run the script in a real terminal.
+
+Each form is shown as a separate Textual application. When the user presses a button, the application exits, control returns to the BASIC program, and the program inspects the result.
+
+### FORM ... ENDFORM
+
+```
+FORM name [TITLE title$] [DISPLAY n] [SOURCE (select-statement)]
+    element
+    element
+    ...
+ENDFORM          ' or END FORM
+```
+
+The form-level attributes can appear on the `FORM` line or on the lines that follow it, before the first element.
+
+| Attribute | Meaning |
+|---|---|
+| `TITLE expr` | Window title. It defaults to the form name and is shown as `Entry View: <title>` in single-record view. |
+| `DISPLAY n` | `n > 1` makes a data-bound form open in **grid** (list) view. `1`, the default, opens in single-record view. A form without `SOURCE` cannot use `DISPLAY > 1`. |
+| `SOURCE (SELECT ...)` | Binds the form to a query. The primary key is detected from the first table after `FROM`, and `id` is used if no table can be detected. |
+
+Defining two forms with the same name is an error (`Duplicate FORM definition`). Definitions are kept for the rest of the run and are not shared with scripts started by `RUN`/`CHAIN`.
+
+### Form elements
+
+| Element | Syntax | Rendering |
+|---|---|---|
+| Heading | `HEADING "text"` | Bold, centred label. In grid view, the first HEADING becomes the window title (`List View: <heading> (N records)`). |
+| Text block | `TEXTBLOCK "text"` | Muted, italic paragraph. |
+| Separator | `SEPARATOR` | Horizontal rule. |
+| Field | `FIELD name TYPE type [attributes...]` | Labelled input. See below. |
+| Button | `BUTTON name ACTION action` | Button in the button bar. See below. |
+
+`HEADING`, `TEXTBLOCK` and `LABEL` text must be string literals.
+
+**Field types.** `TYPE` accepts any word. The word is upper-cased, but only three types change the widget:
+
+| TYPE | Widget |
+|---|---|
+| `PASSWORD` | Masked single-line input. |
+| `MEMO` | Multi-line text area (6 rows). |
+| `CHOICE` | Drop-down list (Select). The options come from the array named by `SOURCE arrayname`. The array is read each time `OPENFORM` runs. |
+| anything else (`TEXT`, `NUMBER`, `EMAIL`, `DATE`, ...) | Ordinary single-line input. The type has no effect on validation or conversion. |
+
+A field that has a `LOOKUP` is drawn instead as a read-only display box with a `[...]` button beside it (see `LOOKUP` below).
+
+### FIELD attributes and validation
+
+The attributes follow the `TYPE` on the same logical line. Use the `_` line continuation to split long definitions.
+
+| Attribute | Meaning |
+|---|---|
+| `LABEL "text"` | Label shown before the field. It defaults to the field name. |
+| `PLACEHOLDER "text"` | Stored in the definition. **The TUI does not currently display it.** |
+| `READONLY` | The widget is disabled. |
+| `SOURCE arrayname` | Choices for a `CHOICE` field. |
+| `LOOKUP (SELECT ...) RETURNS col [DISPLAY col]` | Pick-list from a query. The `[...]` button opens a grid of the query results. Choosing a row stores that row's `RETURNS` column in the field and shows its `DISPLAY` column. `RETURNS`/`DISPLAY` are expressions, usually string literals, and must match the query's column names. |
+| `REQUIRED MESSAGE "msg"` | The value must not be blank. |
+| `MINLENGTH n MESSAGE "msg"` | Minimum length (in characters). |
+| `MAXLENGTH n MESSAGE "msg"` | Maximum length. |
+| `MINVALUE n MESSAGE "msg"` | The value must be a number and at least `n`. A non-numeric value shows `<label> must be a number.` |
+| `PATTERN "regex" MESSAGE "msg"` | Python `re.match` must succeed. It is anchored at the start only, so add `$` to anchor the end. |
+| `MATCHES "otherfield" MESSAGE "msg"` | The value must equal another field's value (for example to confirm a password). |
+
+Any other word is an error (`Unexpected attribute ... for FIELD`). There is no `MAXVALUE`.
+
+Validation runs only when a button with action `SUBMIT`, `INSERT` or `UPDATE` is pressed. Fields are checked in order and the first failure's message is shown in a red banner. An empty, non-required field skips the remaining checks.
+
+### BUTTON and actions
+
+```
+BUTTON name ACTION action
+```
+
+`name` and `action` can each be a bare word or a string. The action is upper-cased.
+
+Buttons are shown **only if their action belongs to the current view**:
+
+| View | Actions that are displayed |
+|---|---|
+| Both | `CLOSE`, `EXIT`, `HELP` |
+| Single-record | `INSERT`, `UPDATE`, `SAVE`, `SUBMIT`, `CANCEL`, `DELETE`, `VIEW_GRID`, `BACK_TO_GRID` |
+| Grid | `VIEW_SINGLE`, `EDIT`, `NEW`, `DELETE`, `REFRESH`, `EDIT_DETAILS`, `SELECT` |
+
+A button with any other action (for example `ACTION OK`) is silently **not drawn**.
+
+Actions handled inside `OPENFORM` for data-bound forms:
+
+| Action | Effect |
+|---|---|
+| `VIEW_GRID` | Switch to grid view. |
+| `VIEW_SINGLE` | Switch to single-record view at the selected grid row. |
+| First/Prev/Next/Last | Move between records. These buttons are added automatically in single-record view when other records exist. |
+
+All other actions close the form and return to the program.
+
+### OPENFORM
+
+```
+OPENFORM name [USING record_id]       ' or OPEN FORM name ...
+```
+
+The form must already be defined (`FORM 'x' is not defined` otherwise).
+
+**Transient form (no SOURCE).** The form opens empty in single-record view. `USING` is not allowed. When the form closes, `FORM_RESULT$`, `FORM_DATA` and `FORM_SELECTED_ID` = 0 are set, **and every field also becomes a top-level variable**: `name$` for string values, `name` otherwise. Text inputs always return strings, so a field `age` comes back as `age$`.
+
+**Data-bound form (SOURCE).**
+
+1. The interpreter runs `SELECT pk FROM (source) AS t` to build the list of record IDs.
+2. With `USING id`, it opens that record in single-record view. If the ID is not found it falls back to the `DISPLAY` setting.
+3. It then loops: it shows the grid or the current record, handles navigation, view-switching and lookup actions itself, and exits on any other action.
+
+In grid view, the columns are the `FIELD`s whose names exist in the query, or all columns except `rowid` if no fields are defined. `OPENFORM` **never writes to the database**: the program performs any `UPDATE` itself, using `FORM_DATA` (see `examples/formex.bas`).
+
+### Values returned by OPENFORM
+
+| Variable | Contents |
+|---|---|
+| `FORM_RESULT$` | The action of the button pressed, upper-cased, such as `"SUBMIT"`, `"UPDATE"`, `"CANCEL"` or `"CLOSE"`. It is `""` if the window was closed without pressing a button. |
+| `FORM_DATA` | Hash of the field values. For data-bound forms it holds the record's columns merged with the edited values. Keys follow the `SET HASH_KEYS` mode. |
+| `FORM_SELECTED_ID` | The primary key of the current or selected record, as a number. It is 0 for transient forms. |
+| `FORM_PK_ID` | Internal variable used for the single-record query. Its value is the current record ID. |
+
+The `FORM_DATA` values come from the widgets: input values are strings, and a `CHOICE` field returns the selected item.
+
+```basic
+FORM SignupForm
+  HEADING "Create Your Account"
+  TEXTBLOCK "Please choose a secure username and password."
+  FIELD username TYPE TEXT LABEL "Username" _
+    REQUIRED MESSAGE "You must enter a username." _
+    MINLENGTH 5 MESSAGE "Username must be at least 5 characters."
+  FIELD age TYPE NUMBER LABEL "Age" _
+    REQUIRED MESSAGE "Please enter your age." _
+    MINVALUE 18 MESSAGE "You must be at least 18 years old to sign up."
+  FIELD pwd TYPE PASSWORD LABEL "Password" REQUIRED MESSAGE "Password cannot be empty."
+  FIELD pwdConfirm TYPE PASSWORD LABEL "Confirm Password" _
+    MATCHES "pwd" MESSAGE "The passwords do not match."
+  BUTTON "Create Account" ACTION SUBMIT
+  BUTTON Cancel ACTION CANCEL
+END FORM
+
+OPEN FORM SignupForm
+IF FORM_RESULT$ = "SUBMIT" THEN PRINT "Welcome "; username$; " (age "; age$; ")"
+```
+
+A data-bound form with grid and record views (adapted from `examples/product_form.bas`):
+
+```basic
+FORM ProductManager DISPLAY 10
+  SOURCE (SELECT id, sku, productName, stockQty, notes FROM Products ORDER BY sku)
+  HEADING "Product Record"
+  FIELD id TYPE NUMBER LABEL "ID" READONLY
+  FIELD sku TYPE TEXT LABEL "SKU" PATTERN "^[A-Z]-\d{4}$" MESSAGE "SKU must be A-1234."
+  FIELD notes TYPE MEMO LABEL "Notes"
+  BUTTON "Edit Details" ACTION VIEW_SINGLE
+  BUTTON "Back to Grid" ACTION VIEW_GRID
+  BUTTON "Save" ACTION UPDATE
+  BUTTON "Close" ACTION CLOSE
+END FORM
+OPEN FORM ProductManager
+IF FORM_RESULT$ = "UPDATE" THEN
+   sku$ = FORM_DATA("sku") : id = FORM_SELECTED_ID
+   UPDATE Products SET sku = :sku$ WHERE id = :id;
+END IF
+```
+
+### GRIDEDIT
+
+```
+GRIDEDIT table
+    [FIELDS col [, col ...]]          ' or FIELDS "col1, col2, ..."
+    [WHERE condition$]
+    [ORDER BY expr$]
+    [SEARCH [ON col [, col ...]]]
+    [LOOKUP col (SELECT ...) RETURNS col [DISPLAY col]] ...
+    [USING KEY pk_col$]
+    [READONLY]
+```
+
+`GRIDEDIT` is a complete create/read/update/delete editor for one table, with no form definition needed.
+
+**Table name.** `table` can be a string literal, a string variable, or a bare identifier. A bare identifier that is not an existing variable is taken literally.
+
+**Clauses.** All the clauses go on one logical line (use `_` to continue it).
+
+| Clause | Meaning |
+|---|---|
+| `FIELDS` | Columns to show in the grid. A single comma-separated string is split into names. The edit and new forms always show **all** of the table's columns. |
+| `WHERE` | The expression's value is inserted **verbatim** after `WHERE`, for example `WHERE "CustomerID LIKE 'A%'"`. |
+| `ORDER BY` | Inserted verbatim after `ORDER BY`. |
+| `SEARCH` | Adds a search box. Pressing Enter re-queries with a case-insensitive `LIKE '%term%'` over the `SEARCH ON` columns, or over the displayed columns if `ON` is omitted. Lookup columns are searched by their display value. |
+| `LOOKUP` | The grid shows the lookup's `DISPLAY` column through a sub-select. The edit and new forms get a `[...]` picker, as for `FORM` lookups. |
+| `USING KEY` | Overrides primary-key detection. |
+| `READONLY` | Grid buttons become View/Close, and every field in the record view is read-only with only an OK button. |
+
+**Behaviour.**
+
+* The grid has the buttons **Edit**, **New**, **Delete** and **Close** (or **View** and **Close** when `READONLY`).
+* *Edit* opens the selected row. *Save* runs `UPDATE ... WHERE pk = ?` with **only the columns that changed**. An empty string in a numeric column is stored as NULL.
+* *New* opens a blank form. The primary key is read-only when it is auto-generated, meaning SQLite `INTEGER` keys or `rowid`. *Create* inserts the non-empty fields.
+* *Delete* deletes the selected row immediately, **with no confirmation**.
+* Changes are committed straight away on SQLite.
+* *Close* ends the statement. The variable `GRIDEDIT_ID` holds the last record opened for editing.
+
+```basic
+GRIDEDIT "Orders" _
+    FIELDS "OrderID, CustomerID, EmployeeID, OrderDate, ShipCity" _
+    WHERE "CustomerID LIKE 'A%'" _
+    SEARCH _
+    LOOKUP CustomerID (SELECT CustomerID, CompanyName, Country FROM Customers) RETURNS "CustomerID" DISPLAY "CompanyName" _
+    LOOKUP EmployeeID (SELECT EmployeeID, LastName, FirstName FROM Employees)  RETURNS "EmployeeID" DISPLAY "LastName"
+```
+(from `examples/gridlookup.bas`; `examples/form2ex.bas` combines a `CHOICE` form with `GRIDEDIT table_to_edit$`.)
+
+---
+
+## 6.8 The web runner (dbbasicweb.py)
+
+`src/dbbasicweb.py` is a small development web server. It serves DbBasic scripts (`.bas`) and HTML templates with embedded DbBasic (`.htb`, similar to classic ASP). It uses Python's standard `http.server` and the `cgi` module. `cgi` was removed in Python 3.13, so use Python 3.12 or earlier.
+
+### Running it
+
+```
+cd /path/to/your/web/scripts
+python /path/to/DbBasic-git/src/dbbasicweb.py
+```
+
+* The server listens on `http://localhost:8000`. `HOST_NAME`, `PORT_NUMBER` and `SCRIPT_DIR` (default `.`, the current directory) are constants at the top of the file, and there are no command-line options.
+* About one second after it starts, it opens the default browser at the root URL.
+* Stop it with Ctrl+C.
+* The server is **single-threaded** and uses **one persistent `Interpreter` instance** for every request. Variables, open databases and form definitions therefore carry over between requests. Use the `CLEAR` statement if a script needs a clean state.
+* Only files ending in `.bas` and `.htb` are served. Other files, including CSS and images, get 404 responses.
+* A request for a directory serves `index.htb`, or `index.bas` if there is no `index.htb`.
+* The requested path is joined to `SCRIPT_DIR` without checking it, so this is a local development tool and should not be exposed to a network.
+
+### The REQUEST hash
+
+Before each script runs, the variable `REQUEST` is set to a hash with these entries:
+
+| Key | Contents |
+|---|---|
+| `METHOD` | `"GET"` or `"POST"` |
+| `PATH` | URL path |
+| `QUERY_STRING` | Raw query string |
+| `QUERY` | Hash of query parameters (first value of each) |
+| `FORM` | Hash of POSTed form fields (`application/x-www-form-urlencoded` or multipart). It is empty for GET. |
+
+### .bas scripts
+
+Everything the script prints is captured. If the output contains a blank line, the text before the first blank line is parsed as `Name: value` HTTP headers and the rest is the body. Without a blank line, the whole output is sent as `text/plain`. Errors produce an HTTP 500 response.
+
+```basic
+PRINT "Content-Type: text/plain"
+PRINT
+PRINT "Method: "; REQUEST.METHOD
+PRINT "Form a: "; REQUEST.FORM.a
+```
+A POST of `a=xyz` returns `200 text/plain` with the body:
+```
+Method: POST
+Form a: xyz
+```
+
+### .htb templates
+
+An `.htb` file is HTML with embedded DbBasic. The server converts it to a DbBasic program and runs it, and the output is returned as `text/html; charset=utf-8`.
+
+| Markup | Converted to |
+|---|---|
+| Plain line with no `<%` | `ECHO <line>`, printed verbatim |
+| `<% code %>` | The code, inserted as-is. It may span several lines, and a line consisting only of the block is removed from the output. |
+| `<%= expr %>` | `PRINT expr;` |
+| Text before or after a tag on the same line | `PRINT "text";` |
+| `<% INCLUDE "file.htb" %>` | Replaced by that file's contents before conversion. The path is relative to the including file, includes can be nested, cycles are ignored, and a missing file inserts nothing. |
+| `REDIRECT url$` (statement) | Sends a `303 See Other` with `Location: url$` instead of the page. This also works in `.bas` scripts. |
+
+```html
+<html><body>
+<h1>Hello</h1>
+<% name$ = REQUEST.QUERY.name %>
+<p>Hi <%= name$ %>!</p>
+<% FOR i = 1 TO 2 %>
+<li>Item <%= i %></li>
+<% NEXT %>
+<% INCLUDE "footer.htb" %>
+</body></html>
+```
+`GET /hello.htb?name=Ann` returns:
+```html
+<html><body>
+<h1>Hello</h1>
+<p>Hi Ann!</p>
+<li>Item  1</li>
+<li>Item  2</li>
+<footer>(c) demo</footer>
+
+</body></html>
+```
+(The double space in `Item  1` is DbBasic's leading space for positive numbers. Use `STR$`/`FORMAT$` or `TRIM$` to control it.)
+
+The generated DbBasic for the template above, before the include is expanded, is:
+
+```
+ECHO <html><body>
+ECHO <h1>Hello</h1>
+name$ = REQUEST.QUERY.name
+PRINT "<p>Hi ";
+PRINT name$;
+PRINT "!</p>"
+FOR i = 1 TO 2
+PRINT "<li>Item ";
+PRINT i;
+PRINT "</li>"
+NEXT
+INCLUDE "footer.htb"
+ECHO </body></html>
+```
+
+### Interpreter.execute and WebFormRunner
+
+The web runner drives the interpreter through `Interpreter.execute(code)`. This method preprocesses `INCLUDE` statements and line continuations, tokenizes the code, and runs it on the existing interpreter state with `sys.stdout` captured. It returns the output text, or `('redirect', url)` when the script runs `REDIRECT`.
+
+`dbbasic.py` also tries to import `WebFormRunner` from a module named `web_form_runner`, falling back to `None`. **That module is not in the repository and `WebFormRunner` is never used.** There is no web rendering of `FORM`/`OPENFORM`: forms always use the Textual TUI, and `SET UI WEB` (used in `examples/dbform.bas`) is not a recognised statement (`Invalid assignment statement for 'UI'`).
+
+---
+
+## 6.9 Implementation notes / discrepancies
+
+These were found while checking the source against behaviour. Line numbers refer to `src/dbbasic.py` unless stated otherwise.
+
+1. **`COPY ... AS` cannot run.** The lexer emits a `COPY` token (line ~995), but the dispatcher tests `token[0] == 'ID' and token[1].upper() == 'COPY'` (line ~3378). The result is `Unknown statement: COPY`, or the line is sent to the database as SQL.
+2. **`ZIP` always fails.** `_parse_zip_statement` checks `self._current_token()[-2][1].upper() != 'FROM'`, which compares one character of the *next* token's value. That test is always true, so every ZIP statement fails with `Expected FROM after archive name`. `tests/zip.bas` also uses two syntaxes the parser does not accept (`ZIP "a.zip", "f"...` and `ZIP "a.zip" FILES "pat"`).
+3. **`UNZIP` docstring** says `INTO "dir"`, but the code (and `HELP UNZIP`) uses `TO "dir"`. For a missing archive, `ERR` is set to 2 but then overwritten with 1 by the generic exception handler. UNZIP errors are fatal unless `SET SQL_FATAL_ERRORS OFF`, which ties archive handling to a SQL setting.
+4. **`PRINT #n, USING ...` without a trailing `;`** fails with `cannot access local variable 'parts'`: the file branch appends to `parts` before it is defined (lines ~5713-5719). Even if fixed as written, the line ending would be added to `parts` and never written.
+5. **`OPEN` / `READ FILE` generic error path** is mis-coded: `self.variables['ERR'],` on its own line, followed by `self.variables['ERRMSG$'] = 1.0, str(e)`, sets `ERRMSG$` to a tuple and leaves `ERR` at 0. `OPEN` also prints `DEBUG OPEN EXCEPTION` in this path.
+6. **`WRITE #n` line endings** are `\r\n` on all platforms (the `csv.writer` default), while `PRINT #n` uses `os.linesep`. Mixing them in one file gives mixed line endings. `WITH OPTIONS` values are passed to `csv.writer` as strings, so non-string dialect options (for example `quoting=1`) fail.
+7. **`INPUT` syntax.** `HELP INPUT` shows `INPUT "Prompt", var`, but the parser requires a semicolon. Only a literal prompt and a single variable are supported, and numeric input is converted with `float()` with no retry.
+8. **`LINE INPUT #` and `PRINT #`** on a handle that is not open raise a bare `KeyError`, which prints as `Runtime Error: 5`, instead of a descriptive message. `LINE INPUT` past EOF silently returns `""`.
+9. **`NAME`** and **`OPEN`** do not expand `~`, whereas `KILL`, `MKDIR`, `CHDIR`, `RMDIR` and `FILES` do. `COPY` would as well, if it could run.
+10. **`FILES RECURSIVE`** includes every directory whatever the pattern (unless `WITH FILESONLY`), while `FOR ... IN FILES(... RECURSIVE)` filters directories by the pattern. Arrays filled by `FILES ... INTO` start at index 0, unlike the 1-based convention assumed by `SHIFT`/`UNSHIFT`.
+11. **Multi-word keywords inside strings.** The lexer collapses `WITH DETAILS`, `TO FILE`, `READ FILE`, `LINE INPUT`, `OPEN FORM`, and similar pairs *before* tokenizing, including inside string literals. `PRINT "TO FILE"` prints `TOFILE`.
+12. **FETCH.**
+    * `ERR` is 200 on success, not 0.
+    * HTTP error statuses are reported differently for `INTO` (the status code) and `TO FILE` (-1).
+    * `ERRMSG$` is never set.
+    * Response header keys are stored without hash-key normalisation, so `SET HASH_KEYS IGNORE_CASE` makes them unreachable.
+    * Numeric body values are sent as `"42.0"`.
+    * `GET` cannot send a body.
+13. **EMAIL.**
+    * Errors raised during sending (missing attachment, SMTP failures) are caught and turned into `ERR` = -1, but configuration errors are fatal.
+    * `HELP EMAIL` lists only TO/SUBJECT/BODY/ATTACH and omits CC, BCC and HTMLBODY.
+    * `SET EMAIL` settings never reset between providers.
+    * For SMTP, a missing `TO` is not checked.
+14. **Forms (`src/tui_runner.py`).**
+    * `PLACEHOLDER` is parsed but not displayed.
+    * Buttons whose action is not in the per-view lists are hidden.
+    * `_EntryScreen.on_button_pressed` prints `--- TUI DEBUG ---` matching diagnostics to the console on every button press.
+    * Field `TYPE` values other than PASSWORD/MEMO/CHOICE are ignored, so `NUMBER` does no conversion.
+    * `MATCHES` reads `.value` or `.text` of the other widget, which does not work with a `CHOICE` (Select) widget.
+    * `FORM_SELECTED_ID` is produced with `float(...)`, so a data-bound form with a non-numeric primary key (for example Northwind `CustomerID`) would raise an error when the form closes.
+15. **GRIDEDIT.**
+    * `WHERE` and `ORDER BY` text is concatenated into the SQL unescaped.
+    * *Delete* has no confirmation.
+    * The grid-level `UPDATE`/`INSERT` branch calls `list_runner.get_initial_display_data()`, which `FormRunner` does not define. The branch is unreachable with the built-in grid buttons, so it is dead code.
+16. **Optional dependencies.** `textual` is required for `OPENFORM`/`GRIDEDIT`, but there is no requirements file and a missing install produces the unhelpful error `'NoneType' object is not callable`. `web_form_runner` / `WebFormRunner` is imported but does not exist and is never used. `examples/dbform.bas` uses a nonexistent `SET UI WEB`.
+17. **Web runner.**
+    * It depends on the `cgi` module (removed in Python 3.13).
+    * It uses a single shared interpreter for every request.
+    * It does not sanitise the request path.
+    * It cannot serve static assets.
+    * `process_htb_file()` exists but is not called by `run_script()`.
+18. **`SHELL` without `INTO`** writes directly to the process's stdout, bypassing `SET OUTPUT` and the web runner's output capture. In `.bas` web scripts, the command's output therefore goes to the server console, not to the HTTP response.
