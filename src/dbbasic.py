@@ -643,7 +643,7 @@ class HelpRegistry:
         },
         "KILL": {
             "syntax": 'KILL "filename"',
-            "desc": "Deletes a file.",
+            "desc": "Deletes a file. A missing file sets ERR = 2 and continues, or calls the ON ERROR handler if one is active.",
             "examples": ['KILL "old_data.tmp"']
         },
         "MKDIR": {
@@ -6685,7 +6685,10 @@ class Interpreter:
                 os.remove(os.path.expanduser(str(filename)))
             except FileNotFoundError as e:
                 self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-                #raise e
+                # A missing file is quiet (ERR = 2) so cleanup code can KILL files that may not
+                # exist. With an ON ERROR handler active it is raised, so the handler can see it.
+                if self.error_handler_label and not self.in_error_handler:
+                    self._error(f"File not found: {filename}")
             except Exception as e:
                 self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
                 raise e

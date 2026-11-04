@@ -362,7 +362,23 @@ KILL filename
 
 Deletes one file (`os.remove`). There is no wildcard support.
 
-* If the file is missing, KILL **does not raise an error**. It sets `ERR` = 2 and `ERRMSG$`, then continues.
+* If the file is missing, `KILL` sets `ERR` = 2 and `ERRMSG$`. What happens next depends on whether an `ON ERROR GOTO` handler is active:
+  * **No handler:** `KILL` continues quietly, so cleanup code can delete files that may not exist.
+  * **Handler active:** it raises `File not found: name`, so the handler runs (with `ERR` = 2) and can `RESUME NEXT`. Inside the handler itself `KILL` stays quiet, because errors there are not trapped again.
+
+  ```basic
+  ON ERROR GOTO trap
+  KILL "missing.tmp"
+  PRINT "after KILL"
+  END
+  trap:
+  PRINT "handler: ERR ="; ERR
+  RESUME NEXT
+  ```
+  ```
+  handler: ERR = 2
+  after KILL
+  ```
 * Other failures, such as trying to delete a directory, set `ERR` = 1 and raise.
 * `KILL` with no argument is an error.
 

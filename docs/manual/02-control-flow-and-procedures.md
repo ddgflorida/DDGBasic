@@ -939,7 +939,7 @@ Error codes used by the interpreter:
 
 Errors reach a program in two ways:
 
-1. **Soft errors.** Some statements catch their own failure, set `ERR`/`ERRMSG$`, and carry on without raising an error. `KILL` on a missing file is one example. So is any SQL error while `SET SQL_FATAL_ERRORS OFF` is in effect. Test `ERR` after these statements. `ON ERROR` is never triggered by them.
+1. **Soft errors.** Some statements catch their own failure, set `ERR`/`ERRMSG$`, and carry on without raising an error. Examples are any SQL error while `SET SQL_FATAL_ERRORS OFF` is in effect, and `SHELL`/`FETCH` results. Test `ERR` after these statements; `ON ERROR` is not triggered by them. `KILL` on a missing file is a special case: it is soft when no handler is active, and raised (so the handler runs) when `ON ERROR GOTO` is active (see Chapter 6).
 2. **Raised errors.** All other errors, such as division by zero, unknown labels, bad syntax, `ERROR n`, `NAME` on a missing file, and SQL errors while `SQL_FATAL_ERRORS` is `ON` (the default), are trapped by `ON ERROR GOTO` if a handler is active. Otherwise they stop the program.
 
 Chapter 6 says which file statements raise errors and which set `ERR`.
