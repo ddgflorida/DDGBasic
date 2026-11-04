@@ -692,13 +692,11 @@ UPLOAD ERR= 200 {
   "file": "hello upload\n"
 }
 404 INTO ERR= 404
-404 TOFILE ERR=-1
-TOFILE ERR= 200 size= 8090
+404 TO FILE ERR=-1
+TO FILE ERR= 200 size= 8090
 bad host ERR=-1
 missing upload ERR=-2
 ```
-
-(`TOFILE` in the output is not a typo. The lexer collapses the words `TO FILE` even inside string literals; see [section 6.9](#69-implementation-notes--discrepancies), item 11.)
 
 `examples/convertcsv.io.fetch.bas` (multipart upload with headers) and `examples/npilinks.bas` (`FETCH url$ TO FILE local_file$`) show real-world use.
 
@@ -1140,7 +1138,7 @@ These were found while checking the source against behaviour. Line numbers refer
 8. **`LINE INPUT #` and `PRINT #`** on a handle that is not open raise a bare `KeyError`, which prints as `Runtime Error: 5`, instead of a descriptive message. `LINE INPUT` past EOF silently returns `""`.
 9. **`NAME`** and **`OPEN`** do not expand `~`, whereas `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES` and `COPY` do.
 10. **`FILES RECURSIVE`** includes every directory whatever the pattern (unless `WITH FILESONLY`), while `FOR ... IN FILES(... RECURSIVE)` filters directories by the pattern. Arrays filled by `FILES ... INTO` start at index 0, unlike the 1-based convention assumed by `SHIFT`/`UNSHIFT`.
-11. **Multi-word keywords inside strings.** The lexer collapses `WITH DETAILS`, `TO FILE`, `READ FILE`, `LINE INPUT`, `OPEN FORM`, and similar pairs *before* tokenizing, including inside string literals. `PRINT "TO FILE"` prints `TOFILE`.
+11. **Multi-word keywords inside strings** (fixed). The lexer used to collapse `WITH DETAILS`, `TO FILE`, `READ FILE` and similar pairs even inside string literals, so `PRINT "TO FILE"` printed `TOFILE`. Strings and comments are now left unchanged.
 12. **FETCH.**
     * `ERR` is 200 on success, not 0.
     * HTTP error statuses are reported differently for `INTO` (the status code) and `TO FILE` (-1).

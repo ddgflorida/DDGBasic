@@ -179,11 +179,11 @@ Consequences:
 - **One SQL statement per line.** After the first `;`, the rest of the line is parsed as BASIC. `select 1 as a; select 2 as b;` runs the first query, then fails with `Unknown statement: SELECT`. To run several statements from one line or one string, use `EXECUTE` (4.6).
 - **The keywords are effectively reserved.** A line that starts with, for example, `update` or `copy` is treated as SQL when a semicolon follows it anywhere later in the file.
 
-### 4.2.2 Rewrites applied to SQL text
+### 4.2.2 Keyword joining and SQL text
 
-The lexer cuts the SQL text out of its *pre-processed* source. Before tokenising, it applies a set of keyword-joining substitutions to the **whole source, including the inside of string literals**. The SQL engine therefore sees these rewrites:
+Before tokenising, the lexer joins certain multi-word keywords into single tokens:
 
-| Source text (any case, any whitespace) | Becomes |
+| Code (any case, any whitespace) | Becomes |
 |---|---|
 | `END IF` | `ENDIF` |
 | `LINE INPUT` | `LINEINPUT` |
@@ -198,22 +198,22 @@ The lexer cuts the SQL text out of its *pre-processed* source. Before tokenising
 | `WITH DETAILS` / `WITH FULLPATH` / `WITH FOLDERSONLY` / `WITH FILESONLY` | joined |
 | `LIST FIELDS` | `LISTFIELDS` |
 
-Example:
+These rewrites apply only to code. Text inside `"..."`, `'...'` and backtick strings, and inside `REM` and `--` comments, is left as written, so SQL string literals reach the engine unchanged:
 
 ```basic
 SELECT 'for each item' AS a, 'end if' AS b;
 ```
 
 ```
-+--------------+-------+
-|      a       |   b   |
-+--------------+-------+
-| FOREACH item | ENDIF |
-+--------------+-------+
++---------------+--------+
+|       a       |   b    |
++---------------+--------+
+| for each item | end if |
++---------------+--------+
 (1 rows returned)
 ```
 
-If you need such text in your data, pass it through a bind variable (4.3).
+A keyword pair written as SQL code (not inside quotes) is still joined. `END TRANSACTION;` is affected by this (item 4 in 4.14).
 
 ### 4.2.3 Semicolons and comments inside SQL
 
@@ -1417,7 +1417,7 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 
 1. **SQL statement termination** (fixed). Line-level SQL used to end at the first `;` in the source text, even inside `'...'` or a comment. It now skips string literals, quoted identifiers and comments (4.2.3).
 2. **SQL is recognised only at the start of a line.** It is not recognised after `THEN`, after `:`, or after a label. Only one SQL statement is allowed per line.
-3. **Keyword-joining rewrites alter SQL text and string literals.** Examples: `'for each'` becomes `'FOREACH'` and `'end if'` becomes `'ENDIF'` (4.2.2).
+3. **Keyword joining inside string literals** (fixed). Multi-word keyword rewrites used to change text inside strings and SQL literals (`'for each'` became `'FOREACH'`). They now apply only to code (4.2.2).
 4. **`END TRANSACTION;` is unusable.** It is listed in `SQL_KEYWORDS` as `'END TRANSACTION'`, but the raw token kind is `ENDTRANSACTION`, so it never matches and the line fails with `Unknown statement`.
 5. **Bind-variable scanning is purely textual.** `'x:y'`, `':memory:'` and DuckDB `::TYPE` casts are taken as variable references, which causes a hard error. A missing bind variable is fatal even with `SQL_FATAL_ERRORS OFF`.
 6. **Numeric bind values are always floats**, so `SELECT :i` shows `1.0`.

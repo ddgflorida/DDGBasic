@@ -62,7 +62,7 @@ The web runner (`src/dbbasicweb.py`) imports `cgi`, so it needs Python 3.12 or e
 
 ## Known issues at a glance
 
-Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), blank lines in `LOAD CSV`, and `;` inside SQL string literals. These are marked *(fixed)* in the chapter notes.
+Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), blank lines in `LOAD CSV`, `;` inside SQL string literals, and keyword joining inside strings (`"TO FILE"` used to print as `TOFILE`). These are marked *(fixed)* in the chapter notes.
 
 The issues below were found while writing the manual. They are the most likely to catch you out; each chapter's final section has the full list.
 
@@ -80,7 +80,6 @@ The issues below were found while writing the manual. They are the most likely t
 - User-defined `FUNCTION`s are not available in the REPL or in `RUN`/`CHAIN` targets.
 
 **SQL**
-- Multi-word keyword joining also alters SQL string literals: `'for each'` becomes `'FOREACH'`. The same happens to `TO FILE`, `WITH DETAILS` and similar pairs inside ordinary strings.
 - `:name` inside literals and DuckDB `::TYPE` casts are treated as bind variables.
 - `SET NULL_HANDLING` has no effect, and unknown `SET` options are not rejected.
 

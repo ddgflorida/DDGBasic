@@ -925,6 +925,40 @@ class Lexer:
         col = pos - self.line_starts[line-1] + 1
         return line, col
 
+    _REM_RE = re.compile(r'\bREM\b', re.IGNORECASE)
+
+    @classmethod
+    def _outside_literals(cls, code, transform):
+        """Apply transform() to the parts of code that are not inside a "...", '...' or
+        `...` string (doubled quotes are escapes) or a REM / -- comment, and return the
+        reassembled code. Used so keyword joining (END IF -> ENDIF) leaves text alone."""
+        out, chunk_start, i, n = [], 0, 0, len(code)
+        while i < n:
+            c = code[i]
+            if c in ('"', "'", '`'):
+                end = i + 1
+                while end < n:
+                    if code[end] == c:
+                        if end + 1 < n and code[end + 1] == c:
+                            end += 2
+                            continue
+                        break
+                    end += 1
+                end = min(end + 1, n)
+            elif (c == '-' and code.startswith('--', i)) or \
+                 (c in 'Rr' and cls._REM_RE.match(code, i) and (i == 0 or not (code[i - 1].isalnum() or code[i - 1] in '_$'))):
+                end = code.find('\n', i)
+                if end == -1:
+                    end = n
+            else:
+                i += 1
+                continue
+            out.append(transform(code[chunk_start:i]))
+            out.append(code[i:end])
+            chunk_start = i = end
+        out.append(transform(code[chunk_start:]))
+        return ''.join(out)
+
     @staticmethod
     def _find_sql_terminator(text, start):
         """Index of the ';' that ends the SQL statement starting at text[start], or -1.
@@ -988,9 +1022,14 @@ class Lexer:
             r'\bWITH\s+FILESONLY\b': 'WITHFILESONLY', 
             r'\bLIST\s+FIELDS\b': 'LISTFIELDS',
         }
-        code = source_code_to_process
-        for pattern, repl in replacements.items():
-            code = re.sub(pattern, repl, code, flags=re.IGNORECASE)
+        compiled = [(re.compile(pattern, re.IGNORECASE), repl) for pattern, repl in replacements.items()]
+
+        def join_keywords(chunk):
+            for regex, repl in compiled:
+                chunk = regex.sub(repl, chunk)
+            return chunk
+
+        code = self._outside_literals(source_code_to_process, join_keywords)
         self.modified_source_code = code
 
         token_specification = [
