@@ -141,22 +141,7 @@ Total: 6
 Values joined across lines
 ```
 
-> **Label pitfall.** The label scanner treats *every* identifier that is
-> directly followed by a colon as a label, including one at the end of a
-> statement on a multi-statement line. If two such places use the same
-> identifier, the program will not start:
->
-> ```basic
-> b = 1
-> a = b: c = b: PRINT a + c
-> ```
->
-> ```
-> Error: Duplicate label found: b at line 1, col 1.
-> ```
->
-> You can avoid it by putting a space before the colon (`a = b : c = b`) or by
-> putting the statements on separate lines.
+A **label** is a name followed by a colon at the very start of a line (leading spaces are allowed). The same name and colon anywhere else on a line is not a label, so multi-statement lines such as `a = b : c = b : PRINT a + c` work.
 
 ## 1.3 Comments
 
@@ -1438,8 +1423,9 @@ the existing documentation:
 9. **Comparisons are not valid in value expressions** without parentheses
    (`x = a > b`, `PRINT 1 <> 2`). The README's examples only use comparisons
    in `IF`, which is consistent with this.
-10. **Label scanning** registers every `identifier:` pair, which can cause
-    false `Duplicate label` errors on multi-statement lines (see
+10. **Label scanning** (fixed). Every `identifier:` pair used to be registered
+    as a label, which caused false `Duplicate label` errors on multi-statement
+    lines. Only a name at the start of a line is a label now (see
     [1.2](#12-program-structure-and-source-format)).
 11. **Numeric literals** do not allow a leading `.` or exponents (`.5`, `1e3`).
 12. **Unconverted NULL in expressions.** A SQL NULL used directly in an

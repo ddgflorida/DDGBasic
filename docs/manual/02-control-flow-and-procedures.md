@@ -621,11 +621,11 @@ GOTO label
 
 ### Description
 
-A label is an identifier directly followed by a colon. It marks the position of the next token. Label names are case-sensitive: `GOTO top` does not find `Top:`. Duplicate labels are reported when the program is loaded (`Duplicate label found`). `GOTO label` continues execution at the label. If the label does not exist, the error is `Label 'x' not found for GOTO.`
+A label is an identifier directly followed by a colon, as the first thing on a line (leading spaces are allowed). It marks the position of the next token, so statements can follow it on the same line (`again: x = x + 1`). Label names are case-sensitive: `GOTO top` does not find `Top:`. Duplicate labels are reported when the program is loaded (`Duplicate label found`). `GOTO label` continues execution at the label. If the label does not exist, the error is `Label 'x' not found for GOTO.`
 
 Labels are global. A label inside a function body can be reached from anywhere, but jumping into or out of a function body is not supported.
 
-> **Warning: any `identifier :` counts as a label.** The label scanner records *every* identifier that is directly followed by a colon, even in the middle of a line. `a = b : c = b : PRINT a` creates the label `b` twice, so the program fails to load with `Duplicate label found: b`. Likewise `GOSUB s : PRINT "x"` creates a label named `s` and clashes with a real `s:` label. Avoid ending a statement with a bare variable or label name before a colon. Put the statement on its own line, or end it with something other than an identifier, such as `a = b + 0 :`.
+A name followed by a colon later on a line is not a label. So `a = b : c = b` and `GOSUB report : PRINT "x"` are ordinary multi-statement lines.
 
 > **Caution:** Do not `GOTO` out of a `FOR`, `WHILE` or `DO` body. The loop is still active, so execution continues from the label as if inside the loop. The program usually ends with `Expected token NEXT but got None` when the input runs out. Use `EXIT FOR`/`EXIT WHILE`/`EXIT DO` instead.
 
@@ -1444,7 +1444,7 @@ Each of the following was confirmed by running the interpreter.
 2. *(merged into item 1)*
 3. *(merged into item 1)*
 4. **`EXIT FOR` with `NEXT var`** (fixed). In `FOR ... IN` and `FOR EACH` loops, the variable name after `NEXT` used to be left unconsumed, which caused `Invalid assignment statement`.
-5. **Labels.** Any `identifier :` sequence is recorded as a label, even mid-line, for example `a = b : ...` or `GOSUB s : ...`. Duplicates prevent the program from loading.
+5. **Labels** (fixed). Any `identifier :` sequence used to be recorded as a label, even mid-line (`a = b : ...`, `GOSUB s : ...`), so duplicates stopped the program from loading. Only a name at the start of a line is a label now.
 6. **`GOTO` out of a loop** leaves the loop active, which eventually causes `Expected token NEXT but got None`.
 7. **Return value case.** The return value must be assigned with the exact case used in the `FUNCTION` line. Otherwise the function returns `0` or `""`. This happens because assignment matches names exactly while function calls do not.
 8. **Functions in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL** (fixed). These never registered `FUNCTION` definitions, so calls failed with `Unknown function`. Each function now records the token list it was defined in, and each of these entry points registers the new source's functions (see 2.12).

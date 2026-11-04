@@ -2470,9 +2470,16 @@ class Interpreter:
             SqliteStringFunctions.register_all(self.db_connection)
         self.db_cursor = self.db_connection.cursor()
 
+    def _is_label_at(self, i):
+        """True if tokens[i] starts a label: a name followed by ':' as the first thing on its line.
+        A name followed by ':' elsewhere (a = b : c = d, GOSUB sub : PRINT) is not a label."""
+        return (self.tokens[i][0] == 'ID'
+                and i + 1 < len(self.tokens) and self.tokens[i + 1][0] == 'COLON'
+                and (i == 0 or self.tokens[i - 1][0] == 'NEWLINE'))
+
     def _scan_for_labels(self):
         for i, token in enumerate(self.tokens):
-            if token[0] == 'ID' and i + 1 < len(self.tokens) and self.tokens[i+1][0] == 'COLON':
+            if self._is_label_at(i):
                 label_name = token[1]
                 if label_name in self.labels: self._error(f"Duplicate label found: {label_name}")
                 self.labels[label_name] = i + 2
@@ -3468,7 +3475,7 @@ class Interpreter:
     def _parse_statement(self):
         token = self._current_token()
         # Skip label
-        if token and token[0] == 'ID' and self._peek_token() and self._peek_token()[0] == 'COLON':
+        if token and self._is_label_at(self.token_index):
             self._next_token()
             self._next_token()
             if not self._current_token() or self._current_token()[0] in ['NEWLINE', 'END']:
