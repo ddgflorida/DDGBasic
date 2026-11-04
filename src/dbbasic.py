@@ -5853,11 +5853,8 @@ class Interpreter:
             else:
                 target.write(formatted_output)
                 if not suppress_nl:
-                    # If writing to a file handle (which uses newline=''), force system separator
-                    if target != sys.stdout:
-                        parts.append(os.linesep)
-                    else:
-                        parts.append('\n')
+                    # File handles are opened with newline='', so write the system separator
+                    target.write(os.linesep)
             return
         parts = []
         suppress_nl = False

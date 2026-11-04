@@ -1350,7 +1350,7 @@ a= 1 b= 2 <- same line
 
 None of the bracketed lines has a closing `]`, because literal text after the last value is dropped. A mask such as `"## ##"` is a **single** five-character field, because space is a numeric-field character. Separate numeric fields with some other literal character.
 
-**File output:** `PRINT #n, USING mask; values;` (with the trailing `;`) works. Without the trailing `;`, the statement fails with `cannot access local variable 'parts'` (see 4.14). Even when it works, no newline is ever written to the file.
+**File output:** `PRINT #n, USING mask; values` writes the same text as the console form, followed by the system line ending (`os.linesep`). A trailing `;` suppresses the line ending.
 
 For formatting into a variable rather than printing, see `FORMAT$` in Chapter 3.
 
@@ -1456,5 +1456,5 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
     - It does not accept `9` after the decimal point.
     - It gives no overflow indicator.
     - Negative scientific exponents are not padded (`E-4` rather than `E-04`).
-23. **`PRINT #n, USING ...` without a trailing `;` crashes** with `cannot access local variable 'parts'`. The newline branch refers to a list that does not exist yet. Even when it works, it never writes a newline to the file.
+23. **`PRINT #n, USING ...`** (fixed). Without a trailing `;` it crashed with `cannot access local variable 'parts'`, and with one it never wrote a line ending to the file.
 24. **A trailing `,` in `PRINT` does not suppress the newline.** It emits a tab and then ends the line, unlike classic BASIC.

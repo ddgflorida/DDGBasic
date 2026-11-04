@@ -95,17 +95,16 @@ This works like console `PRINT` (Chapter 4) but writes to handle `n`:
 * Positive numbers get the usual leading space (`PRINT #1, 5` writes ` 5`).
 * Printing to a handle that is not open fails with a bare Python `KeyError` message (for example `Runtime Error: 5`).
 
-> **Bug:** `PRINT #n, USING ...` works only with a trailing semicolon. Without one, the interpreter fails with `cannot access local variable 'parts'`. See [section 6.9](#69-implementation-notes--discrepancies).
-
 ```basic
 OPEN "out.txt" FOR OUTPUT AS #1
 PRINT #1, "Hello, World!"
 PRINT #1, "A"; "B", "C"
 PRINT #1, "no newline";
 PRINT #1, " - continued"
+PRINT #1, USING "##.##"; 3.14159
 CLOSE #1
 ```
-Resulting file bytes: `Hello, World!\nAB\tC\nno newline - continued\n`
+Resulting file bytes: `Hello, World!\nAB\tC\nno newline - continued\n 3.14\n`
 
 ### WRITE / WRITE #
 
@@ -1131,7 +1130,7 @@ These were found while checking the source against behaviour. Line numbers refer
 1. **`COPY ... AS`** (fixed): the dispatcher looked for an identifier, but the lexer emits a `COPY` token, so the statement never ran.
 2. **`ZIP`** (fixed): the `FROM` check compared the wrong token and could never pass. It also created an empty archive and reset `ERR` to 0 when no files matched.
 3. **`UNZIP` docstring** says `INTO "dir"`, but the code (and `HELP UNZIP`) uses `TO "dir"`. For a missing archive, `ERR` is set to 2 but then overwritten with 1 by the generic exception handler. UNZIP errors are fatal unless `SET SQL_FATAL_ERRORS OFF`, which ties archive handling to a SQL setting.
-4. **`PRINT #n, USING ...` without a trailing `;`** fails with `cannot access local variable 'parts'`: the file branch appends to `parts` before it is defined (lines ~5713-5719). Even if fixed as written, the line ending would be added to `parts` and never written.
+4. **`PRINT #n, USING ...`** (fixed). Without a trailing `;` it failed with `cannot access local variable 'parts'`, and with one no line ending was written.
 5. **`OPEN` / `READ FILE` generic error path** is mis-coded: `self.variables['ERR'],` on its own line, followed by `self.variables['ERRMSG$'] = 1.0, str(e)`, sets `ERRMSG$` to a tuple and leaves `ERR` at 0. `OPEN` also prints `DEBUG OPEN EXCEPTION` in this path.
 6. **`WRITE #n` line endings** are `\r\n` on all platforms (the `csv.writer` default), while `PRINT #n` uses `os.linesep`. Mixing them in one file gives mixed line endings. `WITH OPTIONS` values are passed to `csv.writer` as strings, so non-string dialect options (for example `quoting=1`) fail.
 7. **`INPUT` syntax.** `HELP INPUT` shows `INPUT "Prompt", var`, but the parser requires a semicolon. Only a literal prompt and a single variable are supported, and numeric input is converted with `float()` with no retry.
