@@ -66,14 +66,12 @@ Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGR
 
 The issues below were found while writing the manual. They are the most likely to catch you out; each chapter's final section has the full list.
 
-**Fails outright**
-- `PARSE JSON ... INTO` is not implemented; use `PARSEJSON()`. ([5.18](05-data-loading-and-analysis.md#518-implementation-notes--discrepancies))
-
 **Surprising behaviour**
 - `'` is not a comment character. Use `REM` or `--`.
 - Variable names are case-insensitive when read but case-sensitive when assigned.
 - `SHIFT` and `UNSHIFT` operate on index 1; arrays from `ARRAY()`/`PUSH` start at 0.
 - Common words are reserved and cannot be used as variable names: `user`, `size`, `type`, `title`, `label`, `message`, `source`, `text`, `body`, `host`, `port`.
+- JSON is parsed with the `PARSEJSON()` function; there is no `PARSE JSON ... INTO` statement.
 - Any `identifier :` on a line is taken as a label, so `a = b : c = d` can fail with "Duplicate label".
 
 **SQL**

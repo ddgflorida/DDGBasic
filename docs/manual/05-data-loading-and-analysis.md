@@ -1073,7 +1073,7 @@ John
  2
 ```
 
-There is no `PARSE JSON ... INTO` **statement**. The lexer recognises the word `PARSE`, but no statement handler exists, so `PARSE JSON j$ INTO d` (as used in `tests/parsejson.bas`) fails with `Unknown statement: PARSE`. Use `d = PARSEJSON(j$)` instead.
+`PARSEJSON` is a function, not a statement: write `d = PARSEJSON(j$)`. (An older `PARSE JSON j$ INTO d` statement form appeared in some documents but was never implemented, and has been removed.)
 
 ---
 
@@ -1818,4 +1818,4 @@ The following points were found while checking the source and running the exampl
     - `RECNO` counts blank lines;
     - one invalid line aborts the loop (whereas `LOAD JSONL` skips it);
     - non-object lines are bound as arrays or scalars, without a check.
-40. **`PARSE JSON ... INTO` is not implemented.** `PARSE` is a lexer token with no statement handler. Use `PARSEJSON()`; `tests/parsejson.bas` has been updated to do so.
+40. **`PARSE JSON ... INTO`** (removed). This statement form was never implemented. The unused `PARSE` keyword has been removed from the lexer, so `parse` is now an ordinary name. Use `PARSEJSON()`.
