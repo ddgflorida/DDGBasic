@@ -737,8 +737,8 @@ class HelpRegistry:
         },
         "SET NULL_HANDLING": {
             "syntax": 'SET NULL_HANDLING [FOR "col"] TO [NULL|EMPTY|CONVERT_EMPTY_TO_NULL]',
-            "desc": "Controls how empty strings/nulls are handled during data loading.",
-            "examples": ['SET NULL_HANDLING FOR "middle_name" TO NULL']
+            "desc": "Controls how LOAD stores empty (or all-space) fields: NULL (the default) or EMPTY to keep ''. FOR \"col\" or FOR \"table.col\" sets one column.",
+            "examples": ['SET NULL_HANDLING TO EMPTY', 'SET NULL_HANDLING FOR "middle_name" TO NULL']
         },
         "SET HASH_KEYS": {
             "syntax": 'SET HASH_KEYS [PRESERVE_CASE|IGNORE_CASE]',
@@ -5018,20 +5018,25 @@ class Interpreter:
         elif token[0] == 'ID' and token[1].upper() == 'NULL_HANDLING':
             self._next_token() # Consume NULL_HANDLING
             
-            # Check if this is a global or column-specific setting
+            # Global (SET NULL_HANDLING TO opt) or column-specific (SET NULL_HANDLING FOR "col" TO opt)
+            table_column_str = None
             if self._current_token() and self._current_token()[0] == 'FOR':
-                # --- Column-Specific Setting ---
                 self._next_token() # Consume FOR
-                table_column_str = self._parse_expression()
-                self._expect('TO')
-                option_token = self._expect('ID')
-                option = option_token[1].upper()
+                table_column_str = str(self._parse_expression())
+            self._expect('TO')
+            option_token = self._current_token()
+            if not option_token or option_token[0] in ('NEWLINE', 'COLON'):
+                self._error("Expected NULL, CONVERT_EMPTY_TO_NULL, EMPTY or PRESERVE_EMPTY_STRINGS after TO")
+            self._next_token()
+            option = str(option_token[1]).upper()
 
-                if option not in ['NULL','CONVERT_EMPTY_TO_NULL', 'PRESERVE_EMPTY_STRINGS', 'EMPTY']:
-                    self._error(f"Invalid option for NULL_HANDLING: {option}")
+            if option not in ['NULL', 'CONVERT_EMPTY_TO_NULL', 'PRESERVE_EMPTY_STRINGS', 'EMPTY']:
+                self._error(f"Invalid option for NULL_HANDLING: {option}")
 
+            if table_column_str is None:
+                g_null_handling_default = option
+            else:
                 g_null_handling_settings[table_column_str.upper()] = option
-                print(f"Set null handling for '{table_column_str}' to '{option}'")
         elif token[0] == 'ID' and token[1].upper() == 'SQL_FATAL_ERRORS':
             self._next_token()
             setting_token = self._current_token()
@@ -8926,6 +8931,20 @@ class Interpreter:
             if self.db_connection:
                 self.db_cursor.execute(f"DROP TABLE IF EXISTS {self._quote_identifier(metadata_table_name)};")
                 
+    def _null_handling_rules(self, table_name, headers):
+        """For each column, True if LOAD should store empty (or all-space) text as NULL.
+        A rule set with SET NULL_HANDLING FOR "table.column" wins over one FOR "column",
+        which wins over the global setting (SET NULL_HANDLING TO ...)."""
+        table = str(table_name or '').strip('"').upper()
+        rules = []
+        for header in headers:
+            column = str(header).upper()
+            option = (g_null_handling_settings.get(f"{table}.{column}")
+                      or g_null_handling_settings.get(column)
+                      or g_null_handling_default)
+            rules.append(option in ('NULL', 'CONVERT_EMPTY_TO_NULL'))
+        return rules
+
     def _execute_load_pipeline(self, filename, dest_info, options, extractor_func):
         """
         Handles the generic TRANSFORM and LOAD parts of the ETL process.
@@ -9043,6 +9062,8 @@ class Interpreter:
                 cursor.execute(f"DELETE FROM {self._quote_identifier(dest_info['target'])};")
 
             # --- Reusable Row Processing Generator ---
+            empty_to_null = self._null_handling_rules(dest_info.get('target'), final_headers)
+
             def process_rows(row_extractor):
                 for row_info in row_extractor:
                     raw_row = row_info['data']
@@ -9269,6 +9290,11 @@ class Interpreter:
                             continue
                         # Write the (possibly modified) hash back into column order
                         processed_row = [row_hash.get(h) for h in final_headers]
+
+                    # SET NULL_HANDLING: empty or all-space text becomes NULL in converting columns
+                    if any(empty_to_null):
+                        processed_row = [None if convert and isinstance(value, str) and not value.strip() else value
+                                         for convert, value in zip(empty_to_null, processed_row)]
 
                     yield processed_row
             

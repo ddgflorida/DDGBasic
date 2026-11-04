@@ -239,7 +239,7 @@ SELECT * FROM cities;
 | id |     name      | dept  | salary  |   email    |
 +----+---------------+-------+---------+------------+
 | 1  |   john smith  | eng   | 75000   | john@x.com |
-| 2  | jane doe      | mkt   | 65000.5 |            |
+| 2  | jane doe      | mkt   | 65000.5 | NULL       |
 | 3  | bob jones     | eng   | abc     | bob@x.com  |
 | 4  | al brown      | sales | 55000   | al@x       |
 +----+---------------+-------+---------+------------+
@@ -512,7 +512,7 @@ SELECT * FROM im;
 |  source   |               src                | alt  |  title   |
 +-----------+----------------------------------+------+----------+
 | page.html | https://example.com/img/logo.png | Logo | Our logo |
-| page.html | http://cdn/x.gif                 |      |          |
+| page.html | http://cdn/x.gif                 | NULL | NULL     |
 +-----------+----------------------------------+------+----------+
 (2 rows returned)
 ```
@@ -561,7 +561,7 @@ For `.xlsx` files, `header=false` currently fails with `Could not determine any 
 LOAD PARQUET file dest [OPTIONS "skip=n, limit=n, ..."]
 ```
 
-The file is streamed batch by batch with `pyarrow`. Values are converted to strings, `NULL` becomes `""`, and struct or list values are written as JSON text.
+The file is streamed batch by batch with `pyarrow`. Values are converted to strings, and struct or list values are written as JSON text. `NULL` is read as `""`, which is then stored as `NULL` by default (see `SET NULL_HANDLING`, [4.9.3](04-database-sql-and-output.md#493-set-null_handling)).
 
 ```basic
 LOAD PARQUET "items.parquet" CREATE TABLE items
@@ -575,9 +575,9 @@ The file has the columns `id`, `name`, `tags` (list of strings) and `price`.
 +----+------+---------+-------+
 | id | name | element | price |
 +----+------+---------+-------+
-| 1  | a    |         | 1.5   |
-| 2  | b    |         | 2.0   |
-| 3  |      |         |       |
+| 1  | a    | NULL    | 1.5   |
+| 2  | b    | NULL    | 2.0   |
+| 3  | NULL | NULL    | NULL  |
 +----+------+---------+-------+
 (3 rows returned)
 ```
@@ -654,7 +654,7 @@ LOAD CSV "dates.csv" CREATE TABLE d OPTIONS "header=true, transform=joined:date(
 | id |     name      | dept  |  salary   |   email    |
 +----+---------------+-------+-----------+------------+
 | 1  |   john smith  | ENG   | 75,000.00 | john@x.com |
-| 2  | jane doe      | MKT   | 65,000.50 |            |
+| 2  | jane doe      | MKT   | 65,000.50 | NULL       |
 | 3  | bob jones     | ENG   | abc       | bob@x.com  |
 | 4  | al brown      | SALES | 55,000.00 | al@x       |
 +----+---------------+-------+-----------+------------+
@@ -822,6 +822,7 @@ Jane was dropped by `VALIDATE email` because her email is empty. Al was dropped 
    4. Run the `process_by` script. `rec.is_valid = 0` drops the row silently.
    5. Apply `TRANSFORM col WITH fn`, then `VALIDATE col WITH fn`. A falsy result drops the row silently.
    6. Apply `TRANSFORM ROW WITH fn` in order, then `VALIDATE ROW WITH fn`. A falsy result drops the row silently.
+   7. Apply `SET NULL_HANDLING`: in each column set to convert (the default), an empty or all-space text value becomes `NULL` ([4.9.3](04-database-sql-and-output.md#493-set-null_handling)). The `normalize` and `USING SCHEMA` paths do not apply this step.
 6. **Insert** the rows in batches of `batchsize` inside one transaction, or upsert them through a staging table.
 
 **Rejected rows** are never written to a side table or file. They are only left out of the count printed in `N records loaded`. To keep the rejects, write them somewhere yourself from a `process_by` script or a `VALIDATE` function. For example, `PRINT #n` to a reject file before returning false.
@@ -1767,7 +1768,7 @@ The following points were found while checking the source and running the exampl
 **LOAD formats**
 
 10. **`fields=` is ignored** for JSON, FIXED, TEXT, XML, HTML and PARQUET (pipeline line 8691). No warning is given.
-11. **JSON values are inserted with their native types.** `NULL` is used for missing keys and booleans become 1/0. All other formats insert strings, with `""` for missing values.
+11. **JSON values are inserted with their native types.** `NULL` is used for missing keys and booleans become 1/0. All other formats insert strings. Empty fields are stored as `NULL` unless `SET NULL_HANDLING` says otherwise (4.9.3).
 12. **XML record attributes are dropped** by the flat `LOAD XML`. Only child elements become columns.
 13. **The XML `limit` option** stops emitting rows but keeps scanning to the end of the file.
 14. **HTML `header=false` loses all data.** The header list stays `['source']`, so the column map keeps only the first value of each row.
@@ -1777,7 +1778,7 @@ The following points were found while checking the source and running the exampl
 18. **Blank lines in a CSV file are skipped** (fixed: a trailing blank line used to abort the load with `Incorrect number of bindings supplied`). **CSV rows with fewer fields than the header still abort the whole load.** Rows with more fields lose the extras silently. A failed `CREATE TABLE` load leaves an empty table behind.
 19. **`IGNORE` mode reports rows sent, not rows inserted.**
 20. **Successful loads do not reset `ERR`.** Example scripts that check `IF ERR <> 0` after `LOAD` can see a stale value.
-21. **`SET NULL_HANDLING` is not applied.** Its help text says it "controls how empty strings/nulls are handled during data loading", but `g_null_handling_settings` is written and never read.
+21. **`SET NULL_HANDLING`** (fixed). It used to be stored and never read. It now decides whether `LOAD` stores empty fields as `NULL` (the default) or `''` (see [4.9.3](04-database-sql-and-output.md#493-set-null_handling)).
 
 **Normalisation**
 

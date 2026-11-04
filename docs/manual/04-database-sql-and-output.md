@@ -833,7 +833,7 @@ The following errors are **not** governed by `SQL_FATAL_ERRORS`. They always sto
 | `OUTPUT` | `SET OUTPUT [CONSOLE \| FILE expr \| OFF] [FORMAT fmt [sql_mode] [OPTIONS "k=v, ..."]]` |
 | `SQL_FATAL_ERRORS` | `SET SQL_FATAL_ERRORS ON \| OFF` |
 | `HASH_KEYS` | `SET HASH_KEYS PRESERVE_CASE \| IGNORE_CASE` |
-| `NULL_HANDLING` | `SET NULL_HANDLING FOR expr TO NULL \| CONVERT_EMPTY_TO_NULL \| PRESERVE_EMPTY_STRINGS \| EMPTY` |
+| `NULL_HANDLING` | `SET NULL_HANDLING [FOR expr] TO NULL \| CONVERT_EMPTY_TO_NULL \| PRESERVE_EMPTY_STRINGS \| EMPTY` |
 | `EMAIL` | `SET EMAIL keyword value [keyword value ...]` |
 
 These are the only options. Any other word after `SET` is **not** rejected: `SET` consumes nothing and the rest of the line is parsed as a new statement. So `SET x = 5` acts as an assignment, `SET FOO BAR` fails with `Invalid assignment statement for 'FOO'`, and `SET DATABASE ENGINE DUCKDB` (used in `examples/setoutputsql.bas`) works only because the `DATABASE ENGINE DUCKDB` part runs as its own statement.
@@ -857,19 +857,58 @@ Sets `hash_keys_mode` (default `PRESERVE_CASE`). With `IGNORE_CASE`, keys of has
 ### 4.9.3 SET NULL_HANDLING
 
 ```
-SET NULL_HANDLING FOR "table.column" TO NULL | CONVERT_EMPTY_TO_NULL | PRESERVE_EMPTY_STRINGS | EMPTY
+SET NULL_HANDLING TO option
+SET NULL_HANDLING FOR "column" TO option
+SET NULL_HANDLING FOR "table.column" TO option
 ```
 
-Records a per-column rule in the global dictionary `g_null_handling_settings`. The key is the upper-cased expression value. The statement prints a confirmation:
+| Option | Effect on `LOAD` |
+|---|---|
+| `NULL` or `CONVERT_EMPTY_TO_NULL` | An empty field, or one containing only spaces, is stored as SQL `NULL`. **This is the default.** |
+| `EMPTY` or `PRESERVE_EMPTY_STRINGS` | The field is stored as text: `''`, or the spaces as read. |
+
+The setting decides what `LOAD` (every format) stores for empty fields. It is applied to each row after the `transform`/`validate` rules and the `TRANSFORM`/`VALIDATE ... WITH` functions, just before the row is inserted. Only text values are affected. Numbers, booleans and values that are already `NULL` pass through unchanged.
+
+- **Precedence:** a rule `FOR "table.column"` wins over one `FOR "column"`, which wins over the global `SET NULL_HANDLING TO`. Names are not case-sensitive.
+- **Scope:** settings last until changed, for the rest of the program.
+- **Why NULL is the default:** SQL aggregates ignore `NULL` but count `''`, so `AVG` and `COUNT` give the right answers. DuckDB can also load an empty field into a typed column such as `INTEGER`, which fails with `''`.
+
+Given `people.csv`:
 
 ```
-Set null handling for 'emp.mid' to 'NULL'
+id,first,middle,salary
+1,Ann,,50000
+2,Bob,J,
+3,Cy,,61000
 ```
 
-Limitations, from the current source:
+```basic
+DATABASE OPEN ":memory:"
+LOAD CSV "people.csv" CREATE TABLE p1 OPTIONS "header=true"
+SELECT COUNT(middle) AS cnt_mid, AVG(salary) AS avg_sal FROM p1;
+SET NULL_HANDLING FOR "middle" TO EMPTY
+LOAD CSV "people.csv" CREATE TABLE p2 OPTIONS "header=true"
+SELECT SUM(middle IS NULL) AS mid_nulls, SUM(salary IS NULL) AS sal_nulls FROM p2;
+```
 
-- The global form `SET NULL_HANDLING TO ...` (without `FOR`) is shown in `HELP SET NULL_HANDLING` but is not implemented. The parser consumes `NULL_HANDLING` and then fails on the following `TO` with `Unknown statement: TO`.
-- Neither `g_null_handling_settings` nor `g_null_handling_default` (`'CONVERT_EMPTY_TO_NULL'`) is read anywhere else in the interpreter, so the setting currently has **no effect** on `LOAD` or any other statement.
+```
+3 records loaded into table p1
++---------+---------+
+| cnt_mid | avg_sal |
++---------+---------+
+| 1       | 55500.0 |
++---------+---------+
+(1 rows returned)
+3 records loaded into table p2
++-----------+-----------+
+| mid_nulls | sal_nulls |
++-----------+-----------+
+| 0         | 1         |
++-----------+-----------+
+(1 rows returned)
+```
+
+With `SET NULL_HANDLING TO EMPTY` (the behaviour before this setting worked), the first query gives `cnt_mid` 3 and `avg_sal` 37000.0, because the empty salary is counted as 0.
 
 ### 4.9.4 SET EMAIL
 
@@ -1443,7 +1482,7 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 **SET**
 
 7. **Unknown `SET` options are not rejected.** The rest of the line runs as a new statement. `SET DATABASE ENGINE DUCKDB` (in `examples/setoutputsql.bas`) only works by accident, and `SET x = 5` is an assignment.
-8. **`SET NULL_HANDLING` has no effect.** The global form `SET NULL_HANDLING TO ...` shown in `HELP` is not parsed. The per-column settings are stored in `g_null_handling_settings` but never read, and `g_null_handling_default` is never used.
+8. **`SET NULL_HANDLING`** (fixed). It had no effect: the settings were stored but never read, and the global form was not parsed. It now controls `LOAD`, with empty fields stored as `NULL` by default (4.9.3).
 9. **`SET OUTPUT FORMAT TABLE`** (a `HELP SET OUTPUT` example) is rejected. The table format is called `TEXT`. The help's format list also leaves out `JSONL`, `XML`, `FIXED` and `PLAIN`.
 10. **`SET OUTPUT FORMAT ...` without a mode forces `CONSOLE`**, which silently cancels an earlier `FILE` or `OFF`. `SET OUTPUT CONSOLE` resets the format to `TEXT`, and `FILE` without `FORMAT` keeps the old format.
 11. **`SET OUTPUT OFF` does more than suppress output.** It prevents line-level `SELECT`/`WITH`/`SUMMARIZE`/`PRAGMA` statements from running at all. Side effects such as a `PRAGMA` setting, or `ERR` being reset, do not happen.
