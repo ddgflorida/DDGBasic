@@ -134,10 +134,8 @@ The lexer switches into SQL mode when **the first token on a source line** is on
 ```
 SELECT  INSERT  UPDATE  DELETE  CREATE  DROP  ALTER
 WITH    BEGIN   COMMIT  ROLLBACK  ATTACH  COPY
-SUMMARIZE  PRAGMA
+SUMMARIZE  PRAGMA  END TRANSACTION
 ```
-
-(`Interpreter.SQL_KEYWORDS` also lists `END TRANSACTION`, but that entry never matches. See 4.2.6.)
 
 When the lexer sees one of these keywords at the start of a line, it searches forward in the source for the next semicolon. Everything from the keyword up to and including that semicolon becomes a single `SQL_STRING` token. The interpreter passes that text to the database unchanged, apart from the rewrites described below.
 
@@ -213,7 +211,7 @@ SELECT 'for each item' AS a, 'end if' AS b;
 (1 rows returned)
 ```
 
-A keyword pair written as SQL code (not inside quotes) is still joined. `END TRANSACTION;` is affected by this (item 4 in 4.14).
+A keyword pair written as SQL code (not inside quotes) is joined while the line is tokenised, then split back apart in the SQL text sent to the engine. So `END TRANSACTION;` and `CREATE TRIGGER ... FOR EACH ROW` reach the database as written, apart from letter case.
 
 ### 4.2.3 Semicolons and comments inside SQL
 
@@ -248,6 +246,8 @@ SELECT id, note FROM t /* block; comment */ ORDER BY id;
 A quote that is never closed stops the program before it runs, with `Unexpected character '''`. A statement with no terminating `;` is not treated as SQL and fails with `Unknown statement`. `EXECUTE` splits multi-statement strings by the same rules (4.6).
 
 Comments are passed through to the engine, which ignores them.
+
+A `CREATE TRIGGER` statement can't be written as line-level SQL. Its body contains `;` inside `BEGIN ... END`, and the statement is cut at the first one. `EXECUTE` has the same limit.
 
 ### 4.2.4 How the statement runs
 
@@ -328,7 +328,7 @@ SELECT bal FROM acct;
 (1 rows returned)
 ```
 
-`END TRANSACTION;` does **not** work, even though SQLite accepts it. The pre-processor rewrites it to `ENDTRANSACTION`. That token kind does not match the `'END TRANSACTION'` entry in `SQL_KEYWORDS`, so the line is not treated as SQL and fails with `Unknown statement: END TRANSACTION`. Use `COMMIT;` instead.
+`END TRANSACTION;` is a synonym for `COMMIT;` on both engines.
 
 ### 4.2.7 SQL status variables
 
@@ -1418,7 +1418,7 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 1. **SQL statement termination** (fixed). Line-level SQL used to end at the first `;` in the source text, even inside `'...'` or a comment. It now skips string literals, quoted identifiers and comments (4.2.3).
 2. **SQL is recognised only at the start of a line.** It is not recognised after `THEN`, after `:`, or after a label. Only one SQL statement is allowed per line.
 3. **Keyword joining inside string literals** (fixed). Multi-word keyword rewrites used to change text inside strings and SQL literals (`'for each'` became `'FOREACH'`). They now apply only to code (4.2.2).
-4. **`END TRANSACTION;` is unusable.** It is listed in `SQL_KEYWORDS` as `'END TRANSACTION'`, but the raw token kind is `ENDTRANSACTION`, so it never matches and the line fails with `Unknown statement`.
+4. **`END TRANSACTION;`** (fixed). It was not recognised as SQL, because the keyword list held `'END TRANSACTION'` while the lexer sees the joined token `ENDTRANSACTION`. Joined keywords in SQL code are now also split back apart before the statement is sent, so `FOR EACH ROW` in a trigger reaches the engine intact.
 5. **Bind-variable scanning is purely textual.** `'x:y'`, `':memory:'` and DuckDB `::TYPE` casts are taken as variable references, which causes a hard error. A missing bind variable is fatal even with `SQL_FATAL_ERRORS OFF`.
 6. **Numeric bind values are always floats**, so `SELECT :i` shows `1.0`.
 

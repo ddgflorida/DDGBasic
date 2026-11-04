@@ -1023,6 +1023,12 @@ class Lexer:
             r'\bLIST\s+FIELDS\b': 'LISTFIELDS',
         }
         compiled = [(re.compile(pattern, re.IGNORECASE), repl) for pattern, repl in replacements.items()]
+        # Reverse map (ENDTRANSACTION -> END TRANSACTION) so SQL text cut from the
+        # joined source can be restored before it is sent to the database.
+        spaced = {repl: pattern.replace(r'\b', '').replace(r'\s+', ' ') for pattern, repl in replacements.items()}
+        joined_re = re.compile(r'\b(' + '|'.join(spaced) + r')\b', re.IGNORECASE)
+        self._restore_sql_keywords = lambda sql: self._outside_literals(
+            sql, lambda chunk: joined_re.sub(lambda m: spaced[m.group(1).upper()], chunk))
 
         def join_keywords(chunk):
             for regex, repl in compiled:
@@ -1153,7 +1159,7 @@ class Lexer:
                 semicolon_pos = self._find_sql_terminator(self.modified_source_code, pos)
                 if semicolon_pos != -1:
                     sql_end_pos = semicolon_pos + 1
-                    sql_text = self.modified_source_code[pos:sql_end_pos].strip()
+                    sql_text = self._restore_sql_keywords(self.modified_source_code[pos:sql_end_pos].strip())
                     tokens.append(('SQL_STRING', sql_text, pos))
                     while i < len(raw_tokens) and raw_tokens[i][2] < sql_end_pos: i += 1
                     is_start_of_line = False
@@ -1194,7 +1200,7 @@ class Lexer:
                         if nesting != 0: self._error("Unmatched parenthesis in SQL subquery.")
                         
                         # Create and add the subquery tokens
-                        sql_text = self.modified_source_code[lp_pos + 1 : end_paren_pos]
+                        sql_text = self._restore_sql_keywords(self.modified_source_code[lp_pos + 1 : end_paren_pos])
                         tokens.append(('LPAREN', '(', lp_pos))
                         tokens.append(('SQL_STRING', sql_text.strip(), lp_pos + 1))
                         tokens.append(('RPAREN', ')', end_paren_pos))
@@ -1969,7 +1975,7 @@ class LegacyJsonNormalizer:
         
 class Interpreter:
     SQL_KEYWORDS = {'SELECT', 'INSERT', 'DELETE', 'UPDATE', 'CREATE', 'DROP', 'ATTACH', 'COPY',
-                    'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'END TRANSACTION', 'ALTER', 'SUMMARIZE', 'PRAGMA'}
+                    'WITH', 'BEGIN', 'COMMIT', 'ROLLBACK', 'ENDTRANSACTION', 'ALTER', 'SUMMARIZE', 'PRAGMA'}
     SQL_RESERVED_WORDS = {
             'SELECT', 'FROM', 'WHERE', 'INSERT', 'UPDATE', 'DELETE', 'CREATE', 'TABLE', 'ATTACH', 'COPY',
             'VIEW', 'INDEX', 'ORDER', 'GROUP', 'BY', 'JOIN', 'LEFT', 'RIGHT', 'INNER', 'SUMMARIZE', 'PRAGMA',
