@@ -926,6 +926,38 @@ class Lexer:
         return line, col
 
     @staticmethod
+    def _find_sql_terminator(text, start):
+        """Index of the ';' that ends the SQL statement starting at text[start], or -1.
+        Semicolons inside '...' strings, "..." identifiers, -- comments and /* */ comments
+        don't count. A doubled quote ('' or "") inside a quoted run is an escape."""
+        i, n = start, len(text)
+        while i < n:
+            c = text[i]
+            if c in ("'", '"'):
+                i += 1
+                while i < n:
+                    if text[i] == c:
+                        if i + 1 < n and text[i + 1] == c:
+                            i += 2
+                            continue
+                        break
+                    i += 1
+            elif c == '-' and text.startswith('--', i):
+                newline = text.find('\n', i)
+                if newline == -1:
+                    return -1
+                i = newline
+            elif c == '/' and text.startswith('/*', i):
+                close = text.find('*/', i + 2)
+                if close == -1:
+                    return -1
+                i = close + 1
+            elif c == ';':
+                return i
+            i += 1
+        return -1
+
+    @staticmethod
     def _is_basic_copy(raw_tokens, i):
         """True if the line starting at raw_tokens[i] is 'COPY src AS dest' rather than SQL COPY."""
         has_as = False
@@ -1079,7 +1111,7 @@ class Lexer:
             # Handle line-level SQL (e.g., SELECT * FROM mytable;)
             # COPY src AS dest (file copy) is BASIC; SQL COPY always has TO or FROM.
             if is_start_of_line and kind in Interpreter.SQL_KEYWORDS and not (kind == 'COPY' and self._is_basic_copy(raw_tokens, i)):
-                semicolon_pos = self.modified_source_code.find(';', pos)
+                semicolon_pos = self._find_sql_terminator(self.modified_source_code, pos)
                 if semicolon_pos != -1:
                     sql_end_pos = semicolon_pos + 1
                     sql_text = self.modified_source_code[pos:sql_end_pos].strip()
@@ -2128,6 +2160,7 @@ class Interpreter:
         in_multiline_comment = False
         in_single_line_comment = False
         in_string_literal = False
+        in_quoted_identifier = False
         
         # We use an index to allow for two-character lookaheads (e.g., for '/*' or '--')
         i = 0
@@ -2166,12 +2199,14 @@ class Interpreter:
                 i += 2
                 continue
             
-            # Check for entering/exiting a string literal
-            if char == "'":
+            # Check for entering/exiting a string literal or a "quoted" identifier
+            if char == "'" and not in_quoted_identifier:
                 in_string_literal = not in_string_literal
+            elif char == '"' and not in_string_literal:
+                in_quoted_identifier = not in_quoted_identifier
             
             # Check for statement terminator ';'
-            if char == ';' and not in_string_literal:
+            if char == ';' and not in_string_literal and not in_quoted_identifier:
                 statement_str = "".join(current_statement).strip()
                 if statement_str:
                     statements.append(statement_str)

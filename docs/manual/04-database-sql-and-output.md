@@ -217,24 +217,37 @@ If you need such text in your data, pass it through a bind variable (4.3).
 
 ### 4.2.3 Semicolons and comments inside SQL
 
-The line-level SQL scanner does **not** understand SQL string literals or comments. It stops at the first `;` character, wherever it is:
+A line-level SQL statement ends at the first `;` that is **outside** all of the following:
+
+- single-quoted string literals (`'a;b'`, including `''` escapes such as `'it''s'`)
+- double-quoted identifiers (`"semi;col"`)
+- `--` comments
+- `/* */` comments
+
+The statement can span several lines.
 
 ```basic
-INSERT INTO t VALUES (9, 'a;b');
+INSERT INTO t VALUES (1, 'a;b');
+INSERT INTO t VALUES (2, 'it''s; fine');
+INSERT INTO t VALUES (3, 'x') -- trailing; comment
+;
+SELECT id, note FROM t /* block; comment */ ORDER BY id;
 ```
 
 ```
---- FAILED SQL ---
-SQL    : INSERT INTO t VALUES (9, 'a;
-PARAMS : []
-------------------
-
-Runtime Error: Fatal DB Error: unrecognized token: "'a;" ...
++----+------------+
+| id |    note    |
++----+------------+
+| 1  | a;b        |
+| 2  | it's; fine |
+| 3  | x          |
++----+------------+
+(3 rows returned)
 ```
 
-You can work around this by binding the value (`INSERT INTO t VALUES (9, :v$);`) or by using `EXECUTE`, whose statement splitter does understand quotes and comments (4.6).
+A quote that is never closed stops the program before it runs, with `Unexpected character '''`. A statement with no terminating `;` is not treated as SQL and fails with `Unknown statement`. `EXECUTE` splits multi-statement strings by the same rules (4.6).
 
-SQL `--` comments placed *before* the semicolon are passed through to the engine, which ignores them. A `;` inside such a comment still ends the statement early.
+Comments are passed through to the engine, which ignores them.
 
 ### 4.2.4 How the statement runs
 
@@ -1402,7 +1415,7 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 
 **SQL recognition and text handling**
 
-1. **The SQL line scanner ignores quotes and comments.** Line-level SQL ends at the first `;` in the source text, even inside `'...'` or a `--` comment (4.2.3). If the semicolon is missing, the statement runs on into later lines up to the next `;` anywhere in the file.
+1. **SQL statement termination** (fixed). Line-level SQL used to end at the first `;` in the source text, even inside `'...'` or a comment. It now skips string literals, quoted identifiers and comments (4.2.3).
 2. **SQL is recognised only at the start of a line.** It is not recognised after `THEN`, after `:`, or after a label. Only one SQL statement is allowed per line.
 3. **Keyword-joining rewrites alter SQL text and string literals.** Examples: `'for each'` becomes `'FOREACH'` and `'end if'` becomes `'ENDIF'` (4.2.2).
 4. **`END TRANSACTION;` is unusable.** It is listed in `SQL_KEYWORDS` as `'END TRANSACTION'`, but the raw token kind is `ENDTRANSACTION`, so it never matches and the line fails with `Unknown statement`.
