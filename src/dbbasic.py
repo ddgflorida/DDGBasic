@@ -2006,7 +2006,7 @@ class Interpreter:
         self.command_args = cmd_args if cmd_args is not None else []
         self.gosub_stack = []
         self.labels = {}
-        self.user_functions = {}  # {NAME_UPPER: (body_token_index, [param_names], orig_name)}
+        self.user_functions = {}  # {NAME_UPPER: (body_token_index, [param_names], orig_name, tokens)}
         # Stack of active UDF call frames. Each frame is a dict with:
         #   'keys_to_restore' - {var_name: original_value} for names that existed pre-call
         #   'new_names'       - [var_name, ...] for names created by the call (delete on exit)
@@ -2170,6 +2170,7 @@ class Interpreter:
             # Note: This limits GOTO/GOSUB to labels defined within the current line only
             self._pre_scan_for_jumps()
             self._scan_for_labels()
+            self._scan_for_functions(merge=True)
             
             # 4. Run until we hit the end of this input
             self.program_terminated = False
@@ -2386,15 +2387,16 @@ class Interpreter:
                 if label_name in self.labels: self._error(f"Duplicate label found: {label_name}")
                 self.labels[label_name] = i + 2
 
-    def _scan_for_functions(self):
+    def _scan_for_functions(self, merge=False):
         """Pre-scans tokens to find FUNCTION definitions.
-        Records each as self.user_functions[NAME_UPPER] = (body_start_index, [param_names], orig_name).
+        Records each as self.user_functions[NAME_UPPER] = (body_start_index, [param_names], orig_name, tokens),
+        where tokens is the token list the body index refers to, so a function defined in one
+        source (a RUN target, the REPL, the main program) can be called while another is running.
         Syntax: FUNCTION name(param1, param2, ...) ... END FUNCTION
-        Also remembers the token list scanned (self._main_tokens) so UDF calls during
-        temporary token-list swaps (e.g. string interpolation) can restore correctly.
+        With merge=True the definitions are added to the existing ones (a new definition with the
+        same name replaces the old one) instead of replacing the whole table.
         """
-        self.user_functions = {}
-        self._main_tokens = self.tokens  # body_indexes recorded below are relative to this list
+        found = {}
         i = 0
         while i < len(self.tokens):
             token = self.tokens[i]
@@ -2413,7 +2415,7 @@ class Interpreter:
                     raise Exception(f"Line {line}: Expected function name after FUNCTION")
                 func_name = self.tokens[i+1][1]
                 func_key = func_name.upper()
-                if func_key in self.user_functions:
+                if func_key in found:
                     pos = token[2] if len(token) > 2 else 0
                     line, _ = self.lexer.get_line_col(pos)
                     raise Exception(f"Line {line}: Duplicate FUNCTION definition: '{func_name}'")
@@ -2457,10 +2459,14 @@ class Interpreter:
                     j += 1
                 if level > 0:
                     raise Exception(f"Missing END FUNCTION for '{func_name}'")
-                self.user_functions[func_key] = (body_start, params, func_name)
+                found[func_key] = (body_start, params, func_name, self.tokens)
                 i = j + 1  # continue past END FUNCTION
             else:
                 i += 1
+        if merge:
+            self.user_functions.update(found)
+        else:
+            self.user_functions = found
 
     def _parse_function_definition(self):
         """When FUNCTION is encountered at top level during execution, skip past END FUNCTION.
@@ -2661,7 +2667,7 @@ class Interpreter:
         func_key = name.upper()
         if func_key not in self.user_functions:
             self._error(f"Unknown function: '{name}'")
-        body_index, params, orig_name = self.user_functions[func_key]
+        body_index, params, orig_name, body_tokens = self.user_functions[func_key]
 
         if len(args) != len(params):
             self._error(f"Function '{orig_name}' expects {len(params)} argument(s), got {len(args)}.")
@@ -2693,13 +2699,12 @@ class Interpreter:
 
         # Save token position and gosub_stack depth (so a RETURN-without-GOSUB inside a UDF
         # doesn't accidentally pop a frame from an outer GOSUB).
-        # Also save the current token list: if we were called during a temporary swap (e.g. from
-        # inside a string-interpolation expression), body_index is relative to the main program
-        # tokens, not the current swapped-in list.
+        # Also save the current token list: body_index is relative to the token list the function
+        # was defined in, which may differ from the one running now (string interpolation, RUN, REPL).
         saved_index = self.token_index
         saved_tokens = self.tokens
         saved_gosub_depth = len(self.gosub_stack)
-        self.tokens = self._main_tokens
+        self.tokens = body_tokens
         self.token_index = body_index
 
         try:
@@ -6595,7 +6600,8 @@ class Interpreter:
                 'lexer': self.lexer, 'tokens': self.tokens, 'token_index': self.token_index,
                 'labels': self.labels, 'jump_map': self.jump_map,
                 'form_definitions': self.form_definitions, 'command_args': self.command_args,
-                'variables_snapshot': self.variables.copy(), 'gosub_stack': self.gosub_stack[:]
+                'variables_snapshot': self.variables.copy(), 'gosub_stack': self.gosub_stack[:],
+                'user_functions': dict(self.user_functions)
             }
             self.run_stack.append(current_state)
 
@@ -6611,6 +6617,7 @@ class Interpreter:
 
             self._pre_scan_for_jumps()
             self._scan_for_labels()
+            self._scan_for_functions(merge=True)  # the child sees its own functions and the caller's
             
             run_error = None
             try:
@@ -6636,6 +6643,7 @@ class Interpreter:
                     self.command_args = saved_state['command_args']
                     self.variables = saved_state['variables_snapshot']
                     self.gosub_stack = saved_state['gosub_stack']
+                    self.user_functions = saved_state['user_functions']
                     # Reset the termination flag for the caller
                     self.program_terminated = False
                 else:
@@ -6660,6 +6668,7 @@ class Interpreter:
                 self.token_index = saved_state['token_index']; self.labels = saved_state['labels']
                 self.jump_map = saved_state['jump_map']; self.form_definitions = saved_state['form_definitions']
                 self.command_args = saved_state['command_args']; self.variables = saved_state['variables_snapshot']
+                self.user_functions = saved_state['user_functions']
             
             # Since setup failed, this IS a fatal error for the caller's logic.
             # We set the variables and then raise the error to stop the caller.
@@ -6773,6 +6782,7 @@ class Interpreter:
             self.db_connection = new_interpreter.db_connection
             self.db_cursor = new_interpreter.db_cursor
             self.jump_map = new_interpreter.jump_map
+            self.user_functions = new_interpreter.user_functions
             
             # Reset error handling state
             self.error_handler_label = None
@@ -6817,6 +6827,7 @@ class Interpreter:
 
             eval_interpreter.variables = self.variables
             eval_interpreter.file_handles = self.file_handles
+            eval_interpreter.user_functions = {**self.user_functions, **eval_interpreter.user_functions}
 
             eval_interpreter.run()
 
@@ -13423,6 +13434,7 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
 def run_repl(debug=False):
     print("DbBasic REPL (Type 'EXIT' to quit)")
     print("Supports single-line loops (e.g., FOR I=1 TO 5: PRINT I: NEXT)")
+    print("FUNCTION definitions may span lines, up to END FUNCTION")
     
     # Initialize with empty source to set up DB and variables
     interpreter = None
@@ -13447,6 +13459,25 @@ def run_repl(debug=False):
                 break
             if code_line == "":
                 continue
+
+            # A FUNCTION definition spans several lines: collect it up to END FUNCTION
+            if re.match(r'FUNCTION\s+\w', code_line, re.IGNORECASE):
+                block = [code_line]
+                while True:
+                    try:
+                        more = input("...> ")
+                    except EOFError:
+                        more = None
+                    if more is None:
+                        print("Incomplete FUNCTION definition discarded.")
+                        block = None
+                        break
+                    block.append(more)
+                    if re.match(r'\s*END\s+FUNCTION\b', more, re.IGNORECASE):
+                        break
+                if block is None:
+                    break
+                code_line = "\n".join(block)
                 
             # Execute
             interpreter.repl_execute(code_line)

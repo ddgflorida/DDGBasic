@@ -855,13 +855,15 @@ A function can return an array or hash by assigning it to the function name, for
 
 ### Where functions are available
 
-Functions are registered from the main program text when it is loaded. They are **not** available:
+Functions are registered from the program text before it runs, so a call can come before the definition. They are available as follows:
 
-- in the interactive REPL, where `FUNCTION` lines are accepted but nothing is registered;
-- in programs started with `RUN` or `CHAIN`;
-- inside `EVAL` strings, unless the function is defined inside the same string.
-
-See 2.18 for details.
+| Where | Functions available |
+|---|---|
+| Main program | its own |
+| `RUN` child | its own and the caller's. A child function with the same name as one of the caller's replaces it while the child runs. When the child returns, the caller's set is restored, so the child's functions are not visible to the caller. |
+| `CHAIN` target | its own only. `CHAIN` replaces the running program. |
+| `EVAL` string | the caller's, plus any defined in the string. Functions defined in the string are not kept afterwards. |
+| REPL | every function defined so far in the session. Type the definition over several lines; the REPL keeps reading (prompt `...>`) until `END FUNCTION`. Defining a function again replaces it. |
 
 ---
 
@@ -1104,7 +1106,7 @@ Runs another DbBasic script as a sub-program, then returns to the statement afte
 - The database connection and open file handles are **shared** with the caller.
 - An error inside the child does not stop the caller. The caller continues with `ERR = 1` and `ERRMSG$` set to the child's error. After a successful run, `ERR = 0`.
 - `END` inside the child, except a bare top-level `END` line, terminates the whole process, not just the child.
-- The child's `FUNCTION`s are not registered (see 2.18).
+- The child can define its own `FUNCTION`s and call the caller's. Its functions are discarded when it returns (see "Where functions are available" in 2.12).
 
 ```basic
 REM report.bas
@@ -1139,7 +1141,7 @@ Replaces the running program with another script. Control does not come back to 
 - The engine choice (`DATABASE ENGINE`), `SQL_FATAL_ERRORS`, `HASH_KEYS` mode and `TRON` state are carried over. The `ON ERROR` handler is cleared.
 - `CHAIN` always prints status lines: `CHAIN: Transferred control to ...`, then, when they apply, `CHAIN: Arguments passed: ...`, `CHAIN: Variables preserved` and `CHAIN: Serialized X as X_JSON$`.
 - A missing file is a raised error with `ERR = 2`.
-- The chained program's `FUNCTION`s are not registered (see 2.18).
+- The chained program's `FUNCTION`s replace the caller's.
 
 ```basic
 REM stage2.bas
@@ -1174,7 +1176,7 @@ EVAL code$
 Runs a string of DbBasic source code. `code$` can contain several lines separated by `CHR$(10)` or by colons, including complete loops and block IFs.
 
 - The code runs in a fresh interpreter that **shares** the caller's variables (the same variable table), open files, database connection and command-line arguments. Variables it creates or changes stay visible afterwards.
-- Labels and functions belong only to the evaluated string. It cannot `GOTO` the caller's labels or call the caller's `FUNCTION`s. Functions defined inside the same string work.
+- Labels belong only to the evaluated string, so it cannot `GOTO` the caller's labels. It can call the caller's `FUNCTION`s, as well as functions defined inside the same string.
 - An error inside the evaluated code is printed as `Runtime Error: ...` on stderr. It does **not** stop the caller and does **not** trigger the caller's `ON ERROR` handler.
 - An empty or all-blank string does nothing. A non-string argument causes an error.
 
@@ -1388,7 +1390,7 @@ DbBasic> FOR I=1 TO 3: PRINT I: NEXT
 - Each line you type is tokenized and run on its own. Variables, the database connection, open files and `SET` options persist between lines.
 - `EXIT` or `QUIT` (any case), or end-of-file (Ctrl-D, or Ctrl-Z on Windows), leaves the REPL. Ctrl-C prints `Type 'EXIT' to quit.` and continues.
 - Because each line is separate, **block structures must fit on one line**. Block `IF ... END IF` cannot span several REPL lines; you get `Mismatched 'IF'`. Labels exist only within the line that defines them, so `GOTO`/`GOSUB` work only within one line.
-- User-defined functions cannot be used in the REPL (see 2.18).
+- A `FUNCTION` definition is the exception to the one-line rule. After a line starting with `FUNCTION name`, the REPL keeps reading lines (prompt `...>`) until `END FUNCTION`. The function stays defined for the rest of the session.
 - Errors are printed as `REPL Error: ...` and the session continues.
 
 ### HELP
@@ -1445,7 +1447,7 @@ Each of the following was confirmed by running the interpreter.
 5. **Labels.** Any `identifier :` sequence is recorded as a label, even mid-line, for example `a = b : ...` or `GOSUB s : ...`. Duplicates prevent the program from loading.
 6. **`GOTO` out of a loop** leaves the loop active, which eventually causes `Expected token NEXT but got None`.
 7. **Return value case.** The return value must be assigned with the exact case used in the `FUNCTION` line. Otherwise the function returns `0` or `""`. This happens because assignment matches names exactly while function calls do not.
-8. **Functions are not available in `RUN` or `CHAIN` targets, or in the REPL.** `RUN`, `CHAIN` and the REPL never scan the new source for `FUNCTION` definitions, so calls fail with `Unknown function`. `EVAL` strings can use functions only if they define them themselves.
+8. **Functions in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL** (fixed). These never registered `FUNCTION` definitions, so calls failed with `Unknown function`. Each function now records the token list it was defined in, and each of these entry points registers the new source's functions (see 2.12).
 9. **`RUN` arguments** are converted with Python `str()`, so `42` arrives as `"42.0"`.
 10. **`END` inside a `RUN` child or an `EVAL` string** terminates the whole process, because `END` calls `sys.exit` and is not caught.
 11. **`INCLUDE`** (fixed): it used to fail for every file that existed, because its marker lines began with `'`. See [1.4.1](01-language-fundamentals.md#141-include).
