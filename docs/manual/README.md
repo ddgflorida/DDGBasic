@@ -62,7 +62,7 @@ The web runner (`src/dbbasicweb.py`) imports `cgi`, so it needs Python 3.12 or e
 
 ## Known issues at a glance
 
-Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), blank lines in `LOAD CSV`, `;` inside SQL string literals, keyword joining inside strings (`"TO FILE"` used to print as `TOFILE`), `END TRANSACTION;`, and user-defined `FUNCTION`s in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL. These are marked *(fixed)* in the chapter notes.
+Fixed since the manual was first written: `INCLUDE`, `COPY ... AS`, `ZIP`, `UPGRADE JSON`, nested-loop skipping (`FOR EACH` inside `FOR`, `DO WHILE` inside `WHILE`, multiple `EXIT DO`), `EXIT FOR` followed by `NEXT var`, the function-reference list in compiled builds, the process exit status (now 1 after an untrapped error), blank lines in `LOAD CSV`, `;` inside SQL string literals, keyword joining inside strings (`"TO FILE"` used to print as `TOFILE`), `END TRANSACTION;`, user-defined `FUNCTION`s in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL, and `ECHO` rewriting lines such as `echo_count = 5`. These are marked *(fixed)* in the chapter notes.
 
 The issues below were found while writing the manual. They are the most likely to catch you out; each chapter's final section has the full list.
 
@@ -71,7 +71,6 @@ The issues below were found while writing the manual. They are the most likely t
 
 **Surprising behaviour**
 - `'` is not a comment character. Use `REM` or `--`.
-- Any line beginning with the letters `ECHO` is rewritten, so `echo_count = 5` breaks.
 - Variable names are case-insensitive when read but case-sensitive when assigned.
 - `SHIFT` and `UNSHIFT` operate on index 1; arrays from `ARRAY()`/`PUSH` start at 0.
 - Common words are reserved and cannot be used as variable names: `user`, `size`, `type`, `title`, `label`, `message`, `source`, `text`, `body`, `host`, `port`.

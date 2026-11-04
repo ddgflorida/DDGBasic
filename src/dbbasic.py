@@ -889,8 +889,9 @@ def preprocess_echo_statements(source_code):
     processed_lines = []
     
     for line in lines:
-        # Check if this line starts with ECHO (with optional leading whitespace)
-        echo_match = re.match(r'^(\s*ECHO)\s*(.*)$', line, re.IGNORECASE)
+        # Check if this line starts with the word ECHO (with optional leading whitespace).
+        # ECHO must be a whole word, so names like echo_count or echoes$ are left alone.
+        echo_match = re.match(r'^(\s*ECHO)(?![\w$])\s*(.*)$', line, re.IGNORECASE)
         if echo_match:
             leading_space = echo_match.group(1)  # "ECHO" with any leading whitespace
             content = echo_match.group(2).rstrip()  # Content after ECHO

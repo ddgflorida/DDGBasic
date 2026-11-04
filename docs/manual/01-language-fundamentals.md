@@ -319,16 +319,15 @@ line.
 
 **Behaviour** (`preprocess_echo_statements`):
 
-- Any line whose first non-blank characters are `ECHO` (in any case) is
+- Any line whose first non-blank word is `ECHO` (in any case) is
   rewritten before tokenizing. The text after `ECHO`, with trailing whitespace
   removed, becomes a double-quoted string. Embedded `"` characters are kept.
 - Everything after `ECHO` is literal, including `:`, `${...}`, `REM` and `--`.
   So `ECHO` cannot be followed by another statement on the same line.
 - `ECHO` only works as the first statement on a line. `IF 1 THEN ECHO hi` fails
   with `Expected token STRING`.
-- The check does not look for the end of a word. A line that starts with an
-  identifier beginning with `ECHO` (for example `echo_count = 5`) is rewritten
-  as an `ECHO` statement. Do not start variable names with `echo`.
+- `ECHO` must be a whole word. A line that starts with a longer name, such as
+  `echo_count = 5` or `echoes$ = "x"`, is an ordinary statement.
 
 ```basic
 name$ = "x"
@@ -1415,9 +1414,8 @@ the existing documentation:
    `'`, so every successful include failed (see item 1). They now use `REM`.
    The main program file is also registered, so a circular include can no
    longer pull it in a second time.
-3. **ECHO preprocessing does not check for a word boundary.** Any line starting
-   with the letters `ECHO` is rewritten. For example, `echo_count = 5` prints
-   `_count = 5`.
+3. **ECHO word boundary** (fixed). Any line starting with the letters `ECHO`
+   used to be rewritten, so `echo_count = 5` printed `_count = 5`.
 4. **Variable writes are case-sensitive but reads are not.** The README and
    `tests/hashtest.bas` describe BASIC variables as case-insensitive. That holds
    for reads only. Assignments, `DIM`, `REDIM` and all array statements use the
