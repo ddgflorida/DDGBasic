@@ -1141,12 +1141,15 @@ class Lexer:
             kind, value, pos = mo.lastgroup, mo.group(), mo.start()
             #print("DEBUG", kind, value, pos)
             if kind in ['SKIP', 'REM', 'DASH_COMMENT']: continue
-            if kind == 'MISMATCH':
-                line, col = self.get_line_col(pos); raise RuntimeError(f"Unexpected character '{value}' at line {line}, col {col}")
+            # Characters BASIC doesn't know (e.g. the SQL operators || and ~) are kept for now:
+            # they are fine inside a SQL statement, which is cut out of the source below.
             raw_tokens.append((kind, value, pos))
         i = 0
         while i < len(raw_tokens):
             kind, value, pos = raw_tokens[i]
+
+            if kind == 'MISMATCH':
+                line, col = self.get_line_col(pos); raise RuntimeError(f"Unexpected character '{value}' at line {line}, col {col}")
 
             if kind == 'NEWLINE': 
                 is_start_of_line = True 

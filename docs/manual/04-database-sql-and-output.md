@@ -139,6 +139,21 @@ SUMMARIZE  PRAGMA  END TRANSACTION
 
 When the lexer sees one of these keywords at the start of a line, it searches forward in the source for the next semicolon. Everything from the keyword up to and including that semicolon becomes a single `SQL_STRING` token. The interpreter passes that text to the database unchanged, apart from the rewrites described below.
 
+The SQL text can use any SQL syntax, including operators that are not BASIC characters, such as `||` (string concatenation), `~`, `|`, `%` and `<<`:
+
+```basic
+select 'Hello World' || ' how are you';
+```
+
+```
++---------------------------------+
+| 'Hello World' || ' how are you' |
++---------------------------------+
+| Hello World how are you         |
++---------------------------------+
+(1 rows returned)
+```
+
 Consequences:
 
 - **The semicolon is required.** A SQL statement without a terminating `;` is not recognised as SQL. You get `Unknown statement: SELECT`, but only if there is no semicolon anywhere later in the file.

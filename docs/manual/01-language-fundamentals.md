@@ -375,8 +375,11 @@ Punctuation tokens:
 | `COMMA`, `SEMICOLON`, `COLON`, `DOT` | `, ; : .` |
 | `NEWLINE` | end of line |
 
-Any other character, such as `%`, `!`, `\`, `@` or `?`, stops the program with
-`Error: Unexpected character 'c' at line L, col C`.
+Any other character in BASIC code, such as `%`, `!`, `\`, `@`, `?` or `|`,
+stops the program before it runs with
+`Error: Unexpected character 'c' at line L, col C`. Inside strings, comments and
+SQL statements (including SQL subqueries) any character is allowed, so SQL
+operators such as `||` and `~` work (see 4.2.1).
 
 ### 1.5.1 Keywords and reserved words
 
