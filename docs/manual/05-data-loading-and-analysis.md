@@ -1136,7 +1136,7 @@ Behaviour common to all four loops:
 |---|---|---|---|
 | `CSV` | A hash. Keys `"1"`, `"2"`, ... hold the field by position. With `header=true`, header-name keys are added too. | The **entire file is read into memory** before the first iteration. Comma delimiter only. | 1, 2, ... (data rows; a header row is not counted) |
 | `JSON` | A hash, converted as for `PARSEJSON`, with nested hashes and arrays. | The whole file is parsed. It must be an array of objects or a single object. An empty array skips the body. | 1, 2, ... |
-| `JSONL` | Each line parsed, converted as for `PARSEJSON`. | Streams one line at a time. Blank lines are skipped. An **invalid line stops the loop with an error**. | 1, 2, ... (records; blank lines are not counted) |
+| `JSONL` | Each line parsed, converted as for `PARSEJSON`. | Streams one line at a time. Blank lines are skipped. An invalid line is skipped with a warning. | 1, 2, ... (records; blank and skipped lines are not counted) |
 | `TEXT` | A string, the line without its `CR`/`LF`. | Streams. Invalid bytes are replaced. Blank lines are included. | 1, 2, ... |
 
 **CSV loop details.** The `OPTIONS` text is only searched for the substring `header=true`, case-insensitively. Other keys are ignored, and the default is no header. Header names have every character other than `A-Z a-z 0-9 _` removed: `Product ID` becomes the key `ProductID`. Under `SET HASH_KEYS IGNORE_CASE`, they are also uppercased. Parentheses around the filename are optional, because they are simply a parenthesised expression.
@@ -1854,6 +1854,6 @@ The following points were found while checking the source and running the exampl
 
     The help text shows `FOR row IN CSV("data.csv")`. The parentheses work, but only because they form a parenthesised expression.
 39. **`FOR ... IN JSONL`:**
-    - one invalid line aborts the loop (whereas `LOAD JSONL` skips it);
-    - non-object lines are bound as arrays or scalars, without a check.
+    - an invalid line (fixed) used to stop the program; it is now skipped with a warning giving its line number, as `LOAD JSONL` does;
+    - non-object lines are bound as arrays or scalars, without a check (kept on purpose: a loop may want them; use `TYPENAME$`).
 40. **`PARSE JSON ... INTO`** (removed). This statement form was never implemented. The unused `PARSE` keyword has been removed from the lexer, so `parse` is now an ordinary name. Use `PARSEJSON()`.

@@ -10141,15 +10141,19 @@ class Interpreter:
         try:
             with open(filename, 'r', encoding='utf-8') as infile:
                 # Iterate over each line in the JSONL file
-                for line in infile:
+                for line_number, line in enumerate(infile, start=1):
                     line = line.strip()
                     if not line:
                         continue # Skip empty lines (they are not records)
+
+                    # Parse the single line of JSON; an invalid line is skipped, as LOAD JSONL does
+                    try:
+                        record = json.loads(line)
+                    except json.JSONDecodeError:
+                        print(f"Warning: Skipping invalid JSON on line {line_number} of '{filename}'", file=sys.stderr)
+                        continue
                     row_number += 1
                     self.variables['RECNO'] = float(row_number)
-
-                    # Parse the single line of JSON
-                    record = json.loads(line)
                     
                     # Convert the Python dict to a DbBasic HASH
                     record_hash = self._python_to_basic_data(record)
@@ -10168,8 +10172,6 @@ class Interpreter:
 
         except FileNotFoundError:
             self._error(f"File not found for JSONL loop: {filename}")
-        except json.JSONDecodeError as e:
-            self._error(f"Invalid JSON in line of file '{filename}': {e}")
         except LoopExit as e:
             if e.args[0] == 'FOR':
                 # An EXIT FOR was hit. Find the matching NEXT to clean up.

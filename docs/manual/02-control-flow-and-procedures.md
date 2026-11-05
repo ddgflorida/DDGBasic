@@ -328,9 +328,9 @@ FOR line$ IN TEXT(filename$) ... NEXT
 The file name must be in parentheses.
 
 - **JSON** reads the whole file. The top-level value must be an array; a single object is treated as an array of one. Each element is converted to DbBasic values (objects become HASHes and arrays become ARRAYs). JSON numbers stay numeric. `RECNO` counts from 1.
-- **JSONL** reads one JSON document per line and skips blank lines. `RECNO` counts records from 1; blank lines are not counted.
+- **JSONL** reads one JSON document per line and skips blank lines. A line that is not valid JSON is skipped with `Warning: Skipping invalid JSON on line N of 'file'` on stderr, and the loop continues, as `LOAD JSONL` does. Lines holding an array or a plain value are passed to the loop as they are; check `TYPENAME$(obj)` if the file may contain them. `RECNO` counts the records the loop receives, from 1; blank and skipped lines are not counted.
 - **TEXT** returns each line without its trailing `\n` or `\r\n`. The file is read as UTF-8, and undecodable bytes are replaced rather than causing an error. `RECNO` counts from 1.
-- A missing file causes the error `File not found for JSON loop: ...` (or `JSONL`/`TEXT`). Malformed JSON causes `Invalid JSON ...`.
+- A missing file causes the error `File not found for JSON loop: ...` (or `JSONL`/`TEXT`). Malformed JSON in a `JSON` file causes `Invalid JSON ...`.
 
 With `items.json` = `[{"id":1,"tag":"red"},{"id":2,"tag":"blue"}]`, `items.jsonl` holding the same two objects separated by a blank line, and `notes.txt` holding two lines:
 
