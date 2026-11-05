@@ -1837,7 +1837,7 @@ The following points were found while checking the source and running the exampl
 **ANALYZE**
 
 31. **`ANALYZE CSV` `HEADERS`** (fixed). It was stored as a Python tuple, which BASIC could not index. Report lists are now arrays. `examples/csv2json.bas` also read a non-existent `SUGGESTED_SQL_TYPE` key; it now reads `SUGGESTED_DATA_TYPE`.
-32. **`ANALYZE CSV` never suggests a date type**, despite counting dates. A logical-only column is suggested as `INTEGER`.
+32. **`ANALYZE CSV` date columns** (fixed). It counted dates but never suggested a date type. A column of dates (and empty fields) is now suggested as `DATE`; dates mixed with numbers give `TEXT`. A logical-only column is still suggested as `INTEGER`.
 33. **`ANALYZE JSON` wildcards** (fixed). It opened the pattern as a literal file name, although `HELP ANALYZE JSON` showed a wildcard example. A pattern now analyses the records of every matching file together.
 34. **Multi-file `ANALYZE XML ... INTO var`** (fixed). The clause was parsed but the report was never assigned. It now stores `FILE_COUNT`, `ROOT_ELEMENT`, `INFERRED_RECORD_TAG` and `TAG_OCCURRENCES`.
 35. **`ANALYZE JSONL` counts** (fixed). Non-object JSON lines were counted as valid records, and `TOTAL_RECORDS` included blank lines. Non-objects are now counted in `NON_OBJECT_RECORDS`, and blank lines are not counted.
@@ -1846,11 +1846,7 @@ The following points were found while checking the source and running the exampl
 
 **Loops and PARSEJSON**
 
-38. **The `FOR ... IN CSV` loop:**
-    - reads the whole file into memory;
-    - supports only the comma delimiter;
-    - recognises only the literal substring `header=true` in its options;
-    - strips non-alphanumeric characters from header keys.
+38. **The `FOR ... IN CSV` loop** (fixed). It read the whole file into memory, supported only the comma delimiter, recognised only the literal text `header=true` in its options, and turned blank lines into empty records. It now reads a row at a time, takes `header=`, `delimiter=` (including `tab` and `auto`), `skip=` and `encoding=` with the same rules as `LOAD CSV`, and skips blank lines. Header keys are still cleaned (`Unit Price` becomes `UnitPrice`), and the exact header text is a key too (`rec("Unit Price")`).
 
     The help text shows `FOR row IN CSV("data.csv")`. The parentheses work, but only because they form a parenthesised expression.
 39. **`FOR ... IN JSONL`:**

@@ -184,7 +184,7 @@ Consequences:
   select 1 as a; select 2 as b;
   ```
 
-  Each statement still needs its terminating `;`. A single-line `IF` takes one statement before `ELSE`, the same as for BASIC statements ([2.3](02-control-flow-and-procedures.md#23-if--then--else)).
+  Each statement still needs its terminating `;`. In a single-line `IF`, the THEN and ELSE parts can each hold several statements, SQL or BASIC ([2.3](02-control-flow-and-procedures.md#23-if--then--else)).
 - **The keywords are effectively reserved.** A line that starts with, for example, `update` or `copy` is treated as SQL when a semicolon follows it anywhere later in the file.
 
 ### 4.2.2 Keyword joining and SQL text

@@ -8,7 +8,7 @@ DO
     c$ = MENUBAR$("File:Open|Save|-|Quit", "Customers:Browse|Add|Report", "Help:About", "Exit")
     IF SAVESCREEN(2, 1, 24, 80) <> before$ THEN ERROR 1, "the pull-down was not removed"
     got$ = got$ + "[" + c$ + "]"
-LOOP UNTIL c$ = "File.Quit"
+LOOP UNTIL c$ = "File.Quit" OR c$ = ""
 REM Keys: Enter Down Enter / Right Enter Down Down Enter / Enter Right Right Enter (Help.About)
 REM       "c" "a" (hot keys) / Enter Up Enter (Up skips the separator to Quit)
 IF got$ <> "[File.Save][Customers.Report][Help.About][Customers.Add][File.Quit]" THEN ERROR 1, "choices: " & got$

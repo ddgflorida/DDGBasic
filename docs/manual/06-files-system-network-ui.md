@@ -637,7 +637,7 @@ FETCH url$
 | `USING FILE field$ = path$` | Multipart upload of the local file `path$` under form field `field$`. Any POST/PUT/PATCH body is sent as extra form fields. The upload is ignored for GET and DELETE. |
 | `INTO var$` | Store the response body, decoded as UTF-8, in `var$`. If the body is not valid UTF-8, the variable gets the literal text `Binary data received`. |
 | `TO FILE path$` | Stream the response body to `path$`, writing it in binary mode in 8 KB chunks. |
-| `HEADERS INTO h` | Must come after the destination. Stores the response headers in a hash, with key case exactly as the server sent it. |
+| `HEADERS INTO h` | Must come after the destination. Stores the response headers in a hash. The keys follow `SET HASH_KEYS` like any other hash, so under `IGNORE_CASE` any spelling works. |
 
 Timeouts are 15 seconds, or 30 seconds when a file is uploaded. They cannot be configured.
 
@@ -645,16 +645,16 @@ Timeouts are 15 seconds, or 30 seconds when a file is uploaded. They cannot be c
 
 | Situation | `INTO var$` | `TO FILE path$` |
 |---|---|---|
-| Any HTTP response | `ERR` = status code (200, 404, ...). The body is stored even for error statuses. | 2xx: `ERR` = status code and the file is written. 4xx/5xx: `ERR` = **-1** and the file is not created (`raise_for_status`). |
+| Any HTTP response | `ERR` = status code (200, 404, ...). The body is stored even for error statuses. | `ERR` = status code. The file is written only for a 2xx status, so an error page is never saved as the file. |
 | Network error, timeout or bad host | `ERR` = -1 | `ERR` = -1 |
 | Upload file not found | `ERR` = -2 | `ERR` = -2 |
 
-`ERRMSG$` is not set by FETCH, and FETCH never raises an error for HTTP or network failures. Always test `ERR`. Note that a successful request leaves `ERR` = 200, **not 0**.
+`ERRMSG$` always says what happened: the status and its reason (`"200 OK"`, `"201 Created"`, `"404 Not Found"`), the network error text when `ERR` = -1, or `File not found: ...` when `ERR` = -2. FETCH never raises an error for HTTP or network failures, so test `ERR`. A successful request leaves `ERR` = the HTTP status (200, 201, 204, ...), **not 0**: `IF ERR >= 200 AND ERR < 300` tests for success.
 
 Notes:
 
-* Hash values are sent in their string form, so the number `42` is sent as `"42.0"`. Convert numbers explicitly (for example `STR$` or `FORMAT$`, Chapter 3) if the server needs integers.
-* Header keys keep the server's case. Many servers, including HTTP/2 servers, send lowercase names, so `h("Content-Type")` returns `0` while `h("content-type")` works. Under `SET HASH_KEYS IGNORE_CASE` lookups are upper-cased, but the stored keys are not, so lookups fail. Inspect the hash with `PRINT h` first.
+* Numbers in the body and header hashes are sent as `PRINT` shows them, so `42` is sent as `"42"`.
+* Header keys keep the server's case unless `SET HASH_KEYS IGNORE_CASE` is on. Many servers, including HTTP/2 servers, send lowercase names, so `h("Content-Type")` returns `0` while `h("content-type")` works. With `SET HASH_KEYS IGNORE_CASE`, both work.
 * To parse a JSON response, use `PARSEJSON` (Chapter 3).
 
 Example (run against httpbin.org; part of the output omitted):
@@ -694,7 +694,7 @@ PRINT "missing upload ERR="; ERR
 GET ERR= 200  application/json
 POST ERR= 200
 {
-  "age": "42.0",
+  "age": "42",
   "name": "Ann"
 }
 abc
@@ -702,7 +702,7 @@ UPLOAD ERR= 200 {
   "file": "hello upload\n"
 }
 404 INTO ERR= 404
-404 TO FILE ERR=-1
+404 TO FILE ERR= 404
 TO FILE ERR= 200 size= 8090
 bad host ERR=-1
 missing upload ERR=-2
@@ -816,11 +816,11 @@ These were found while checking the source against behaviour. Line numbers refer
 10. **`FILES RECURSIVE`** includes every directory whatever the pattern (unless `WITH FILESONLY`), while `FOR ... IN FILES(... RECURSIVE)` filters directories by the pattern. Arrays filled by `FILES ... INTO` start at index 0, like every other array.
 11. **Multi-word keywords inside strings** (fixed). The lexer used to collapse `WITH DETAILS`, `TO FILE`, `READ FILE` and similar pairs even inside string literals, so `PRINT "TO FILE"` printed `TOFILE`. Strings and comments are now left unchanged.
 12. **FETCH.**
-    * `ERR` is 200 on success, not 0.
-    * HTTP error statuses are reported differently for `INTO` (the status code) and `TO FILE` (-1).
-    * `ERRMSG$` is never set.
-    * Response header keys are stored without hash-key normalisation, so `SET HASH_KEYS IGNORE_CASE` makes them unreachable.
-    * Numeric body values are sent as `"42.0"`.
+    * `ERR` is the HTTP status on success (200, 201, ...), not 0. This is deliberate: the status is more useful than 0.
+    * (fixed) `TO FILE` reported every HTTP error status as -1; it now reports the status, as `INTO` does, and doesn't save the error page.
+    * (fixed) `ERRMSG$` was never set; it now holds the status and reason, or the error text.
+    * (fixed) Response header keys ignored `SET HASH_KEYS IGNORE_CASE`.
+    * (fixed) Numeric body values were sent as `"42.0"`.
     * `GET` cannot send a body.
 13. **EMAIL.**
     * Errors raised during sending (missing attachment, SMTP failures) are caught and turned into `ERR` = -1, but configuration errors are fatal.

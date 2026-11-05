@@ -92,15 +92,12 @@ The interpreter chooses the form by looking at what follows `THEN`. If `THEN` is
 
 **Block IF.** The conditions are tested in order: first the `IF`, then each `ELSEIF`. The block belonging to the first true condition runs, and execution continues after `END IF`. If no condition is true and there is an `ELSE` block, that block runs. Block IFs can be nested to any depth. `ELSEIF` must be written as one word. Writing `ELSE IF` starts a new single-line `IF` inside the `ELSE` branch.
 
-**Single-line IF.** The statement after `THEN` or `ELSE` can be any statement, including SQL (`IF found THEN DELETE FROM t WHERE id = :id;`). The behaviour around colons is easy to get wrong:
+**Single-line IF.** The statements after `THEN` and `ELSE` can be any statements, including SQL (`IF found THEN DELETE FROM t WHERE id = :id;`), and there can be several, separated by `:`. The rule is the one GW-BASIC and QBasic use:
 
-- **True condition:** the statement after `THEN` runs. If an `ELSE` follows, the `ELSE` statement is skipped up to the next colon or end of line. Any statements after that colon **still run**.
-- **False condition:** everything up to the end of the line, or up to `ELSE`, is skipped. If there is an `ELSE`, the statement after it runs, followed by any further colon-separated statements on the line.
-
-In practice:
-
-- When there is no `ELSE`, every colon-separated statement after `THEN` belongs to the IF.
-- When there is an `ELSE`, the statements after the `ELSE` branch run whichever branch was taken.
+- The **THEN part** is every statement from `THEN` up to the `ELSE`, or to the end of the line when there is no `ELSE`.
+- The **ELSE part** is every statement from `ELSE` to the end of the line.
+- An `ELSE` belongs to the nearest `IF` on the line that has no `ELSE` yet, so `IF a THEN IF b THEN x ELSE y` runs `y` when `a` is true and `b` is false.
+- A `NEXT`, `WEND` or `LOOP` that closes a loop begun **before** the `IF` is not part of either branch; it ends the `IF` and closes the loop. So `FOR i = 1 TO 3: IF i = 2 THEN PRINT "two"; ELSE PRINT i; : NEXT` works. A loop that starts and ends inside a branch belongs to that branch.
 
 ### Example: block IF
 
@@ -140,10 +137,9 @@ B
 F
 G
 H
-J
 ```
 
-On the last line the condition is true, but `J` is still printed.
+On the last line the condition is true, so the whole ELSE part, `PRINT "I" : PRINT "J"`, is skipped.
 
 ### IF EXISTS and IN (SELECT ...)
 
@@ -285,10 +281,17 @@ FOR rec IN CSV filename$ [OPTIONS options$]
 NEXT [rec]
 ```
 
-`filename$` is any string expression. Because it is an expression, both `CSV "f.csv"` and `CSV("f.csv")` work. The loop recognizes only one option: if `options$` contains `header=true` (case-insensitive), the first row is used as column names.
+`filename$` is any string expression. Because it is an expression, both `CSV "f.csv"` and `CSV("f.csv")` work. The file is read one row at a time, and blank lines are skipped. `options$` uses the same rules as `LOAD CSV`:
+
+| Option | Meaning |
+|---|---|
+| `header=true` | The first row (after `skip`) holds the column names. The default is `false`. |
+| `delimiter=c` | The field separator: one character, `tab`, or `auto` to detect a comma, semicolon, tab or pipe. The default is a comma. |
+| `skip=n` | Ignore the first `n` lines, such as a title line. |
+| `encoding=e` | The file's encoding. The default is `utf-8`. |
 
 - Every row has positional keys `"1"`, `"2"`, and so on.
-- With `header=true`, each row also has keys named after the header cells. Characters other than letters, digits and `_` are removed from the names, so `Unit Price` becomes `UnitPrice`. With `SET HASH_KEYS IGNORE_CASE`, header names are also converted to upper case.
+- With `header=true`, each row also has keys named after the header cells. Characters other than letters, digits and `_` are removed from the names, so `Unit Price` becomes `UnitPrice` (usable as `rec.UnitPrice`). The exact header text is a key as well (`rec("Unit Price")`). With `SET HASH_KEYS IGNORE_CASE`, header names are also converted to upper case.
 - All values are strings.
 - `RECNO` counts data rows from 1; a header row is not counted.
 

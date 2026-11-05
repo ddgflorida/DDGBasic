@@ -887,7 +887,7 @@ class HelpRegistry:
         },
         "FETCH": {
             "syntax": 'FETCH "url" [POST|PUT|PATCH|DELETE body_hash] [USING HEADERS req_h] [USING FILE field=path] INTO var$ | TO FILE "path" [HEADERS INTO resp_h]',
-            "desc": "Makes an HTTP request. Default method is GET. POST/PUT/PATCH/DELETE send a hash as the request body (DELETE body optional). USING HEADERS attaches request headers from a hash. USING FILE does multipart file upload. INTO stores response text; TO FILE streams to disk. Optional HEADERS INTO captures response headers as a hash. Sets ERR to status code (-1 network error, -2 file not found).",
+            "desc": "Makes an HTTP request. Default method is GET. POST/PUT/PATCH/DELETE send a hash as the request body (DELETE body optional). USING HEADERS attaches request headers from a hash. USING FILE does multipart file upload. INTO stores response text; TO FILE streams to disk. Optional HEADERS INTO captures response headers as a hash. Sets ERR to the HTTP status code (-1 network error, -2 file not found) and ERRMSG$ to the status and reason (e.g. 404 Not Found) or the error text. TO FILE writes the file only for a 2xx status.",
             "examples": [
                 'FETCH "https://api.com/data" INTO response$',
                 'FETCH "https://api.com/items" POST body INTO resp$',
@@ -6501,6 +6501,50 @@ class Interpreter:
             if str(options.get('newline', 'true')).lower() != 'false':
                 stream.write('\n')
                 
+    LOOP_CLOSERS = ('NEXT', 'WEND', 'LOOP', 'END LOOP')
+
+    def _run_single_line_statements(self):
+        """Runs ':'-separated statements up to the end of the line, an ELSE, or the
+        NEXT/WEND/LOOP of a loop that began before the IF."""
+        while True:
+            tok = self._current_token()
+            if tok is None or tok[0] in ('NEWLINE', 'ELSE') + self.LOOP_CLOSERS:
+                return
+            self._parse_statement()
+            tok = self._current_token()
+            if tok and tok[0] == 'COLON':
+                self._next_token()
+                continue
+            return
+
+    def _skip_single_line_part(self, stop_at_else):
+        """Skips the statements of a single-line IF branch that isn't taken: up to the end
+        of the line, the matching ELSE (when stop_at_else), or an unmatched NEXT/WEND/LOOP.
+        Loops that start and end inside the branch are skipped whole."""
+        open_loops = {'NEXT': 0, 'WEND': 0, 'LOOP': 0}
+        if_depth, previous = 0, None
+        while self._current_token() and self._current_token()[0] != 'NEWLINE':
+            kind = self._current_token()[0]
+            if kind in ('FOR', 'FOR EACH'):
+                open_loops['NEXT'] += 1
+            elif kind == 'WHILE' and not (previous and previous[0] in ('DO', 'LOOP')):
+                open_loops['WEND'] += 1
+            elif kind == 'DO':
+                open_loops['LOOP'] += 1
+            elif kind in self.LOOP_CLOSERS:
+                closer = 'LOOP' if kind in ('LOOP', 'END LOOP') else kind
+                if open_loops[closer] == 0:
+                    return                  # it closes a loop outside the IF
+                open_loops[closer] -= 1
+            elif kind == 'IF':
+                if_depth += 1
+            elif kind == 'ELSE' and stop_at_else:
+                if if_depth == 0:
+                    return
+                if_depth -= 1
+            previous = self._current_token()
+            self._next_token()
+
     def _parse_if_statement(self):
         start_if_index = self.token_index
         self._expect('IF')
@@ -6511,21 +6555,21 @@ class Interpreter:
         # --- Handle single-line IF THEN... ELSE ... ---
         is_single_line = self._current_token() and self._current_token()[0] != 'NEWLINE'
         if is_single_line:
+            # As in GW-BASIC and QBasic: the THEN part is every statement up to the matching ELSE,
+            # and the ELSE part is every statement to the end of the line. An ELSE belongs to the
+            # nearest IF on the line that has no ELSE yet.
+            # A NEXT, WEND or LOOP whose loop began before the IF also ends it, so
+            # FOR i = 1 TO 3: IF i = 2 THEN a ELSE b : NEXT still closes the FOR.
             if condition_result:
-                # Condition is true, so parse the THEN part
-                self._parse_statement()
-                # After parsing, skip the ELSE part if it exists
+                self._run_single_line_statements()
                 if self._current_token() and self._current_token()[0] == 'ELSE':
-                    while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'COLON']:
-                        self._next_token()
+                    self._next_token()
+                    self._skip_single_line_part(stop_at_else=False)
             else:
-                # Condition is false, so skip the THEN part
-                while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'ELSE']:
-                    self._next_token()
-                # If there's an ELSE part, parse it
+                self._skip_single_line_part(stop_at_else=True)
                 if self._current_token() and self._current_token()[0] == 'ELSE':
                     self._next_token()
-                    self._parse_statement()
+                    self._run_single_line_statements()
             return
 
         # --- Handle multi-line IF...END IF block ---
@@ -8407,9 +8451,23 @@ class Interpreter:
             self._error("FETCH statement requires an INTO or TO FILE clause.")
 
         # Build request kwargs once; dispatch via requests.request() for uniform method handling.
-        req_kwargs = {'headers': headers_hash, 'timeout': 30 if upload_file_info else 15}
+        def as_text(h):
+            # Numbers are sent the way PRINT shows them (42, not 42.0)
+            if not isinstance(h, dict):
+                return h
+            return {k: self._to_string(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v
+                    for k, v in h.items()}
+
+        req_kwargs = {'headers': as_text(headers_hash), 'timeout': 30 if upload_file_info else 15}
         if method != 'GET' and post_data_hash is not None:
-            req_kwargs['data'] = post_data_hash
+            req_kwargs['data'] = as_text(post_data_hash)
+
+        def record_status(response):
+            self.variables['ERR'] = float(response.status_code)
+            self.variables['ERRMSG$'] = f"{response.status_code} {response.reason or ''}".strip()
+
+        def response_headers(response):
+            return {self._normalize_hash_key(k): v for k, v in response.headers.items()}
 
         try:
             # ---------- TO FILE ----------
@@ -8418,23 +8476,24 @@ class Interpreter:
                 local_filename = self._parse_expression()
                 resp_header_var = self._parse_optional_response_headers_clause()
                 req_kwargs['stream'] = True
+                def save_body(response):
+                    # Only a successful response is saved; an error page is not written as the file
+                    if response.ok:
+                        with open(os.path.expanduser(str(local_filename)), 'wb') as out:
+                            for chunk in response.iter_content(chunk_size=8192):
+                                out.write(chunk)
+
                 if upload_file_info and method in ('POST', 'PUT', 'PATCH'):
                     with open(upload_file_info[1], 'rb') as f:
                         files = {upload_file_info[0]: f}
                         response = requests.request(method, url, files=files, **req_kwargs)
-                        response.raise_for_status()
-                        with open(local_filename, 'wb') as out:
-                            for chunk in response.iter_content(chunk_size=8192):
-                                out.write(chunk)
+                        save_body(response)
                 else:
                     response = requests.request(method, url, **req_kwargs)
-                    response.raise_for_status()
-                    with open(local_filename, 'wb') as out:
-                        for chunk in response.iter_content(chunk_size=8192):
-                            out.write(chunk)
-                self.variables['ERR'] = float(response.status_code)
+                    save_body(response)
+                record_status(response)
                 if resp_header_var is not None:
-                    self.variables[resp_header_var] = dict(response.headers)
+                    self.variables[resp_header_var] = response_headers(response)
 
             # ---------- INTO var ----------
             elif destination_token[0] == 'INTO':
@@ -8447,19 +8506,19 @@ class Interpreter:
                         response = requests.request(method, url, files=files, **req_kwargs)
                 else:
                     response = requests.request(method, url, **req_kwargs)
-                self.variables['ERR'] = float(response.status_code)
+                record_status(response)
                 try:
                     self.variables[dest_var] = response.content.decode('utf-8')
                 except UnicodeDecodeError:
                     self.variables[dest_var] = "Binary data received"
                 if resp_header_var is not None:
-                    self.variables[resp_header_var] = dict(response.headers)
+                    self.variables[resp_header_var] = response_headers(response)
             else:
                 self._error("FETCH statement requires an INTO or TO FILE clause.")
-        except FileNotFoundError:
-            self.variables['ERR'] = -2.0
-        except requests.exceptions.RequestException:
-            self.variables['ERR'] = -1.0
+        except FileNotFoundError as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = -2.0, f"File not found: {e.filename}"
+        except requests.exceptions.RequestException as e:
+            self.variables['ERR'], self.variables['ERRMSG$'] = -1.0, str(e).splitlines()[0] if str(e) else type(e).__name__
 
     def _parse_optional_response_headers_clause(self):
         """If the current token sequence is `HEADERS INTO id`, consume it and return the
@@ -8642,7 +8701,11 @@ class Interpreter:
         
         if not isinstance(options_str, str):
             self._error("Argument for OPTIONS must be a string.")
+        return self._options_from_string(options_str)
 
+    def _options_from_string(self, options_str):
+        """Parses "key=value, key2=value2" into a dictionary with lowercase keys."""
+        parsed_options = {}
         # Use regex to find all "key=" patterns to correctly split values
         key_matches = list(re.finditer(r'\b(\w+)=', options_str))
         for i, match in enumerate(key_matches):
@@ -10894,60 +10957,84 @@ class Interpreter:
         filename = self._parse_expression()
         if not isinstance(filename, str):
             self._error("FOR...IN CSV requires a string filename.")
-        
-        options = {'header': False}
+
+        # The same OPTIONS rules as LOAD CSV: header=, delimiter=, skip=, encoding=
+        options = {}
         if self._current_token() and self._current_token()[0] == 'OPTIONS':
             self._next_token()
             options_str = self._parse_expression()
-            if 'header=true' in options_str.lower():
-                options['header'] = True
-        
+            if not isinstance(options_str, str):
+                self._error("Argument for OPTIONS must be a string.")
+            options = self._options_from_string(options_str)
+        has_header = str(options.get('header', 'false')).lower() in ('true', '1', 'y', 'yes')
+        delimiter = str(options.get('delimiter', ','))
+        if delimiter.lower() in ('tab', '\\t'):
+            delimiter = '\t'
+        skip = int(options.get('skip', 0) or 0)
+
         loop_body_start_index = self.token_index
         original_value = self.variables.get(loop_var_name)
-        
+
         try:
-            with open(filename, 'r', newline='', encoding='utf-8') as infile:
-                csv_reader = csv.reader(infile)
-                
-                headers = []
-                if options['header']:
+            with open(os.path.expanduser(filename), 'r', newline='', encoding=options.get('encoding', 'utf-8')) as infile:
+                for _ in range(skip):
+                    if not infile.readline():
+                        break
+                if delimiter.lower() == 'auto':
+                    sample = infile.read(8192)
+                    infile.seek(0)
+                    for _ in range(skip):
+                        infile.readline()
                     try:
-                        raw_headers = next(csv_reader)
-                        if self.hash_keys_mode == 'IGNORE_CASE':
-                            headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip().upper() for h in raw_headers]
-                        else:
-                            headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip() for h in raw_headers]
-                    except StopIteration:
+                        delimiter = csv.Sniffer().sniff(sample, delimiters=',;\t|').delimiter
+                    except csv.Error:
+                        delimiter = ','
+                if len(delimiter) != 1:
+                    self._error(f"FOR ... IN CSV: the delimiter must be one character, not '{delimiter}'.")
+                csv_reader = csv.reader(infile, delimiter=delimiter)
+
+                headers, raw_headers = [], []
+                if has_header:
+                    raw_headers = next(csv_reader, None)
+                    if raw_headers is None:
                         self._skip_block('FOR', 'NEXT')
                         return
+                    # Names usable after a dot (Unit Price -> UnitPrice); the exact header text is kept too
+                    headers = [re.sub(r'[^a-zA-Z0-9_]', '', h).strip() for h in raw_headers]
+                    if self.hash_keys_mode == 'IGNORE_CASE':
+                        headers = [h.upper() for h in headers]
 
-                all_rows = list(csv_reader)
-                if not all_rows:
+                row_number = 0
+                for row in csv_reader:            # one row at a time, not the whole file
+                    if not row:
+                        continue                  # blank lines are not records
+                    row_number += 1
+                    self.variables['RECNO'] = float(row_number)
+                    record_hash = {}
+                    for i, cell_value in enumerate(row):
+                        record_hash[str(i + 1)] = cell_value
+                        if headers and i < len(headers):
+                            record_hash[headers[i]] = cell_value
+                            exact = self._normalize_hash_key(raw_headers[i].strip())
+                            if exact and exact != headers[i]:
+                                record_hash.setdefault(exact, cell_value)
+                    self.variables[loop_var_name] = record_hash
+
+                    # Rewind and execute the loop body for this iteration
+                    self.token_index = loop_body_start_index
+                    if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
+
+                    self.run_block(end_tokens={'NEXT'})
+
+                    # After each iteration, consume the NEXT token.
+                    self._expect('NEXT')
+                    if self._current_token() and self._current_token()[0] == 'ID':
+                        self._next_token()
+                if row_number == 0:
                     self.token_index = loop_body_start_index
                     self._skip_block('FOR', 'NEXT')
-                    return
-            row_number = 0
-            for row in all_rows:
-                row_number += 1
-                self.variables['RECNO'] = float(row_number)
-                record_hash = {}
-                for i, cell_value in enumerate(row):
-                    record_hash[str(i + 1)] = cell_value
-                    if headers and i < len(headers):
-                        record_hash[headers[i]] = cell_value
-                self.variables[loop_var_name] = record_hash
-                
-                # Rewind and execute the loop body for this iteration
-                self.token_index = loop_body_start_index
-                if self._current_token() and self._current_token()[0] == 'NEWLINE': self._next_token()
-                
-                self.run_block(end_tokens={'NEXT'})
-                
-                # After each iteration, consume the NEXT token.
-                self._expect('NEXT')
-                if self._current_token() and self._current_token()[0] == 'ID':
-                    self._next_token()
-
+        except FileNotFoundError:
+            self._error(f"File not found for CSV loop: {filename}")
         except LoopExit as e:
             if e.args[0] == 'FOR':
                 # An EXIT FOR was hit. Find the matching NEXT to clean up.
@@ -11414,6 +11501,10 @@ class Interpreter:
                 # Finalize Report
                 for h, stats in col_stats.items():
                     if stats['STRING_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                    elif stats['DATE_COUNT'] > 0:
+                        # Only dates (and empty fields) make a DATE column; dates mixed with numbers are TEXT
+                        mixed = stats['INTEGER_COUNT'] or stats['FLOAT_COUNT'] or stats['LOGICAL_COUNT']
+                        stats['SUGGESTED_DATA_TYPE'] = 'TEXT' if mixed else 'DATE'
                     elif stats['FLOAT_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'REAL'
                     elif stats['INTEGER_COUNT'] > 0 or stats['LOGICAL_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
                     else: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
@@ -11721,10 +11812,13 @@ class Interpreter:
                     agg_s['PRESENT_IN_FILES'] += 1
                     if agg_s['MIN_LEN'] is None or (stats['MIN_LEN'] is not None and stats['MIN_LEN'] < agg_s['MIN_LEN']): agg_s['MIN_LEN'] = stats['MIN_LEN']
                     if stats['MAX_LEN'] > agg_s['MAX_LEN']: agg_s['MAX_LEN'] = stats['MAX_LEN']
-                    for key in ['EMPTY_COUNT', 'INTEGER_COUNT', 'FLOAT_COUNT', 'STRING_COUNT']: agg_s[key] += stats[key]
+                    for key in ['EMPTY_COUNT', 'INTEGER_COUNT', 'FLOAT_COUNT', 'STRING_COUNT', 'DATE_COUNT']:
+                        agg_s[key] = agg_s.get(key, 0) + stats.get(key, 0)
 
             for h, stats in agg_stats.items():
                 if stats['STRING_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
+                elif stats.get('DATE_COUNT', 0) > 0:
+                    stats['SUGGESTED_DATA_TYPE'] = 'TEXT' if stats['INTEGER_COUNT'] or stats['FLOAT_COUNT'] else 'DATE'
                 elif stats['FLOAT_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'REAL'
                 elif stats['INTEGER_COUNT'] > 0: stats['SUGGESTED_DATA_TYPE'] = 'INTEGER'
                 else: stats['SUGGESTED_DATA_TYPE'] = 'TEXT'
