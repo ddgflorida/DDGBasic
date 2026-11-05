@@ -71,7 +71,7 @@ python3 src/dbbasic.py examples/hello.bas      # run a script
 python3 src/dbbasic.py                         # interactive REPL
 ```
 
-To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux) or `compilenuitka.bat` (Windows).
+To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `c:\ddg\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`.
 
 The full **Programmer's Reference Manual** is in [`docs/manual/`](docs/manual/README.md). Run the test suite with `python3 tests/run_tests.py`.
 
