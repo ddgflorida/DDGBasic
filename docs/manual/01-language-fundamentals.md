@@ -431,13 +431,14 @@ identifier ::= letter_or_underscore { letter | digit | "_" } [ "$" ]
 ### 1.5.3 Numeric literals
 
 ```
-number ::= digits [ "." [ digits ] ]
+number   ::= ( digits [ "." [ digits ] ] | "." digits ) [ exponent ]
+exponent ::= ( "e" | "E" ) [ "+" | "-" ] digits
 ```
 
-- Literals are written in decimal: `42`, `3.14159`, `10.` (the same as `10`).
-- There is no leading-dot form (`.5` is a syntax error; write `0.5`), no
-  exponent form (`1e3` is read as `1` followed by an identifier `e3`), and no
-  hex or octal.
+- Literals are written in decimal: `42`, `3.14159`, `10.` (the same as `10`),
+  `.5`, `1e3`, `2.5E-2`. There is no hex or octal.
+- A leading-dot number cannot directly follow a name, `)` or `]`, because there
+  the `.` is hash dot notation (`row.1` is the hash key `1`).
 - Negative numbers are made with the unary minus operator (`-5`).
 - All numeric literals are stored as double-precision floats. Whole numbers are
   printed without a decimal part (`PRINT 2.50 + 0` prints ` 2.5`, and
@@ -576,9 +577,10 @@ unset numeric variable, so it is `0`). SQL `NULL` values are handled like this:
   [ 0][]
   ```
 
-- When NULL is used *directly* inside an expression it is not converted. For
-  example, `PRINT (SELECT NULL) + 1` prints `None1`, because `+` falls back to
-  string concatenation. Assign the value first, or use `NVL` (Chapter 3).
+- When NULL is used *directly* in an expression, for example a subquery that
+  returns NULL, it acts as `""`. It prints as nothing, compares equal to `""`,
+  and is `""` as a function argument. `PRINT (SELECT NULL) + 1` prints `1`,
+  because `+` with an empty string joins text.
 - Parsed JSON `null` becomes `""`, and JSON `true`/`false` become `-1`/`0`.
 - How empty strings are written to database columns is controlled by
   `SET NULL_HANDLING` (Chapter 4).
@@ -1297,19 +1299,21 @@ Total: 42
 DbBasic has two expression levels, and the difference matters:
 
 - **Value expressions** (`_parse_expression`): arithmetic and concatenation
-  only. Used by `LET`/assignment, `PRINT`, function arguments, array indexes,
-  `PUSH` and most other statements.
+  only. Used by array indexes, `PUSH`, `FOR ... TO` bounds and most statement
+  arguments.
 - **Conditions** (`_parse_condition`): value expressions combined with
   comparisons, `IN`, `EXISTS`, `NOT`, `AND` and `OR`. Used by `IF`, `ELSEIF`,
-  `WHILE`, `DO ... WHILE/UNTIL` (Chapter 2), and **inside any pair of
-  parentheses**.
+  `WHILE`, `DO ... WHILE/UNTIL` (Chapter 2), the right-hand side of an
+  assignment, `PRINT` items, function arguments, and inside any pair of
+  parentheses. Without a comparison operator a condition is just its value.
 
-So a comparison outside `IF`/`WHILE` must be in parentheses:
+So comparisons work directly in assignments and `PRINT`:
 
 ```basic
-x = 3 > 2        -- fails: assigns 3, then "Unknown statement: RELOP"
-x = (3 > 2)      -- -1
-PRINT (1 <> 2)   -- -1
+a = 5 : b = 3
+x = a > b        -- -1
+PRINT 1 <> 2     -- -1
+y = a = b        -- 0: the second = is a comparison
 ```
 
 **Truth values.** True is `-1` and false is `0`. When a condition has no
@@ -1418,17 +1422,18 @@ the existing documentation:
    accepted but creates no variable.
 8. **`SORT` modifiers are case-sensitive.** `ON`, `ASC` and `DESC` are compared
    as uppercase text, so `sort a desc` sorts ascending without any error.
-9. **Comparisons are not valid in value expressions** without parentheses
-   (`x = a > b`, `PRINT 1 <> 2`). The README's examples only use comparisons
-   in `IF`, which is consistent with this.
+9. **Comparisons in assignments and `PRINT`** (fixed). `x = a > b` and
+   `PRINT 1 <> 2` failed with `Unknown statement: RELOP` unless the comparison
+   was in parentheses.
 10. **Label scanning** (fixed). Every `identifier:` pair used to be registered
     as a label, which caused false `Duplicate label` errors on multi-statement
     lines. Only a name at the start of a line is a label now (see
     [1.2](#12-program-structure-and-source-format)).
-11. **Numeric literals** do not allow a leading `.` or exponents (`.5`, `1e3`).
-12. **Unconverted NULL in expressions.** A SQL NULL used directly in an
-    expression is the Python `None`, so `(SELECT NULL) + 1` gives `"None1"`.
-    Only assignment converts NULL to the variable's default.
+11. **Numeric literals** (fixed). A leading `.` and exponents (`.5`, `1e3`)
+    were not accepted.
+12. **NULL in expressions** (fixed). A SQL NULL used directly in an expression
+    was the Python `None`, so `(SELECT NULL) + 1` gave `"None1"`. It now acts
+    as `""`. Assignment still converts NULL to the variable's default.
 13. **`${...}` ends at the first `}`**, so an interpolated expression cannot
     contain a `}` character, even inside a string literal.
 14. **Negative array indexes.** Reading `a(-1)` raises "out of bounds", but

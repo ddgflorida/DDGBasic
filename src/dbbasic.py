@@ -1145,7 +1145,7 @@ class Lexer:
             ('RETURNS', r'\bRETURNS\b(?!\$)'), 
             # ---------------------------
             ('STRING', r'"([^"]|"")*"'), ('SINGLE_Q_STRING', r"'[^']*'"),
-            ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?'),
+            ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?(?:[eE][+-]?\d+)?|(?<![\w)\]$.])\.\d+(?:[eE][+-]?\d+)?'),
             ('REM', r'\bREM\b[^\n]*'), ('DASH_COMMENT', r'--[^\n]*'),
             ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
             ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZETEXT', r'\bANALYZETEXT\b'),
@@ -2667,7 +2667,7 @@ class Interpreter:
         args = []
         if self._current_token() and self._current_token()[0] != 'RPAREN':
             while True:
-                args.append(self._parse_expression())
+                args.append(self._parse_condition())
                 if self._current_token()[0] == 'RPAREN': break
                 self._expect('COMMA')
         self._expect('RPAREN')
@@ -4002,6 +4002,7 @@ class Interpreter:
  
     def _execute_function(self, name, args):
         name = name.upper()
+        args = ["" if a is None else a for a in args]   # a SQL NULL argument is ""
         if name == 'RND':
             if not args: return random.random()
             if len(args) == 1: max_val = int(args[0]); return float(random.randint(1, max_val)) if max_val >= 1 else self._error("RND arg must be >= 1")
@@ -4833,7 +4834,7 @@ class Interpreter:
                 args = []
                 if self._current_token() and self._current_token()[0] != 'RPAREN':
                     while True:
-                        args.append(self._parse_expression())
+                        args.append(self._parse_condition())
                         if self._current_token()[0] == 'RPAREN': break
                         self._expect('COMMA')
                 self._expect('RPAREN')
@@ -4893,9 +4894,9 @@ class Interpreter:
                                         args.append({'__fn_ref__': cand})
                                         self._next_token()
                                     else:
-                                        args.append(self._parse_expression())
+                                        args.append(self._parse_condition())
                                 else:
-                                    args.append(self._parse_expression())
+                                    args.append(self._parse_condition())
                                 if self._current_token()[0] == 'RPAREN': break
                                 self._expect('COMMA')
                         self._expect('RPAREN')
@@ -4970,7 +4971,7 @@ class Interpreter:
             args = []
             if self._current_token()[0] != 'RPAREN':
                 while True:
-                    args.append(self._parse_expression())
+                    args.append(self._parse_condition())
                     if self._current_token()[0] == 'RPAREN': break
                     self._expect('COMMA')
             
@@ -5103,6 +5104,9 @@ class Interpreter:
                 return -1.0 if is_member else 0.0
         if token and token[0] in ['RELOP', 'ASSIGN']:
             op_token = token; self._next_token(); op = op_token[1]; right = self._parse_expression()
+            # A SQL NULL compares as ""
+            if left is None: left = ""
+            if right is None: right = ""
             if op == '=': return -1.0 if left == right else 0.0
             if op == '<>': return -1.0 if left != right else 0.0
             if op == '<': return -1.0 if left < right else 0.0
@@ -5111,8 +5115,9 @@ class Interpreter:
             if op == '>=': return -1.0 if left >= right else 0.0
             self._error(f"Unknown relational operator: {op}")
         else:
-            if token and token[0] == 'RPAREN': return left
-            return -1.0 if left != 0 else 0.0
+            # No comparison operator: the value passes through unchanged. Callers that need
+            # a truth value test it with != 0 (IF, WHILE, DO, AND/OR, NOT).
+            return left
 
     def _parse_set_statement(self):
         global g_null_handling_default
@@ -5845,7 +5850,10 @@ class Interpreter:
         return False
 
     def _to_string(self, value):
-        """Converts a value to a string, formatting floats that are whole numbers as integers."""
+        """Converts a value to a string, formatting floats that are whole numbers as integers.
+        A SQL NULL (None) becomes ""."""
+        if value is None:
+            return ""
         if isinstance(value, float) and value.is_integer():
             return str(int(value))
         return str(value)
@@ -6142,7 +6150,7 @@ class Interpreter:
             self._expect('SEMICOLON')
             values = []
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
-                values.append(self._parse_expression())
+                values.append(self._parse_condition())
                 if self._current_token() and self._current_token()[0] == 'COMMA': self._next_token()
                 else: break
             suppress_nl = False
@@ -6167,7 +6175,7 @@ class Interpreter:
             parts.append('\n')
         else:
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
-                value = self._parse_expression()
+                value = self._parse_condition()
                 if isinstance(value, dict): 
                     parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2))
                 elif isinstance(value, list): 
@@ -10189,7 +10197,7 @@ class Interpreter:
         if self._current_token()[0] == 'LET': self._next_token()
         var_name = self._expect('ID')[1]
         if self._current_token() and self._current_token()[0] == 'LPAREN':
-            self._expect('LPAREN'); key_or_index_expr = self._parse_expression(); self._expect('RPAREN'); self._expect('ASSIGN'); value = self._parse_expression()
+            self._expect('LPAREN'); key_or_index_expr = self._parse_expression(); self._expect('RPAREN'); self._expect('ASSIGN'); value = self._parse_condition()
             if var_name not in self.variables or not isinstance(self.variables.get(var_name), (list, dict)): self._error(f"'{var_name}' is not an array or hash.")
             collection = self.variables[var_name]
             if isinstance(collection, list):
@@ -10238,7 +10246,7 @@ class Interpreter:
 
             # Step 4: Assign the value to the final key. The '=' token is the current token.
             self._expect('ASSIGN')
-            value = self._parse_expression()
+            value = self._parse_condition()
             
             if final_key_name is not None:
                 current_hash_level[final_key_name] = value
@@ -10246,7 +10254,7 @@ class Interpreter:
                 # This case should be unreachable with the checks inside the loop.
                 self._error("Dot notation assignment failed: final key not identified.")
         elif self._current_token() and self._current_token()[0] == 'ASSIGN':
-            self._expect('ASSIGN'); value = self._parse_expression()
+            self._expect('ASSIGN'); value = self._parse_condition()
             if value is None: self.variables[var_name] = "" if var_name.endswith('$') else 0.0
             else: self.variables[var_name] = value
         else: self._error(f"Invalid assignment statement for '{var_name}'")
