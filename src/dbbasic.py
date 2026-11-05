@@ -24,6 +24,7 @@ from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
 from typing import Union
 from datetime import datetime, timedelta
+from decimal import Decimal
 import xml.etree.ElementTree as ET
 import webbrowser
 import zipfile
@@ -264,6 +265,37 @@ class SqliteStringFunctions:
                 num_params, func = funcs
                 conn.create_function(name, num_params, func)
 
+    @classmethod
+    def register_duckdb(cls, conn):
+        """Register the same helpers on a DuckDB connection. DuckDB already has REVERSE,
+        LPAD, RPAD, STARTS_WITH, ENDS_WITH, SPLIT_PART, TRANSLATE and 2-argument INSTR with
+        the same results, so only the missing ones (and INSTR with 3 or 4 arguments) are added."""
+        S, I = 'VARCHAR', 'BIGINT'
+        functions_to_register = [
+            ("STUFF", cls.stuff, [S, I, I, S], S),
+            ("LEFT$", cls.left, [S, I], S),
+            ("RIGHT$", cls.right, [S, I], S),
+            ("REPLICATE", cls.replicate, [S, I], S),
+            ("CHARINDEX", cls.charindex, [S, S], I),
+            ("INITCAP", cls.initcap, [S], S),
+            ("SOUNDEX", cls.soundex, [S], S),
+            ("__dbbasic_instr3", cls.instr3, [S, S, I], I),
+            ("__dbbasic_instr4", cls.instr4, [S, S, I, I], I),
+        ]
+        for name, func, params, returns in functions_to_register:
+            try:
+                conn.create_function(name, func, params, returns, null_handling='special')
+            except Exception:
+                pass    # already defined on this connection (or by a newer DuckDB)
+        # A Python function can't overload DuckDB's built-in instr(s, sub), but a macro can
+        # have several arities. TEMP, so it is never stored in a database file.
+        try:
+            conn.execute("CREATE OR REPLACE TEMP MACRO instr(s, sub) AS strpos(s, sub), "
+                         "(s, sub, st) AS __dbbasic_instr3(s, sub, st), "
+                         "(s, sub, st, nth) AS __dbbasic_instr4(s, sub, st, nth)")
+        except Exception:
+            pass
+
 class HelpRegistry:
     TOPICS = {
         # --- CORE LANGUAGE ---
@@ -422,8 +454,8 @@ class HelpRegistry:
             "examples": ['SHOW CREATE TABLE']
         },
         "SHOW INDEXES": {
-            "syntax": 'SHOW INDEXES FROM "tablename"',
-            "desc": "Lists all indexes associated with a table, including primary keys.",
+            "syntax": 'SHOW INDEXES [ON | FROM tablename]',
+            "desc": "Lists the indexes, primary keys and unique constraints of one table, or of all tables.",
             "examples": ['SHOW INDEXES FROM "orders"']
         },
         "SHOW VARIABLES": {
@@ -2594,6 +2626,11 @@ class Interpreter:
             self.db_connection = sqlite3.connect(filename, isolation_level=None)
             SqliteStringFunctions.register_all(self.db_connection)
         self.db_cursor = self.db_connection.cursor()
+        if self.db_engine == 'duckdb':
+            # A DuckDB cursor is its own connection, and TEMP macros are per connection,
+            # so register on both (EXECUTE uses the connection, most SQL the cursor).
+            SqliteStringFunctions.register_duckdb(self.db_connection)
+            SqliteStringFunctions.register_duckdb(self.db_cursor)
 
     def _is_label_at(self, i):
         """True if tokens[i] starts a label: a name followed by ':' as the first thing on its line.
@@ -3926,27 +3963,16 @@ class Interpreter:
         self.variables.update({'ERR': 0.0, 'ERRMSG$': "", 'SQL_ROWCOUNT': 0.0, 'SQL_FOUND': 0.0, 'SQL_NOTFOUND': -1.0})
         
         try:
-            if self.db_engine == 'sqlite':
-                # Split into individual statements
-                statements = self._split_sql_statements(sql_string)
-                
-                for i, stmt in enumerate(statements):
-                    if stmt.upper().startswith('SELECT') or stmt.upper().startswith('WITH') or stmt.upper().startswith('PRAGMA'):
-                        # This is a query - execute normally to get results
-                        results = self._execute_sql(stmt, is_query=True)
-                        if results:
-                            column_names = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
-                            self._handle_output(results, column_names)
-                    else:
-                        # This is a non-query statement
-                        self._execute_sql(stmt, is_query=False)
-                        
-            elif self.db_engine == 'duckdb':
-                # DuckDB can handle multiple statements - use existing logic
-                self._execute_sql(sql_string)
-            else:
-                # Fallback
-                self._execute_sql(sql_string)
+            # Run each statement in turn on either engine. Queries show their results the
+            # same way a line-level SELECT does (including an empty result).
+            for stmt in self._split_sql_statements(sql_string):
+                if stmt.upper().startswith(('SELECT', 'WITH', 'SUMMARIZE', 'PRAGMA')):
+                    results = self._execute_sql(stmt, is_query=True)
+                    if results is not None:
+                        column_names = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
+                        self._handle_output(results, column_names)
+                else:
+                    self._execute_sql(stmt, is_query=False)
                 
         except Exception as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
@@ -5332,11 +5358,24 @@ class Interpreter:
             csv_writer.writerow(headers)
         csv_writer.writerows(results)
     
+    @staticmethod
+    def _json_default(value):
+        """JSON encoding for database values json can't handle: DuckDB (and SQLite
+        adapter) dates, times and timestamps become ISO text, DECIMAL becomes a number."""
+        if hasattr(value, 'isoformat'):
+            return value.isoformat(sep=' ') if isinstance(value, datetime) else value.isoformat()
+        if isinstance(value, Decimal):
+            return int(value) if value == value.to_integral_value() else float(value)
+        if isinstance(value, (bytes, bytearray)):
+            return base64.b64encode(bytes(value)).decode('ascii')
+        return str(value)
+
     def _write_as_json(self, results, headers, stream, options={}):
-        json.dump([dict(zip(headers, row)) for row in results], stream, indent=2)
+        json.dump([dict(zip(headers, row)) for row in results], stream, indent=2, default=self._json_default)
+        stream.write("\n")
     
     def _write_as_jsonl(self, results, headers, stream, options={}):
-        for row in results: stream.write(json.dumps(dict(zip(headers, row))) + "\n")
+        for row in results: stream.write(json.dumps(dict(zip(headers, row)), default=self._json_default) + "\n")
     
     def _write_as_xml(self, results, headers, stream, options={}):
         """Writes query results as XML."""
@@ -13403,8 +13442,8 @@ class Interpreter:
             self._next_token() # Consume INDEXES
             
             on_table = None
-            if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'ON':
-                self._next_token() # Consume ON
+            if self._current_token() and self._current_token()[1].upper() in ('ON', 'FROM'):
+                self._next_token() # Consume ON / FROM
                 on_table = self._parse_table_name()
 
             if self._current_token() and self._current_token()[0] == 'SEMICOLON':
@@ -13412,8 +13451,21 @@ class Interpreter:
 
             all_results = []
             if self.db_engine == 'duckdb':
-                # DuckDB logic would go here
-                pass
+                table_filter = " WHERE table_name = ?" if on_table else ""
+                params = [on_table] if on_table else []
+                explicit = self.db_cursor.execute(
+                    "SELECT sql, NULL FROM duckdb_indexes()" + table_filter + " ORDER BY table_name, index_name", params).fetchall()
+                all_results.extend(explicit)
+                constraints = self.db_cursor.execute(
+                    "SELECT table_name, constraint_type, constraint_column_names FROM duckdb_constraints()"
+                    " WHERE constraint_type IN ('PRIMARY KEY', 'UNIQUE')" + (" AND table_name = ?" if on_table else "") +
+                    " ORDER BY table_name, constraint_index", params).fetchall()
+                for table_name, constraint_type, columns in constraints:
+                    cols = ', '.join(columns)
+                    if constraint_type == 'PRIMARY KEY':
+                        all_results.append((f"ALTER TABLE {table_name} ADD PRIMARY KEY ({cols});", None))
+                    else:
+                        all_results.append((f"-- UNIQUE constraint on table {table_name} ({cols})", None))
             else: # SQLite
                 if on_table:
                     # Query for a single, specific table (now includes PK as ALTER TABLE)

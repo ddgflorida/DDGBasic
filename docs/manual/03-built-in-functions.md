@@ -1,6 +1,6 @@
 # Chapter 3: Built-in Functions
 
-This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **124 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQLite queries; these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
+This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **124 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
 
 The examples in this chapter were run against the interpreter, and the output shown is what it printed. Output from functions that depend on the clock, the file system or the environment (`DATE$`, `FILETIME`, `CURDIR$` and so on) will differ on your machine.
 
@@ -29,7 +29,7 @@ Related chapters:
 - [3.12 Type and utility functions](#312-type-and-utility-functions)
 - [3.13 FORMAT$ mask syntax](#313-format-mask-syntax)
 - [3.14 FORMATDATE$ mask tokens](#314-formatdate-mask-tokens)
-- [3.15 Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite)
+- [3.15 Functions available inside SQL](#functions-available-inside-sql-sqlite)
 - [3.16 Implementation notes and discrepancies](#316-implementation-notes-and-discrepancies)
 
 ---
@@ -189,7 +189,7 @@ Related chapters:
 | [`YEAR`](#fn-year) | Date | Number | Year |
 | [`YEARCAL$`](#fn-yearcal-str) | Date | String | Text calendar for a year |
 
-SQL-side functions (usable only inside SQLite statements): `CHARINDEX`, `ENDS_WITH`, `INITCAP`, `INSTR`, `LEFT$`, `LPAD`, `REPLICATE`, `REVERSE`, `RIGHT$`, `RPAD`, `SOUNDEX`, `SPLIT_PART`, `STARTS_WITH`, `STUFF` and `TRANSLATE`. See [3.15](#functions-available-inside-sql-sqlite).
+SQL-side functions (usable inside SQL statements on either engine): `CHARINDEX`, `ENDS_WITH`, `INITCAP`, `INSTR`, `LEFT$`, `LPAD`, `REPLICATE`, `REVERSE`, `RIGHT$`, `RPAD`, `SOUNDEX`, `SPLIT_PART`, `STARTS_WITH`, `STUFF` and `TRANSLATE`. See [3.15](#functions-available-inside-sql-sqlite).
 
 ---
 
@@ -1870,9 +1870,9 @@ PRINT "[" + FORMATDATE$("2024-07-04 14:35:09", "%I:MI %p") + "]"
 ---
 
 <a id="functions-available-inside-sql-sqlite"></a>
-## 3.15 Functions available inside SQL (SQLite)
+## 3.15 Functions available inside SQL
 
-When the database engine is SQLite (the default), DbBasic registers the user-defined SQL functions below on every connection (`SqliteStringFunctions.register_all`). You can use them in any SQL statement: line-level `SELECT`, `INSERT`, `UPDATE` and so on, and scalar subqueries such as `x$ = (SELECT ...)`. **They are not available after `DATABASE ENGINE DUCKDB`.**
+DbBasic registers the SQL functions below on every database connection, for both engines. You can use them in any SQL statement: line-level `SELECT`, `INSERT`, `UPDATE` and so on, and scalar subqueries such as `x$ = (SELECT ...)`. Under DuckDB, DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`, `ENDS_WITH`, `SPLIT_PART`, `TRANSLATE` and 2-argument `INSTR` are used. They give the same results, except that `STARTS_WITH`/`ENDS_WITH` show `True`/`False` rather than 1/0. The others (and `INSTR` with 3 or 4 arguments) are added by DbBasic.
 
 These functions use SQL semantics: booleans are **1 and 0** (not -1 and 0), and they return `NULL` when an argument has the wrong type. For example, `REVERSE(123)` is `NULL` because the argument is not text.
 
@@ -1980,7 +1980,7 @@ This section lists the places where `README.md` (function table) or `docs/DbBasi
 20. **`SOUNDEX$` and SQL `SOUNDEX`** (fixed): vowels did not separate repeated codes (`Tymczak` gave `T520`). They now follow standard Soundex (`T522`).
 21. **`STRIPHTML$` needs the `lxml` package** as well as BeautifulSoup. If it is missing, the function fails at run time.
 22. **`INSTR` argument order differs** between DbBasic (`INSTR(start, s$, sub$)`) and SQL (`INSTR(s, sub, start)`).
-23. **The SQLite functions are not registered for DuckDB.** SQL that uses `LPAD`, `SPLIT_PART` and so on may fail, or use DuckDB's own versions with different semantics, after `DATABASE ENGINE DUCKDB`.
+23. **SQL helper functions on DuckDB** (fixed). They were registered only for SQLite. They are now available on DuckDB too (3.15).
 24. **`FORMAT$` treats the literal characters `0`, `9`, `$`, `*`, `!` and `&` in the mask as field markers.** Negative exponents in `^^^^` output are now zero-padded (`E-04`; this used to be `E-4`).
 25. **Bad arguments to built-in functions** (fixed): functions that don't check their arguments (`LEFT$`, `MID$`, `INT`, `SIN` and others) failed with bare Python errors. These are now reported as `Invalid arguments for LEFT$(): ...` with the line and column.
 26. **`HASH_JOIN`** (fixed): an unreachable duplicate block after its `return` has been removed.
