@@ -68,6 +68,7 @@ EXPECTED_EXIT = {
 # Keyboard input fed to scripts that use INPUT.
 STDIN = {
     'examples/errorhandling': 'nope.txt\n\n',   # file-not-found path, then quit
+    'tests/file_io_fixes': 'Ann\nabc\n42\n',    # a name, then a bad and a good number
 }
 
 

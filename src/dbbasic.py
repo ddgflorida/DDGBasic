@@ -6059,7 +6059,7 @@ class Interpreter:
 
         self._expect('COMMA')
         var_name = self._expect('ID')[1]
-        line = self.file_handles[file_num]['handle'].readline()
+        line = self._open_file_handle(file_num)['handle'].readline()
         self.variables[var_name] = line.rstrip('\n\r')
             
     def _parse_open_statement(self):
@@ -6085,20 +6085,22 @@ class Interpreter:
                 key, value = part.split('=')
                 dialect_params[key.strip()] = value.strip()
         try:
-            #print("DEBUG","ABOUT TO OPEN FILE ",filename)
-            handle = open(filename, py_mode, newline='', encoding="utf-8")
+            handle = open(os.path.expanduser(str(filename)), py_mode, newline='', encoding="utf-8")
             self.file_handles[file_num] = {'handle': handle, 'dialect': dialect_params}
         except FileNotFoundError as e: 
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-            #print("DEBUG OPEN FILENOTFOUND", self.variables['ERRMSG$'],e)
-            #self._error(f"File not found: {filename}")
-            raise e
-        except Exception as e: 
-            self.variables['ERR'], 
-            self.variables['ERRMSG$'] = 1.0, str(e); 
-            print("DEBUG OPEN EXCEPTION", e)
+            raise e     # ERRMSG$ keeps the OS message for an ON ERROR handler
+        except OSError as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"Error opening file: {e}")
         
+    def _open_file_handle(self, file_num):
+        """The open-file record for #file_num, or a clear error if it isn't open."""
+        handle_info = self.file_handles.get(file_num)
+        if not handle_info:
+            self._error(f"File #{file_num} is not open.")
+        return handle_info
+
     def _parse_close_statement(self):
         self._expect('CLOSE')
         
@@ -6145,14 +6147,13 @@ class Interpreter:
         if not var_name.endswith('$'): 
             self._error("Destination for READ FILE must be a string variable.")
         try:
-            with open(filename, 'r', encoding='utf-8') as f: 
+            with open(os.path.expanduser(filename), 'r', encoding='utf-8') as f: 
                 self.variables[var_name] = f.read()
         except FileNotFoundError as e: 
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
             self._error(f"File not found: {filename}")
-        except Exception as e: 
-            self.variables['ERR'], 
-            self.variables['ERRMSG$'] = 1.0, str(e); 
+        except (OSError, UnicodeDecodeError) as e: 
+            self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"Error reading file: {e}")
         
     def _parse_input_statement(self):
@@ -6160,11 +6161,21 @@ class Interpreter:
         if self._current_token()[0] == 'STRING':
             prompt = self._current_token()[1][1:-1].replace('""', '"')
             self._next_token(); 
-            self._expect('SEMICOLON')
+            if self._current_token() and self._current_token()[0] in ('SEMICOLON', 'COMMA'):
+                self._next_token()
+            else:
+                self._error("Expected ; or , after the INPUT prompt")
         var_name = self._expect('ID')[1]
-        user_input = input(prompt)
-        if var_name.endswith('$'): self.variables[var_name] = user_input
-        else: self.variables[var_name] = float(user_input)
+        while True:
+            user_input = input(prompt)
+            if var_name.endswith('$'):
+                self.variables[var_name] = user_input
+                break
+            try:
+                self.variables[var_name] = float(user_input)
+                break
+            except ValueError:
+                print("?Redo from start")   # numeric variable: ask again, as in classic BASIC
     
     def _parse_echo_statement(self):
         """
@@ -6197,7 +6208,7 @@ class Interpreter:
             
             file_num = int(self._parse_expression())
             
-            target = self.file_handles[file_num]['handle']
+            target = self._open_file_handle(file_num)['handle']
             self._expect('COMMA')
         if self._current_token() and self._current_token()[0] == 'USING':
             self._next_token()
@@ -6275,8 +6286,7 @@ class Interpreter:
         # Handle optional file number
         if self._current_token() and self._current_token()[0] == 'HASH_SYM':
             self._next_token(); file_num = int(self._parse_expression()); self._expect('COMMA')
-            handle_info = self.file_handles.get(file_num)
-            if not handle_info: self._error(f"File #{file_num} not open.")
+            handle_info = self._open_file_handle(file_num)
             target_handle, dialect_params = handle_info['handle'], handle_info['dialect']
         
         # Collect values
@@ -6303,8 +6313,9 @@ class Interpreter:
             csv_writer.writerow(cleaned_values)
             print(output_buffer.getvalue().strip())
         else:
-            # Write to file handle
-            csv.writer(target_handle, **dialect_params).writerow(cleaned_values)
+            # Write to file handle, ending the line the same way PRINT # does
+            writer_params = {'lineterminator': os.linesep, **dialect_params}
+            csv.writer(target_handle, **writer_params).writerow(cleaned_values)
             
     def _parse_exit_statement(self):
         self._expect('EXIT')
@@ -6842,7 +6853,7 @@ class Interpreter:
     def _parse_name_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('ID'); old_filename = self._parse_expression(); self._expect('AS'); new_filename = self._parse_expression()
-        try: os.rename(str(old_filename), str(new_filename))
+        try: os.rename(os.path.expanduser(str(old_filename)), os.path.expanduser(str(new_filename)))
         except FileNotFoundError as e: 
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
             raise e
@@ -7331,12 +7342,15 @@ class Interpreter:
             if not isinstance(target_dir, str):
                 self._error("Target directory must be a string.")
         
-        try:
-            # Check if archive exists
-            if not os.path.exists(archive_name):
-                self.variables['ERR'] = 2.0
-                self.variables['ERRMSG$'] = f"Archive not found: {archive_name}"
+        archive_name = os.path.expanduser(archive_name)
+        if not os.path.exists(archive_name):
+            self.variables['ERR'] = 2.0
+            self.variables['ERRMSG$'] = f"Archive not found: {archive_name}"
+            if self.sql_fatal_errors:
                 self._error(f"Archive not found: {archive_name}")
+            return
+
+        try:
             
             # Create target directory if it doesn't exist
             if target_dir != "." and not os.path.exists(target_dir):

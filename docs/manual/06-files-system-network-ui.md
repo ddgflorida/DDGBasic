@@ -41,7 +41,7 @@ OPEN filename FOR {INPUT | OUTPUT | APPEND} AS #n [WITH OPTIONS "key=value key=v
 
 | Part | Meaning |
 |---|---|
-| `filename` | Any string expression. It is passed to the OS unchanged; `~` is **not** expanded here, unlike in the file-management statements. |
+| `filename` | Any string expression. A leading `~` is expanded to your home directory. |
 | `INPUT` | Open an existing file for reading (Python mode `r`). |
 | `OUTPUT` | Create the file, or truncate it if it exists (mode `w`). |
 | `APPEND` | Open for writing at the end, creating the file if needed (mode `a`). |
@@ -92,7 +92,7 @@ This works like console `PRINT` (Chapter 4) but writes to handle `n`:
 * The line ending is `os.linesep`: `\n` on macOS/Linux and `\r\n` on Windows.
 * A hash is written as indented JSON. An array is written as `[a, b, ...]`.
 * Positive numbers get the usual leading space (`PRINT #1, 5` writes ` 5`).
-* Printing to a handle that is not open fails with a bare Python `KeyError` message (for example `Runtime Error: 5`).
+* Printing to a handle that is not open is an error: `File #5 is not open.`
 
 ```basic
 OPEN "out.txt" FOR OUTPUT AS #1
@@ -117,7 +117,7 @@ WRITE [#n,] expression [, expression ...]
 * Strings are quoted only when they need to be (`QUOTE_MINIMAL`).
 * A float with no fractional part is written as an integer (`25.0` becomes `25`).
 * Without `#n` the record goes to standard output, and the trailing record terminator is stripped before printing.
-* With `#n`, the record ends with `csv.writer`'s default terminator, **`\r\n`**, on every platform.
+* With `#n`, the record ends with the system line ending (`os.linesep`), the same as `PRINT #n`.
 * If the handle is not open: `File #n not open.`
 
 ```basic
@@ -145,7 +145,7 @@ Reads the next line from handle `n` and stores it in `var` after stripping trail
 
 * The value is always stored as a string, even when the variable name has no `$` suffix.
 * At end of file it stores `""` and does not raise an error, so test `EOF(n)` before reading.
-* If the handle is not open, the error is a bare `KeyError` message.
+* If the handle is not open, the error is `File #n is not open.`
 * There is no console form of `LINE INPUT`. Use `INPUT` for the console.
 
 ### EOF()
@@ -483,7 +483,7 @@ Extracts every entry of a ZIP archive into `target_dir$`, or into the current di
 
 | Failure | Result |
 |---|---|
-| Archive missing | `ERR` = 1, `ERRMSG$` = `Archive not found: ...` (see note) |
+| Archive missing | `ERR` = 2, `ERRMSG$` = `Archive not found: ...` |
 | Not a ZIP file | `ERR` = 1, `ERRMSG$` = `Invalid ZIP file: ...` |
 | Other error | `ERR` = 1, `ERRMSG$` = the message |
 
@@ -595,13 +595,13 @@ Writes the ASCII BEL character (`\a`) to standard output with no newline, and fl
 ### INPUT
 
 ```
-INPUT ["prompt";] var
+INPUT ["prompt" {; | ,}] var
 ```
 
 Reads one line from standard input.
 
-* The prompt must be a **string literal** followed by a **semicolon**. If there is no prompt, a single space is shown. No `?` is added.
-* If `var` ends in `$` the text is stored as-is. Otherwise it is converted with `float()`, and non-numeric input causes a runtime error (`could not convert string to float`).
+* The prompt must be a **string literal** followed by a semicolon or a comma. If there is no prompt, a single space is shown. No `?` is added.
+* If `var` ends in `$` the text is stored as-is. Otherwise it must be a number: other input prints `?Redo from start` and asks again, as in classic BASIC.
 * Only one variable per statement is supported.
 
 ```basic
@@ -614,7 +614,6 @@ Given the input `Bob` and `21`:
 Name? Age? Bob 42
 ```
 
-(The built-in `HELP INPUT` shows a comma after the prompt, but a comma is rejected with `Expected token SEMICOLON but got COMMA`.)
 
 ---
 
@@ -1034,13 +1033,13 @@ These were found while checking the source against behaviour. Line numbers refer
 
 1. **`COPY ... AS`** (fixed): the dispatcher looked for an identifier, but the lexer emits a `COPY` token, so the statement never ran.
 2. **`ZIP`** (fixed): the `FROM` check compared the wrong token and could never pass. It also created an empty archive and reset `ERR` to 0 when no files matched.
-3. **`UNZIP` docstring** says `INTO "dir"`, but the code (and `HELP UNZIP`) uses `TO "dir"`. For a missing archive, `ERR` is set to 2 but then overwritten with 1 by the generic exception handler. UNZIP errors are fatal unless `SET SQL_FATAL_ERRORS OFF`, which ties archive handling to a SQL setting.
+3. **`UNZIP`** (fixed). For a missing archive, `ERR` was set to 2 and then overwritten with 1; it now stays 2. The archive name expands `~`. UNZIP errors are still fatal unless `SET SQL_FATAL_ERRORS OFF`, which ties archive handling to a SQL setting.
 4. **`PRINT #n, USING ...`** (fixed). Without a trailing `;` it failed with `cannot access local variable 'parts'`, and with one no line ending was written.
-5. **`OPEN` / `READ FILE` generic error path** is mis-coded: `self.variables['ERR'],` on its own line, followed by `self.variables['ERRMSG$'] = 1.0, str(e)`, sets `ERRMSG$` to a tuple and leaves `ERR` at 0. `OPEN` also prints `DEBUG OPEN EXCEPTION` in this path.
-6. **`WRITE #n` line endings** are `\r\n` on all platforms (the `csv.writer` default), while `PRINT #n` uses `os.linesep`. Mixing them in one file gives mixed line endings. `WITH OPTIONS` values are passed to `csv.writer` as strings, so non-string dialect options (for example `quoting=1`) fail.
-7. **`INPUT` syntax.** `HELP INPUT` shows `INPUT "Prompt", var`, but the parser requires a semicolon. Only a literal prompt and a single variable are supported, and numeric input is converted with `float()` with no retry.
-8. **`LINE INPUT #` and `PRINT #`** on a handle that is not open raise a bare `KeyError`, which prints as `Runtime Error: 5`, instead of a descriptive message. `LINE INPUT` past EOF silently returns `""`.
-9. **`NAME`** and **`OPEN`** do not expand `~`, whereas `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES` and `COPY` do.
+5. **`OPEN` / `READ FILE` errors** (fixed). The generic error path set `ERRMSG$` to a tuple and left `ERR` at 0, and `OPEN` printed `DEBUG OPEN EXCEPTION`. Both now set `ERR` = 1 and `ERRMSG$` to the message, and expand `~`.
+6. **`WRITE #n` line endings** (fixed). They were `\r\n` on all platforms while `PRINT #n` used `os.linesep`; both now use `os.linesep`. `WITH OPTIONS` values are passed to `csv.writer` as strings, so non-string dialect options (for example `quoting=1`) fail.
+7. **`INPUT`** (fixed). `HELP INPUT` showed a comma after the prompt but only `;` was accepted, and non-numeric input to a numeric variable was a fatal error. Both separators work now, and bad numeric input asks again. Only a literal prompt and a single variable are supported.
+8. **`LINE INPUT #` and `PRINT #` on a closed handle** (fixed). They raised a bare `KeyError` (`Runtime Error: 5`); the error is now `File #5 is not open.`. `LINE INPUT` past EOF still returns `""`; test `EOF(n)` first.
+9. **`~` in file names** (fixed). `NAME`, `OPEN`, `READ FILE` and `UNZIP` now expand `~`, like `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES` and `COPY`.
 10. **`FILES RECURSIVE`** includes every directory whatever the pattern (unless `WITH FILESONLY`), while `FOR ... IN FILES(... RECURSIVE)` filters directories by the pattern. Arrays filled by `FILES ... INTO` start at index 0, like every other array.
 11. **Multi-word keywords inside strings** (fixed). The lexer used to collapse `WITH DETAILS`, `TO FILE`, `READ FILE` and similar pairs even inside string literals, so `PRINT "TO FILE"` printed `TOFILE`. Strings and comments are now left unchanged.
 12. **FETCH.**
