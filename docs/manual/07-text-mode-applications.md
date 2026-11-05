@@ -58,6 +58,7 @@ desktop:
 ```basic
 GOSUB desktop
 DO
+    GOSUB summary
     choice$ = MENUBAR$("File:Report|-|Quit", "Contacts:Browse|Add|Edit|Notes|Delete", "Help:Keys|About")
     IF choice$ = "File.Report" THEN GOSUB report
     IF choice$ = "Contacts.Browse" THEN GOSUB browse_contacts
@@ -75,6 +76,34 @@ LOOP UNTIL choice$ = "File.Quit" OR choice$ = ""
 ║      │ Notes  │                                                              ║
 ║      │ Delete │                                                              ║
 ║      └────────┘                                                              ║
+```
+
+`summary` fills the desktop with the contacts on file, so the opening screen isn't an empty frame, and it is drawn again on every pass of the loop, so the list stays current after each command:
+
+```basic
+summary:
+    BOX 3, 3, 21, 78, "Contacts on file"
+    @ 5, 6 SAY PADRIGHT$("Name", 20, " ") & " " & PADRIGHT$("Phone", 16, " ") & " " & PADRIGHT$("State", 5, " ") & "    Credit"
+    @ 6, 6 SAY REPEAT$("-", 53)
+    row = 7
+    FOR s IN (SELECT name, phone, state, credit FROM contacts ORDER BY name LIMIT 12)
+        @ row, 6 SAY PADRIGHT$(s.name, 20, " ") & " " & PADRIGHT$(s.phone, 16, " ") & " " & PADRIGHT$(s.state, 5, " ") & FORMAT$(s.credit, "###,##0.00")
+        row = row + 1
+    NEXT
+    @ 20, 6 SAY LTRIM$(STR$((SELECT COUNT(*) FROM contacts))) & " contacts.  Press C for Contacts, F for File, H for Help."
+    RETURN
+```
+
+```
+ File   Contacts   Help
+╔════════════════════════════ CONTACTS  2026-11-05 ════════════════════════════╗
+║ ┌──────────────────────────── Contacts on file ────────────────────────────┐ ║
+║ │                                                                          │ ║
+║ │  Name                 Phone            State    Credit                   │ ║
+║ │  -----------------------------------------------------                   │ ║
+║ │  ACME CORP            (555) 123-4567   FL     1,000.00                   │ ║
+║ │  GLOBEX               (555) 999-0000   NY       250.50                   │ ║
+║ │  INITECH              (555) 444-1212   TX         0.00                   │ ║
 ```
 
 **4. The list.** One `BROWSE ... EDIT` gives a scrolling grid in which Enter (or typing) edits a cell, Ins adds a row and Del deletes one. Every change goes straight to the table:

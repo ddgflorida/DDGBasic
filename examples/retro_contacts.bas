@@ -16,6 +16,7 @@ INSERT INTO contacts (name, phone, state, credit) VALUES
 
 GOSUB desktop
 DO
+    GOSUB summary
     choice$ = MENUBAR$("File:Report|-|Quit", "Contacts:Browse|Add|Edit|Notes|Delete", "Help:Keys|About")
     IF choice$ = "File.Report" THEN GOSUB report
     IF choice$ = "Contacts.Browse" THEN GOSUB browse_contacts
@@ -38,6 +39,19 @@ desktop:
     CLS
     BOX 2, 1, 23, 80, "CONTACTS  " & DATE$ DOUBLE
     @ 24, 2 SAY "Arrows move  Enter chooses  Esc goes back  Letters are hot keys"
+    RETURN
+
+summary:
+    REM The opening screen: the contacts on file, redrawn after every command
+    BOX 3, 3, 21, 78, "Contacts on file"
+    @ 5, 6 SAY PADRIGHT$("Name", 20, " ") & " " & PADRIGHT$("Phone", 16, " ") & " " & PADRIGHT$("State", 5, " ") & "    Credit"
+    @ 6, 6 SAY REPEAT$("-", 53)
+    row = 7
+    FOR s IN (SELECT name, phone, state, credit FROM contacts ORDER BY name LIMIT 12)
+        @ row, 6 SAY PADRIGHT$(s.name, 20, " ") & " " & PADRIGHT$(s.phone, 16, " ") & " " & PADRIGHT$(s.state, 5, " ") & FORMAT$(s.credit, "###,##0.00")
+        row = row + 1
+    NEXT
+    @ 20, 6 SAY LTRIM$(STR$((SELECT COUNT(*) FROM contacts))) & " contacts.  Press C for Contacts, F for File, H for Help."
     RETURN
 
 browse_contacts:
