@@ -1126,15 +1126,15 @@ Behaviour common to all four loops:
 
 - The filename must be a string, or the loop fails with `FOR...IN X requires a string filename.`
 - Files are opened as UTF-8. There is no `encoding` option.
-- The system variable `RECNO` holds the record counter inside the loop. Exactly what it counts differs by loop; see the table below.
+- The system variable `RECNO` holds the record number inside the loop, counting from 1.
 - `EXIT FOR` leaves the loop (Chapter 2).
-- When the loop ends, the loop variable is restored to its earlier value, or deleted if it did not exist before, and `RECNO` is deleted.
+- When the loop ends, the loop variable is restored to its earlier value, or deleted if it did not exist before, and `RECNO` is restored to the value it had before the loop (so an outer loop's `RECNO` comes back), or deleted.
 
 | Loop | Record value | Reading | `RECNO` |
 |---|---|---|---|
-| `CSV` | A hash. Keys `"1"`, `"2"`, ... hold the field by position. With `header=true`, header-name keys are added too. | The **entire file is read into memory** before the first iteration. Comma delimiter only. | Starts at **2** for the first data row, with or without a header. |
+| `CSV` | A hash. Keys `"1"`, `"2"`, ... hold the field by position. With `header=true`, header-name keys are added too. | The **entire file is read into memory** before the first iteration. Comma delimiter only. | 1, 2, ... (data rows; a header row is not counted) |
 | `JSON` | A hash, converted as for `PARSEJSON`, with nested hashes and arrays. | The whole file is parsed. It must be an array of objects or a single object. An empty array skips the body. | 1, 2, ... |
-| `JSONL` | Each line parsed, converted as for `PARSEJSON`. | Streams one line at a time. Blank lines are skipped. An **invalid line stops the loop with an error**. | Counts physical lines, **including blank ones**. |
+| `JSONL` | Each line parsed, converted as for `PARSEJSON`. | Streams one line at a time. Blank lines are skipped. An **invalid line stops the loop with an error**. | 1, 2, ... (records; blank lines are not counted) |
 | `TEXT` | A string, the line without its `CR`/`LF`. | Streams. Invalid bytes are replaced. Blank lines are included. | 1, 2, ... |
 
 **CSV loop details.** The `OPTIONS` text is only searched for the substring `header=true`, case-insensitively. Other keys are ignored, and the default is no header. Header names have every character other than `A-Z a-z 0-9 _` removed: `Product ID` becomes the key `ProductID`. Under `SET HASH_KEYS IGNORE_CASE`, they are also uppercased. Parentheses around the filename are optional, because they are simply a parenthesised expression.
@@ -1168,10 +1168,11 @@ B7,"1,250.00",1
 ```
 
 ```
- 2: A1 | 9.99 | 2 | 2
- 3: B7 | 1,250.00 | 1 | 1
- 2: Product ID / Unit Price
- 3: A1 / 9.99
+ 1: A1 | 9.99 | 2 | 2
+ 2: B7 | 1,250.00 | 1 | 1
+ 1: Product ID / Unit Price
+ 2: A1 / 9.99
+ 3: B7 / 1,250.00
  1[first line]
  2[]
  3[  third line  ]
@@ -1179,10 +1180,10 @@ B7,"1,250.00",1
  1acme items= 2 city=Boston
  2globex items= 1 city=Austin
  1 login
- 3 view
+ 2 view
 ```
 
-The JSONL loop's `RECNO` jumped from 1 to 3 because line 2 of `events.jsonl` is blank. Without the `EXIT FOR`, the same loop stops at line 4 with:
+Line 2 of `events.jsonl` is blank, so it is skipped and not counted: the second record has `RECNO` 2. Without the `EXIT FOR`, the same loop stops at line 4 with:
 
 ```
 Runtime Error: Invalid JSON in line of file 'events.jsonl': Expecting value: line 1 column 1 (char 0)
@@ -1850,12 +1851,10 @@ The following points were found while checking the source and running the exampl
     - reads the whole file into memory;
     - supports only the comma delimiter;
     - recognises only the literal substring `header=true` in its options;
-    - starts `RECNO` at 2;
     - strips non-alphanumeric characters from header keys.
 
     The help text shows `FOR row IN CSV("data.csv")`. The parentheses work, but only because they form a parenthesised expression.
 39. **`FOR ... IN JSONL`:**
-    - `RECNO` counts blank lines;
     - one invalid line aborts the loop (whereas `LOAD JSONL` skips it);
     - non-object lines are bound as arrays or scalars, without a check.
 40. **`PARSE JSON ... INTO`** (removed). This statement form was never implemented. The unused `PARSE` keyword has been removed from the lexer, so `parse` is now an ordinary name. Use `PARSEJSON()`.

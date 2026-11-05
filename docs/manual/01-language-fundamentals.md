@@ -667,8 +667,7 @@ array element or in a hash entry. The `LET` keyword is optional.
   or a hash. Otherwise the error is `'v' is not an array or hash.`
   - Array: `i` is converted to an integer (by truncation). If `i` is beyond the
     end, the array grows and new slots are filled with `""` or `0`, depending
-    on `v`'s `$` suffix. A negative `i` counts from the end of the array
-    (Python behaviour).
+    on `v`'s `$` suffix. A negative `i` is an error (`Array index out of bounds.`).
   - Hash: `i` is converted to a key string (whole numbers become `"1"`, not
     `"1.0"`). Its case is kept, or the key is uppercased under
     `SET HASH_KEYS IGNORE_CASE`.
@@ -753,8 +752,9 @@ array gets `size + 1` elements, with indexes 0 to `size`.
   with `0`.
 - Using `DIM` on an existing variable **resets** it. `x = 10: DIM x` leaves
   `x` at `0`.
-- `AS` followed by anything other than `HASH` or `ARRAY` (for example
-  `DIM x AS INTEGER`) is accepted, but **no variable is created**.
+- `DIM x AS STRING` (or `TEXT`) creates `""`; `DIM x AS INTEGER` (or `LONG`,
+  `SINGLE`, `DOUBLE`, `NUMBER`, `FLOAT`, `REAL`) creates 0. Any other type name
+  is an error.
 - Inside a user-defined function, `DIM` declares a local variable (Chapter 2).
 - DIM is optional for scalars and for arrays built with `ARRAY(...)`. It is
   needed before an index/key assignment such as `h("k") = v` on a new variable.
@@ -829,7 +829,7 @@ DbBasic expressions.
 **Indexing.** `a(i)` reads element `i` (indexes start at 0). The index is
 converted to an integer by truncation. A read outside `0..UBOUND(a)`, including
 a negative index, gives `Array index out of bounds.` Writes past the end grow
-the array (see [1.8](#18-assignment-let)).
+the array; a negative write is also an error (see [1.8](#18-assignment-let)).
 
 **Whole-array references.** A bare name (`a`) or a name with empty parentheses
 (`a()`) gives the array itself. That is how arrays are passed to functions:
@@ -1118,8 +1118,7 @@ SORT array WITH function_name [ASC | DESC]
   built-in such as `UCASE$`) is called once for each element. The element is
   sorted by the result. Write the name without parentheses. An unknown name
   gives `SORT WITH: unknown function 'x'.`
-- `ON`, `ASC` and `DESC` must be written in **uppercase**. Lowercase `desc` is
-  silently ignored, and lowercase `on` is a syntax error.
+- `ON`, `ASC` and `DESC` can be written in any case.
 - An empty array is left as it is.
 
 ```basic
@@ -1364,7 +1363,7 @@ To test whether a string is empty, compare it explicitly:
 | Keywords (`PRINT`, `for each`, `End If`) | No |
 | Built-in function names | No |
 | Variable names (reads, assignments, `DIM`, `REDIM`, `v(i) =`, `v.k =`, `PUSH`, `POP`, `SHIFT`, `UNSHIFT`, `SPLICE`, `REVERSE`, `SORT`, `FOR EACH ... IN HASH`) | No. `count`, `Count` and `COUNT` are one variable. The spelling used when it is first created is the one `SHOW VARIABLES` displays. |
-| `ON`, `ASC`, `DESC` in `SORT` | **Yes** (uppercase only) |
+| `ON`, `ASC`, `DESC` in `SORT` | No |
 | Labels (`GOTO Done` vs `done:`) | **Yes** |
 | Hash keys with `h("key")` | Yes under `PRESERVE_CASE`. Keys are uppercased under `IGNORE_CASE`. |
 | Hash keys with `h.key` (read) | No (exact first, then case-insensitive) |
@@ -1418,10 +1417,8 @@ the existing documentation:
    treating element 0 as reserved, so on arrays from `ARRAY()`, `PUSH` or
    `SPLIT` they skipped the real first element, and `SHIFT` refused a
    one-element array. They now work on index 0, as the `HELP` text describes.
-7. **`DIM x AS <other type>`** (for example `AS INTEGER` or `AS STRING`) is
-   accepted but creates no variable.
-8. **`SORT` modifiers are case-sensitive.** `ON`, `ASC` and `DESC` are compared
-   as uppercase text, so `sort a desc` sorts ascending without any error.
+7. **`DIM x AS <type>`** (fixed). Types other than `HASH` and `ARRAY` were accepted but created no variable. `AS STRING` (or `TEXT`) now creates `""`, and `AS INTEGER`, `LONG`, `SINGLE`, `DOUBLE`, `NUMBER`, `FLOAT` or `REAL` create 0. Any other type name is an error.
+8. **`SORT` modifiers** (fixed). `ON`, `ASC` and `DESC` were compared as uppercase text, so `sort a desc` failed or sorted ascending. They are now matched in any case.
 9. **Comparisons in assignments and `PRINT`** (fixed). `x = a > b` and
    `PRINT 1 <> 2` failed with `Unknown statement: RELOP` unless the comparison
    was in parentheses.
@@ -1436,5 +1433,4 @@ the existing documentation:
     as `""`. Assignment still converts NULL to the variable's default.
 13. **`${...}` ends at the first `}`**, so an interpolated expression cannot
     contain a `}` character, even inside a string literal.
-14. **Negative array indexes.** Reading `a(-1)` raises "out of bounds", but
-    assigning `a(-1) = v` writes to the last element.
+14. **Negative array indexes** (fixed). Reading `a(-1)` was an "out of bounds" error, but assigning `a(-1) = v` wrote to the last element. Both are now errors.

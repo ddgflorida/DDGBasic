@@ -3746,18 +3746,24 @@ class Interpreter:
             if is_in_loop:
                 # The token after IN determines the loop type
                 loop_type_token = self.tokens[peek_index + 1]
-                if loop_type_token[0] == 'CSV':                  # iterate csv file
-                    self._parse_for_in_csv_loop()
-                elif loop_type_token[0] == 'JSONL':              # iterate json lines file
-                    self._parse_for_in_jsonl_loop()
-                elif loop_type_token[0] == 'JSON':               # iterate json keys
-                    self._parse_for_in_json_loop()
-                elif loop_type_token[0] == 'FILES':              # loop through files
-                    self._parse_for_in_files_loop()              
-                elif loop_type_token[0] == 'TEXT':               # loop through a plain text file
-                    self._parse_for_in_text_loop()
-                else: # Default to SQL loop                      # iterate sql result set
-                    self._parse_for_in_sql_loop()
+                # A nested FOR ... IN gets its own RECNO; the outer loop's value comes back after it
+                outer_recno = self.variables.get('RECNO') if 'RECNO' in self.variables else None
+                try:
+                    if loop_type_token[0] == 'CSV':                  # iterate csv file
+                        self._parse_for_in_csv_loop()
+                    elif loop_type_token[0] == 'JSONL':              # iterate json lines file
+                        self._parse_for_in_jsonl_loop()
+                    elif loop_type_token[0] == 'JSON':               # iterate json keys
+                        self._parse_for_in_json_loop()
+                    elif loop_type_token[0] == 'FILES':              # loop through files
+                        self._parse_for_in_files_loop()              
+                    elif loop_type_token[0] == 'TEXT':               # loop through a plain text file
+                        self._parse_for_in_text_loop()
+                    else: # Default to SQL loop                      # iterate sql result set
+                        self._parse_for_in_sql_loop()
+                finally:
+                    if outer_recno is not None:
+                        self.variables['RECNO'] = outer_recno
             else:
                 # If 'IN' was not found, it's a standard FOR i = 1 TO 10 loop
                 self._parse_for_statement()
@@ -6522,7 +6528,7 @@ class Interpreter:
         sort_key = None
         sort_fn_name = None  # If set, use this function to compute each element's sort key.
         
-        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1] == 'ON':
+        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'ON':
             self._next_token() # Consume ON
             sort_key_expr = self._parse_expression()
             if not isinstance(sort_key_expr, str):
@@ -6540,7 +6546,7 @@ class Interpreter:
 
         reverse_order = False
         if self._current_token() and self._current_token()[0] == 'ID':
-            direction = self._current_token()[1]
+            direction = self._current_token()[1].upper()
             if direction in ['ASC', 'DESC']:
                 if direction == 'DESC':
                     reverse_order = True
@@ -6965,7 +6971,7 @@ class Interpreter:
         while self._current_token() and self._current_token()[0] == 'COMMA':
             self._next_token()
             arg = self._parse_expression()
-            run_args.append(str(arg))
+            run_args.append(self._to_string(arg))
 
         try:
             expanded_filename = os.path.expanduser(filename)
@@ -10096,11 +10102,11 @@ class Interpreter:
             with open(filename, 'r', encoding='utf-8') as infile:
                 # Iterate over each line in the JSONL file
                 for line in infile:
-                    row_number += 1
-                    self.variables['RECNO'] = float(row_number)
                     line = line.strip()
                     if not line:
-                        continue # Skip empty lines
+                        continue # Skip empty lines (they are not records)
+                    row_number += 1
+                    self.variables['RECNO'] = float(row_number)
 
                     # Parse the single line of JSON
                     record = json.loads(line)
@@ -10179,7 +10185,7 @@ class Interpreter:
                     self.token_index = loop_body_start_index
                     self._skip_block('FOR', 'NEXT')
                     return
-            row_number = 1
+            row_number = 0
             for row in all_rows:
                 row_number += 1
                 self.variables['RECNO'] = float(row_number)
@@ -10241,14 +10247,20 @@ class Interpreter:
             elif token_after_var and token_after_var[0] == 'AS':
                 self._next_token()
                 type_token = self._current_token()
-                if not type_token or type_token[0] not in ['HASH', 'ARRAY']:
-                    pass
-                    #print(f"Data types other than HASH and ARRAY are currently ignored", file=sys.stderr)
+                if not type_token:
+                    self._error("Expected a type after AS in DIM.")
                 self._next_token()
+                type_name = str(type_token[1]).upper()
                 if type_token[0] == 'HASH':
                     self.variables[var_name] = {}
                 elif type_token[0] == 'ARRAY':
                     self.variables[var_name] = []
+                elif type_name in ('STRING', 'TEXT'):
+                    self.variables[var_name] = ""
+                elif type_name in ('INTEGER', 'LONG', 'SINGLE', 'DOUBLE', 'NUMBER', 'FLOAT', 'REAL'):
+                    self.variables[var_name] = 0.0
+                else:
+                    self._error(f"Unknown type '{type_token[1]}' in DIM. Use HASH, ARRAY, STRING or a number type.")
             
             # Case 3: Simple scalar variable, e.g., DIM x
             else:
@@ -10280,6 +10292,8 @@ class Interpreter:
             collection = self.variables[var_name]
             if isinstance(collection, list):
                 index = int(key_or_index_expr)
+                if index < 0:
+                    self._error("Array index out of bounds.")
                 if index >= len(collection):
                     default_value = "" if var_name.endswith('$') else 0.0
                     collection.extend([default_value] * (index - len(collection) + 1))

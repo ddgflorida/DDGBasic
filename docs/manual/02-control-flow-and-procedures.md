@@ -241,7 +241,7 @@ skipped loop leaves i = 5
 Rules shared by every member of the family:
 
 - **Scope of the loop variable.** If the variable existed before the loop, its earlier value is restored when the loop ends. If it did not exist, it is deleted when the loop ends.
-- **`RECNO`.** All loops except `FILES` set the numeric variable `RECNO` to the current record number. `RECNO` is deleted when the loop ends, and reading it afterwards gives `0`. Because of this, an inner `FOR ... IN` loop also removes the outer loop's `RECNO` until the outer loop's next pass. The exact numbering differs by source. See the notes below and 2.18.
+- **`RECNO`.** All loops except `FILES` set the numeric variable `RECNO` to the current record number, counting from 1. When the loop ends, `RECNO` goes back to the value it had before the loop, so after an inner `FOR ... IN` loop the outer loop's `RECNO` is still correct. Outside any loop it is deleted (reading it gives `0`).
 - **Empty sources.** If there are no rows, the body is skipped.
 - `EXIT FOR` leaves any of these loops. See 2.9 for a caution about `NEXT var` combined with `EXIT FOR`.
 - `NEXT` can be followed by the loop variable name. The name is not checked.
@@ -290,7 +290,7 @@ NEXT [rec]
 - Every row has positional keys `"1"`, `"2"`, and so on.
 - With `header=true`, each row also has keys named after the header cells. Characters other than letters, digits and `_` are removed from the names, so `Unit Price` becomes `UnitPrice`. With `SET HASH_KEYS IGNORE_CASE`, header names are also converted to upper case.
 - All values are strings.
-- `RECNO` starts at **2** whether or not there is a header. With a header row this equals the physical line number in the file.
+- `RECNO` counts data rows from 1; a header row is not counted.
 
 Given `items.csv`:
 
@@ -310,11 +310,11 @@ NEXT
 ```
 
 ```
- 2 Widget qty=3 price=2.50
- 3 Gadget qty=5 price=1.25
- 2 name | qty
- 3 Widget | 3
- 4 Gadget | 5
+ 1 Widget qty=3 price=2.50
+ 2 Gadget qty=5 price=1.25
+ 1 name | qty
+ 2 Widget | 3
+ 3 Gadget | 5
 ```
 
 ### JSON, JSONL and TEXT files
@@ -328,7 +328,7 @@ FOR line$ IN TEXT(filename$) ... NEXT
 The file name must be in parentheses.
 
 - **JSON** reads the whole file. The top-level value must be an array; a single object is treated as an array of one. Each element is converted to DbBasic values (objects become HASHes and arrays become ARRAYs). JSON numbers stay numeric. `RECNO` counts from 1.
-- **JSONL** reads one JSON document per line and skips blank lines. `RECNO` counts *physical lines*, including the blank lines that were skipped.
+- **JSONL** reads one JSON document per line and skips blank lines. `RECNO` counts records from 1; blank lines are not counted.
 - **TEXT** returns each line without its trailing `\n` or `\r\n`. The file is read as UTF-8, and undecodable bytes are replaced rather than causing an error. `RECNO` counts from 1.
 - A missing file causes the error `File not found for JSON loop: ...` (or `JSONL`/`TEXT`). Malformed JSON causes `Invalid JSON ...`.
 
@@ -350,7 +350,7 @@ NEXT
  1 id= 1 tag=red
  2 id= 2 tag=blue
  1 id= 1 tag=red
- 3 id= 2 tag=blue
+ 2 id= 2 tag=blue
  1: first line
  2: second line
 ```
@@ -1143,7 +1143,7 @@ PRINT "back in caller: title$ = "; title$; ", ERR ="; ERR
 ```
 
 ```
-  report.bas: arg1 = east, arg2 = 42.0
+  report.bas: arg1 = east, arg2 = 42
   report.bas sees title$ = Q3 Sales
 back in caller: title$ = Q3 Sales, ERR = 0
 ```
@@ -1470,10 +1470,10 @@ Each of the following was confirmed by running the interpreter.
 6. **`GOTO` out of a loop or block `IF`** (fixed). A `GOTO` out of a loop left the loop running, which ended in `Expected token NEXT but got None`. Repeated jumps eventually hit Python's recursion limit. A `GOTO` out of a block `IF` was silently redirected to just after `END IF`. `GOTO` now ends the blocks it leaves (see 2.10).
 7. **Return value case** (fixed). The return value had to be assigned with the exact case used in the `FUNCTION` line, or the function returned `0`/`""`. Variable names are now case-insensitive everywhere, so any spelling works.
 8. **Functions in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL** (fixed). These never registered `FUNCTION` definitions, so calls failed with `Unknown function`. Each function now records the token list it was defined in, and each of these entry points registers the new source's functions (see 2.12).
-9. **`RUN` arguments** are converted with Python `str()`, so `42` arrives as `"42.0"`.
+9. **`RUN` arguments** (fixed). They were converted with Python `str()`, so `42` arrived as `"42.0"`; they now arrive as `PRINT` shows them (`"42"`).
 10. **`END` inside a `RUN` child or an `EVAL` string** (fixed). `END` called `sys.exit`, so anywhere except a bare top-level `END` line it killed the whole process, including from a `RUN` child, the REPL or the web runner. It now stops just the running program (see 2.15).
 11. **`INCLUDE`** (fixed): it used to fail for every file that existed, because its marker lines began with `'`. See [1.4.1](01-language-fundamentals.md#141-include).
-12. **`RECNO` numbering is inconsistent.** In `FOR ... IN CSV` it starts at 2 even without a header row. In `JSONL` it counts blank lines. It is deleted at the end of every loop, which also hides the outer loop's `RECNO` when loops are nested.
+12. **`RECNO` numbering** (fixed). In `FOR ... IN CSV` it started at 2 even without a header row, in `JSONL` it counted blank lines, and an inner loop deleted the outer loop's `RECNO`. It now counts records from 1 in every loop and is restored after a nested loop.
 13. **Exit status** (fixed): it was always 0, even after a runtime error; it is now 1 (see 2.17). `EXIT FUNCTION` outside a function still gives an empty `Runtime Error:` message.
 14. **`HELP` debug output** (fixed). `HELP` printed the raw token tuple, for example `('GOSUB', 'GOSUB', 5)`, before every entry.
 15. `PRINT x;` immediately followed by `:` is a syntax error (`Unexpected token in factor: COLON`), so `FOR i = 1 TO 3: PRINT i;: NEXT` fails. Write `PRINT i : NEXT`, or split the line.
