@@ -370,33 +370,35 @@ operators such as `||` and `~` work (see 4.2.1).
 
 Keywords are not case-sensitive (`print`, `Print` and `PRINT` are the same).
 A keyword is matched only as a whole word. It is also not matched if a `$`
-follows it, so `TEXT$` and `USER$` are ordinary variable names.
+follows it, so `TABLE$` and `FILES$` are ordinary variable names.
 
 These words are keyword tokens and **cannot be used as plain (non-`$`)
 variable names**:
 
 ```
-ALTER AND APIKEY APPEND ARRAY AS ATTACH BCC BEGIN BELL BODY BROWSER CC CHAIN
-CHDIR CLEAR CLOSE COMMIT COPY CREATE CSV DATABASE DELETE DESCRIBE DETAILS DIM
-DO DOMAIN DROP DUMP ECHO ELSE ELSEIF EMAIL END ERROR EVAL EXCEL EXECUTE EXISTS
-EXIT FETCH FILES FIXED FOR FUNCTION GOSUB GOTO HASH HELP HOST HTML HTMLBODY IF
-IGNORE IN INPUT INSERT INTO JSON JSONL KILL LET LOAD LOOP MERGE MKDIR NEXT NOT
-OPEN OPTIONS OR OUTPUT PARQUET PASSWORD PLAIN POP PORT POST PRAGMA PRINT
-PROVIDER PUSH REDIM REM REPLACE RESUME RETURN REVERSE RMDIR ROLLBACK RUN
-SECURITY SELECT SENDER SET SHELL SHIFT SHOW SORT SPLICE STEP SUBJECT SUMMARIZE
-TABLE TEXT THEN TO TROFF TRON TRUNCATE UNPACK UNSHIFT UNTIL UNZIP UPDATE
-UPGRADE UPSERT USER USING WEND WHILE WITH WRITE XML ZIP
+ALTER AND APPEND ARRAY AS ATTACH BEGIN BELL BROWSER CHAIN CHDIR CLEAR CLOSE
+COMMIT COPY CREATE CSV DATABASE DELETE DESCRIBE DETAILS DIM DO DROP DUMP ECHO
+ELSE ELSEIF END ERROR EVAL EXCEL EXECUTE EXISTS EXIT FETCH FILES FIXED FOR
+FUNCTION GOSUB GOTO HASH HELP HTML IF IGNORE IN INPUT INSERT INTO JSON JSONL
+KILL LET LOAD LOOP MERGE MKDIR NEXT NOT OPEN OPTIONS OR OUTPUT PARQUET PLAIN
+POP POST PRAGMA PRINT PUSH REDIM REM REPLACE RESUME RETURN REVERSE RMDIR
+ROLLBACK RUN SELECT SET SHELL SHIFT SHOW SORT SPLICE STEP SUMMARIZE TABLE THEN
+TO TROFF TRON TRUNCATE UNPACK UNSHIFT UNTIL UNZIP UPDATE UPGRADE UPSERT USING
+WEND WHILE WITH WRITE XML ZIP
 ```
 
-A few ordinary words are on this list (`user`, `body`, `host`, `port`, `text`),
-so this is easy to hit:
+Almost all of these are statement, clause or SQL words. Common names such as
+`user`, `text`, `email`, `host`, `size`, `type` and `title` are **not** on the
+list: the statements that use them (`SET EMAIL`, `EMAIL`, `LOAD TEXT`, the
+screen statements) recognise them by position, so they are free as variable
+names. The words on the list still clash, for example:
 
 ```basic
-user = 1
+table = 1
 ```
 
 ```
-Runtime Error: Unknown statement: USER at line 1, col 1.
+Runtime Error: Unknown statement: TABLE at line 1, col 1.
 ```
 
 There are two ways round it. Add a `$` suffix (for a string variable). Or use
@@ -1404,14 +1406,13 @@ the existing documentation:
    `REDIM` and the array statements used the exact spelling, so
    `count = 1: COUNT = 2` made two variables. Variable names are now
    case-insensitive everywhere (`VariableTable`).
-5. **Reserved words.** `USER` is a reserved keyword token (added for
-   `SET EMAIL`), so `DIM user AS HASH` fails. `tests/hashtest.bas` has been
-   updated to use `person` instead. A few other common words (`text`,
-   `body`, `host`, `port`) are also reserved and cannot be used as plain
-   variable names. About 30 more (`size`, `type`, `title`, `label`,
-   `message`, `source`, `choice`, `display`, `search` and others) were
-   reserved by the old FORM statements; they became ordinary names again
-   when those statements were archived (see 6.8).
+5. **Reserved words** (fixed). `user`, `text`, `body`, `host`, `port`,
+   `email`, `subject`, `password` and the other `SET EMAIL`/`EMAIL` words
+   were keyword tokens, so `DIM user AS HASH` failed. They are now
+   recognised only inside those statements and are ordinary names
+   elsewhere. About 30 more (`size`, `type`, `title`, `label`, `message`,
+   `source`, `choice` and others) were reserved by the old FORM statements
+   and were freed when those were archived (see 6.8).
 6. **`SHIFT`/`UNSHIFT`** (changed to 0-based). They used to work on index 1,
    treating element 0 as reserved, so on arrays from `ARRAY()`, `PUSH` or
    `SPLIT` they skipped the real first element, and `SHIFT` refused a

@@ -1265,7 +1265,7 @@ class Lexer:
             ('SHELL', r'\bSHELL\b(?!\$)'), ('BROWSER', r'\bBROWSER\b(?!\$)'),('RUN', r'\bRUN\b(?!\$)'),
             ('DIM', r'\bDIM\b(?!\$)'), ('REDIM', r'\bREDIM\b(?!\$)'),('CHAIN', r'\bCHAIN\b(?!\$)'),
             ('OPTIONS', r'\bOPTIONS\b(?!\$)'), ('CSV', r'\bCSV\b(?!\$)'), ('HTML', r'\bHTML\b(?!\$)'), 
-            ('TABLE', r'\bTABLE\b(?!\$)'), ('TEXT', r'\bTEXT\b(?!\$)'),('EVAL', r'\bEVAL\b(?!\$)'),
+            ('TABLE', r'\bTABLE\b(?!\$)'), ('EVAL', r'\bEVAL\b(?!\$)'),
             ('LOAD', r'\bLOAD\b(?!\$)'), ('APPEND', r'\bAPPEND\b(?!\$)'), ('IGNORE', r'\bIGNORE\b(?!\$)'),
             ('REPLACE', r'\bREPLACE\b(?!\$)'), ('TRUNCATE', r'\bTRUNCATE\b(?!\$)'),('PARQUET', r'\bPARQUET\b(?!\$)'),('PLAIN', r'\bPLAIN\b(?!\$)'),
             ('EXCEL', r'\bEXCEL\b(?!\$)'), ('WRITE', r'\bWRITE\b(?!\$)'), ('USING', r'\bUSING\b(?!\$)'),
@@ -1287,13 +1287,6 @@ class Lexer:
             ('PUSH', r'\bPUSH\b(?!\$)'), ('POP', r'\bPOP\b(?!\$)'),
             ('SHIFT', r'\bSHIFT\b(?!\$)'), ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
             ('SPLICE', r'\bSPLICE\b(?!\$)'), ('REVERSE', r'\bREVERSE\b(?!\$)'),
-            ('PROVIDER', r'\bPROVIDER\b(?!\$)'), 
-            ('HOST', r'\bHOST\b(?!\$)'), ('PORT', r'\bPORT\b(?!\$)'),
-            ('USER', r'\bUSER\b(?!\$)'), ('PASSWORD', r'\bPASSWORD\b(?!\$)'),
-            ('SECURITY', r'\bSECURITY\b(?!\$)'),
-            ('APIKEY', r'\bAPIKEY\b(?!\$)'), ('EMAIL', r'\bEMAIL\b(?!\$)'),('SENDER', r'\bSENDER\b(?!\$)'),
-            ('SUBJECT', r'\bSUBJECT\b(?!\$)'), ('BODY', r'\bBODY\b(?!\$)'),('DOMAIN', r'\bDOMAIN\b(?!\$)'),
-            ('HTMLBODY', r'\bHTMLBODY\b(?!\$)'), ('CC', r'\bCC\b(?!\$)'), ('BCC', r'\bBCC\b(?!\$)'),
             ('FUNCTION', r'\bFUNCTION\b(?!\$)'),
             ('ENDFUNCTION', r'\bENDFUNCTION\b(?!\$)'),
             # Place new keywords above this line
@@ -3802,7 +3795,7 @@ class Interpreter:
                         self._parse_for_in_json_loop()
                     elif loop_type_token[0] == 'FILES':              # loop through files
                         self._parse_for_in_files_loop()              
-                    elif loop_type_token[0] == 'TEXT':               # loop through a plain text file
+                    elif str(loop_type_token[1]).upper() == 'TEXT' and loop_type_token[0] == 'ID':   # a plain text file
                         self._parse_for_in_text_loop()
                     else: # Default to SQL loop                      # iterate sql result set
                         self._parse_for_in_sql_loop()
@@ -3878,6 +3871,8 @@ class Interpreter:
             self._parse_database_statement()
         elif token[0] == 'AT_SYM':                                # @ row, col SAY ... GET ...
             self._parse_at_statement()
+        elif self._is_email_statement(token):                     # EMAIL TO ... SUBJECT ... BODY ...
+            self._parse_email_statement()
         elif self._is_screen_statement(token):                    # CLS, LOCATE, COLOR, BOX, READ, BROWSE
             self._parse_screen_statement()
         elif token[0] == 'LET' or token[0] == 'ID':               # optional let var = value
@@ -3935,8 +3930,6 @@ class Interpreter:
             self._parse_copy_statement()
         elif token[0] == 'CLEAR':                                 # Clear all variables
             self._parse_clear_statement()
-        elif token[0] == 'EMAIL': #                               # Send emails via an email provider
-            self._parse_email_statement()
         elif token[0] == 'BELL':                                  # Ring a bell
             self._parse_bell_statement()
         elif token[0] == 'UPGRADE':
@@ -5712,13 +5705,15 @@ class Interpreter:
         if not token or token[0] in ('NEWLINE', 'COLON'):
             self._error("SET requires an option: OUTPUT, EMAIL, NULL_HANDLING, SQL_FATAL_ERRORS or HASH_KEYS.")
         
-        if token and token[0] == 'EMAIL':
+        if token and token[0] == 'ID' and token[1].upper() == 'EMAIL':
             self._next_token() # Consume 'EMAIL'
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
                 keyword_token = self._current_token()
-                # <<< MODIFIED: Add SMTP keywords to the list of valid keywords >>>
-                if keyword_token[0] not in ['PROVIDER', 'APIKEY', 'SENDER', 'DOMAIN', 'HOST', 'PORT', 'USER', 'PASSWORD', 'SECURITY']:
+                # The option words are ordinary names, recognised here by their text
+                word = str(keyword_token[1]).upper() if keyword_token[0] not in ('STRING', 'NUMBER') else ''
+                if word not in ['PROVIDER', 'APIKEY', 'SENDER', 'DOMAIN', 'HOST', 'PORT', 'USER', 'PASSWORD', 'SECURITY']:
                     self._error(f"Unexpected keyword '{keyword_token[1]}' in SET EMAIL statement.")
+                keyword_token = (word, keyword_token[1], keyword_token[2])
                 self._next_token() # Consume keyword
                 
                 value = self._parse_expression()
@@ -10197,6 +10192,8 @@ class Interpreter:
         token = self._current_token()
         valid_load_types = {'CSV', 'EXCEL', 'FIXED', 'JSON', 'JSONL', 'XML', 'HTML', 'TEXT', 'PARQUET'}
 
+        if token and token[0] == 'ID' and token[1].upper() == 'TEXT':
+            token = ('TEXT', token[1], token[2])   # TEXT is an ordinary name elsewhere
         if not token or token[0] not in valid_load_types:
             self._error(f"Expected a valid LOAD type but got '{token[0] if token else 'None'}'.")
         
@@ -10488,7 +10485,7 @@ class Interpreter:
         self._expect('FOR')
         loop_var_name = self._expect('ID')[1]
         self._expect('IN')
-        self._expect('TEXT')
+        self._next_token()   # TEXT
         
         self._expect('LPAREN')
         filename = self._parse_expression()
@@ -13488,9 +13485,19 @@ class Interpreter:
         if not self.gosub_stack: self._error("RETURN without GOSUB.")
         self.token_index = self.gosub_stack.pop()
 
+    EMAIL_WORDS = ('TO', 'CC', 'BCC', 'SUBJECT', 'BODY', 'HTMLBODY', 'ATTACH')
+
+    def _is_email_statement(self, token):
+        """EMAIL is a statement only when one of its clause words follows, so email = "..."
+        is an ordinary assignment."""
+        if token[0] != 'ID' or token[1].upper() != 'EMAIL':
+            return False
+        nxt = self._peek_token()
+        return bool(nxt) and nxt[0] not in ('STRING', 'NUMBER') and str(nxt[1]).upper() in self.EMAIL_WORDS
+
     def _parse_email_statement(self):
         """Parses and sends an email using the configured provider, with attachment support."""
-        self._expect('EMAIL')
+        self._next_token()   # EMAIL
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
 
         if not self.email_config.get('provider'):
@@ -13498,9 +13505,10 @@ class Interpreter:
 
         email_details = {}
         while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON']:
-            token_type = self._current_token()[0]
-            if token_type not in ['TO', 'CC', 'BCC', 'SUBJECT', 'BODY', 'HTMLBODY', 'ATTACH']:
-                self._error(f"Unexpected keyword '{token_type}' in EMAIL statement.")
+            tok = self._current_token()
+            token_type = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else tok[0]
+            if token_type not in self.EMAIL_WORDS:
+                self._error(f"Unexpected keyword '{tok[1]}' in EMAIL statement.")
             self._next_token()
             email_details[token_type.lower()] = self._parse_expression()
         

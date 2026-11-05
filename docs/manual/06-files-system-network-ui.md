@@ -658,7 +658,6 @@ Notes:
 
 * Hash values are sent in their string form, so the number `42` is sent as `"42.0"`. Convert numbers explicitly (for example `STR$` or `FORMAT$`, Chapter 3) if the server needs integers.
 * Header keys keep the server's case. Many servers, including HTTP/2 servers, send lowercase names, so `h("Content-Type")` returns `0` while `h("content-type")` works. Under `SET HASH_KEYS IGNORE_CASE` lookups are upper-cased, but the stored keys are not, so lookups fail. Inspect the hash with `PRINT h` first.
-* `BODY` is a reserved word (used by `EMAIL`), so it cannot be used as a hash name.
 * To parse a JSON response, use `PARSEJSON` (Chapter 3).
 
 Example (run against httpbin.org; part of the output omitted):
