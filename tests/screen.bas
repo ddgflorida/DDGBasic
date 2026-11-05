@@ -1,5 +1,5 @@
 REM Text screen statements: CLS, COLOR, BOX, @ SAY/GET with PICTURE and VALID, READ,
-REM MENU, BROWSE, INKEY$ and LASTKEY$. Keys come from the test runner's STDIN.
+REM MENU, BROWSE, SAVESCREEN/RESTSCREEN, INKEY$ and LASTKEY$. Keys come from the test runner's STDIN.
 REM Failed checks raise errors.
 DATABASE OPEN ":memory:"
 CREATE TABLE customers (id INTEGER, name TEXT, credit REAL);
@@ -29,8 +29,11 @@ READ
 IF name$ <> "ANN SMITH" THEN ERROR 1, "Esc should restore the value: " & name$
 IF LASTKEY$ <> CHR$(27) THEN ERROR 1, "LASTKEY$ after Esc"
 
+REM MENU and BROWSE put back what they covered, so the screen is the same afterwards
+before$ = SAVESCREEN()
 REM Keys: Down Enter -> item 2; then "q" picks Quit by its first letter
 item = MENU(12, 8, "Save", "Delete", "Quit")
+IF SAVESCREEN() <> before$ THEN ERROR 1, "MENU did not restore the screen"
 IF item <> 2 THEN ERROR 1, "MENU with arrow keys: " & STR$(item)
 items = SPLIT("Save,Delete,Quit", ",")
 item = MENU(12, 8, items)
@@ -39,6 +42,17 @@ IF item <> 3 THEN ERROR 1, "MENU hot key: " & STR$(item)
 REM Keys: Down Down Enter -> the third row
 BROWSE (SELECT id, name, credit FROM customers ORDER BY id) AT 1, 1, 10, 50 TITLE "Pick" INTO row
 IF row.name <> "INITECH" THEN ERROR 1, "BROWSE INTO: " & row.name
+IF SAVESCREEN() <> before$ THEN ERROR 1, "BROWSE did not restore the screen"
+
+REM SAVESCREEN of an area, overwritten and put back
+part$ = SAVESCREEN(4, 8, 4, 30)
+@ 4, 8 SAY "XXXXXXXXXXXXXXXXXXXXXXX"
+IF SAVESCREEN() = before$ THEN ERROR 1, "SAY should have changed the screen"
+RESTSCREEN part$
+IF SAVESCREEN() <> before$ THEN ERROR 1, "RESTSCREEN of an area"
+CLS
+RESTSCREEN before$
+IF SAVESCREEN() <> before$ THEN ERROR 1, "RESTSCREEN of the whole screen"
 
 REM Keys: "k"
 k$ = INKEY$

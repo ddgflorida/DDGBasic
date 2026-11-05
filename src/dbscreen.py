@@ -12,6 +12,7 @@ scripted keystrokes.
 Rows and columns are 1-based: (1, 1) is the top-left corner, as in LOCATE.
 """
 import atexit
+import json
 import os
 import re
 import shutil
@@ -37,6 +38,8 @@ _WIN_KEYS = {'H': 'UP', 'P': 'DOWN', 'K': 'LEFT', 'M': 'RIGHT', 'G': 'HOME', 'O'
              'A': 'F7', 'B': 'F8', 'C': 'F9', 'D': 'F10', '\x85': 'F11', '\x86': 'F12'}
 
 ENTER, ESC, TAB, BACKSPACE = '\r', '\x1b', '\t', '\x08'
+
+SAVED_PREFIX = '\x00SCREEN:'   # marks a string made by SAVESCREEN
 
 
 class ScreenError(Exception):
@@ -294,6 +297,11 @@ class Screen:
         self.gets = []
         self.last_key = ''
         self.used = False
+        # A copy of what is on the screen, one (char, fg, bg) cell per position, so that
+        # SAVESCREEN, MENU and BROWSE can put back what they cover (ANSI can't read it back)
+        self.rows, self.cols = self.size()
+        self.cells = self._blank(self.rows, self.cols, 7, 0)
+        self.cur_row, self.cur_col = 1, 1
 
     # --- output helpers ------------------------------------------------
     def _activate(self):
@@ -341,6 +349,96 @@ class Screen:
         cols, rows = shutil.get_terminal_size((80, 24))
         return rows, cols
 
+    @staticmethod
+    def _blank(rows, cols, fg, bg):
+        return [[(' ', fg, bg) for _ in range(cols)] for _ in range(rows)]
+
+    def _put(self, row, col, text, fg, bg):
+        """Records text in the screen copy and returns the ANSI output that draws it."""
+        r = row - 1
+        if 0 <= r < self.rows:
+            line = self.cells[r]
+            for i, ch in enumerate(text):
+                c = col - 1 + i
+                if 0 <= c < self.cols:
+                    line[c] = (ch, fg, bg)
+        self.cur_row, self.cur_col = row, col + len(text)
+        return f'\x1b[{row};{col}H' + self._sgr(fg, bg) + text
+
+    def track(self, text, emit=True):
+        """PRINT and INPUT text written at the cursor: kept in the screen copy, following the
+        terminal's newlines, tab stops, line wrap and scrolling. emit=False only records it."""
+        for ch in text:
+            if ch == '\n':
+                self._newline()
+            elif ch == '\r':
+                self.cur_col = 1
+            elif ch == '\t':
+                self.cur_col = min(((self.cur_col - 1) // 8 + 1) * 8 + 1, self.cols)
+            elif ch == '\a' or not ch.isprintable():
+                continue
+            else:
+                if self.cur_col > self.cols:
+                    self._newline()
+                if 1 <= self.cur_row <= self.rows:
+                    self.cells[self.cur_row - 1][self.cur_col - 1] = (ch, self.fg, self.bg)
+                self.cur_col += 1
+        if emit:
+            self._w(text)
+
+    def _newline(self):
+        self.cur_col = 1
+        if self.cur_row >= self.rows:
+            self.cells.pop(0)
+            self.cells.append([(' ', self.fg, self.bg) for _ in range(self.cols)])
+        else:
+            self.cur_row += 1
+
+    def _draw_cells(self, r1, c1, block):
+        """ANSI output for a block of cells with its top-left corner at r1, c1."""
+        out = []
+        for n, line in enumerate(block):
+            out.append(f'\x1b[{r1 + n};{c1}H')
+            colour = None
+            for ch, fg, bg in line:
+                if (fg, bg) != colour:
+                    out.append(self._sgr(fg, bg))
+                    colour = (fg, bg)
+                out.append(ch)
+            row = r1 + n - 1
+            if 0 <= row < self.rows:
+                for i, cell in enumerate(line):
+                    if 0 <= c1 - 1 + i < self.cols:
+                        self.cells[row][c1 - 1 + i] = cell
+        return ''.join(out)
+
+    def save(self, r1=None, c1=None, r2=None, c2=None):
+        """SAVESCREEN: the area's contents and the cursor, as a string RESTSCREEN can put back."""
+        r1, c1 = r1 or 1, c1 or 1
+        r2, c2 = r2 or self.rows, c2 or self.cols
+        r1, c1 = max(1, r1), max(1, c1)
+        r2, c2 = min(self.rows, r2), min(self.cols, c2)
+        if r2 < r1 or c2 < c1:
+            raise ScreenError("SAVESCREEN area is empty.")
+        block = [self.cells[r][c1 - 1:c2] for r in range(r1 - 1, r2)]
+        return SAVED_PREFIX + json.dumps({'at': [r1, c1], 'cursor': [self.cur_row, self.cur_col],
+                                          'cells': [[list(cell) for cell in line] for line in block]},
+                                         ensure_ascii=False, separators=(',', ':'))
+
+    def restore_saved(self, saved):
+        """RESTSCREEN: puts back an area saved by SAVESCREEN, and the cursor."""
+        if not isinstance(saved, str) or not saved.startswith(SAVED_PREFIX):
+            raise ScreenError("RESTSCREEN needs a value returned by SAVESCREEN.")
+        try:
+            data = json.loads(saved[len(SAVED_PREFIX):])
+            r1, c1 = data['at']
+            block = [[tuple(cell) for cell in line] for line in data['cells']]
+        except (ValueError, KeyError, TypeError):
+            raise ScreenError("RESTSCREEN needs a value returned by SAVESCREEN.")
+        row, col = data.get('cursor', [r1, c1])
+        self._w(self._draw_cells(r1, c1, block) + self._normal() + f'\x1b[{row};{col}H')
+        self.cur_row, self.cur_col = row, col
+
     # --- statements ----------------------------------------------------
     def color(self, fg=None, bg=None, field_fg=None, field_bg=None):
         for v in (fg, bg, field_fg, field_bg):
@@ -354,13 +452,17 @@ class Screen:
 
     def cls(self):
         self.gets = []
+        self.rows, self.cols = self.size()     # the terminal may have been resized
+        self.cells = self._blank(self.rows, self.cols, self.fg, self.bg)
+        self.cur_row, self.cur_col = 1, 1
         self._w(self._normal() + '\x1b[2J\x1b[H')
 
     def locate(self, row, col):
-        self._w(f'\x1b[{max(1, row)};{max(1, col)}H')
+        self.cur_row, self.cur_col = max(1, row), max(1, col)
+        self._w(f'\x1b[{self.cur_row};{self.cur_col}H')
 
     def say(self, row, col, text):
-        self._w(f'\x1b[{row};{col}H' + self._normal() + text)
+        self._w(self._put(row, col, text, self.fg, self.bg))
 
     def box(self, r1, c1, r2, c2, title='', double=False):
         if r2 - r1 < 1 or c2 - c1 < 1:
@@ -372,10 +474,10 @@ class Screen:
             label = f' {title} '[:inner]
             start = (inner - len(label)) // 2
             top = top[:start] + label + top[start + len(label):]
-        out = [self._normal(), f'\x1b[{r1};{c1}H', tl, top, tr]
+        out = [self._put(r1, c1, tl + top + tr, self.fg, self.bg)]
         for r in range(r1 + 1, r2):
-            out.append(f'\x1b[{r};{c1}H{v}{" " * inner}{v}')
-        out.append(f'\x1b[{r2};{c1}H{bl}{h * inner}{br}')
+            out.append(self._put(r, c1, v + ' ' * inner + v, self.fg, self.bg))
+        out.append(self._put(r2, c1, bl + h * inner + br, self.fg, self.bg))
         self._w(''.join(out))
 
     # --- GET / READ ----------------------------------------------------
@@ -386,7 +488,7 @@ class Screen:
         return field
 
     def _draw_field(self, field, cursor=None):
-        out = f'\x1b[{field.row};{field.col}H' + self._field_colour() + ''.join(field.buffer)
+        out = self._put(field.row, field.col, ''.join(field.buffer), self.field_fg, self.field_bg)
         if cursor is not None:
             out += f'\x1b[{field.row};{field.col + cursor}H'
         self._w(out + ('' if cursor is not None else self._normal()))
@@ -453,14 +555,15 @@ class Screen:
             raise ScreenError("MENU needs at least one item.")
         items = [str(i) for i in items]
         width = max(len(i) for i in items) + 2
+        underneath = self.save(row, col, row + len(items) + 1, col + width + 1)
         self.box(row, col, row + len(items) + 1, col + width + 1)
         choice = 0
         self._w('\x1b[?25l')
         try:
             while True:
                 for n, item in enumerate(items):
-                    colour = self._field_colour() if n == choice else self._normal()
-                    self._w(f'\x1b[{row + 1 + n};{col + 1}H{colour} {item.ljust(width - 1)}' + self._normal())
+                    fg, bg = (self.field_fg, self.field_bg) if n == choice else (self.fg, self.bg)
+                    self._w(self._put(row + 1 + n, col + 1, ' ' + item.ljust(width - 1), fg, bg) + self._normal())
                 key = self.keys.read_key()
                 if key is None:
                     key = ESC
@@ -482,6 +585,7 @@ class Screen:
                     if hits:
                         return hits[0] + 1
         finally:
+            self.restore_saved(underneath)       # put back what the menu covered
             self._w('\x1b[?25h')
 
     # --- BROWSE --------------------------------------------------------
@@ -497,6 +601,7 @@ class Screen:
         page = r2 - r1 - 4                     # rows between the header line and the status line
         inner = c2 - c1 - 1
         top, current, first_col = 0, 0, 0
+        underneath = self.save(r1, c1, r2, c2)
         self.box(r1, c1, r2, c2, title)
         self._w('\x1b[?25l')
 
@@ -506,16 +611,16 @@ class Screen:
 
         try:
             while True:
-                out = [f'\x1b[{r1 + 1};{c1 + 1}H' + self._normal() + line(columns),
-                       f'\x1b[{r1 + 2};{c1 + 1}H' + ('─' * inner)]
+                out = [self._put(r1 + 1, c1 + 1, line(columns), self.fg, self.bg),
+                       self._put(r1 + 2, c1 + 1, '─' * inner, self.fg, self.bg)]
                 for n in range(page):
                     i = top + n
-                    colour = self._field_colour() if i == current else self._normal()
+                    fg, bg = (self.field_fg, self.field_bg) if i == current else (self.fg, self.bg)
                     text = line(cells[i]) if i < len(cells) else ' ' * inner
-                    out.append(f'\x1b[{r1 + 3 + n};{c1 + 1}H{colour}{text}{self._normal()}')
+                    out.append(self._put(r1 + 3 + n, c1 + 1, text, fg, bg))
                 status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns'
-                out.append(f'\x1b[{r2 - 1};{c1 + 1}H' + status[:inner].ljust(inner))
-                self._w(''.join(out))
+                out.append(self._put(r2 - 1, c1 + 1, status[:inner].ljust(inner), self.fg, self.bg))
+                self._w(''.join(out) + self._normal())
                 key = self.keys.read_key()
                 if key is None:
                     key = ESC
@@ -536,6 +641,7 @@ class Screen:
                 if current < top: top = current
                 elif current >= top + page: top = current - page + 1
         finally:
+            self.restore_saved(underneath)       # put back what the grid covered
             self._w('\x1b[?25h')
 
     # --- INKEY$ --------------------------------------------------------

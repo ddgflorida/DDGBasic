@@ -337,13 +337,23 @@ class HelpRegistry:
         },
         "MENU": {
             "syntax": 'choice = MENU(row, col, item1$, item2$, ... | items_array)',
-            "desc": "Shows a boxed light-bar menu. Arrows move, Enter chooses, the first letter of an item chooses it directly. Returns the item number from 1, or 0 for Esc.",
+            "desc": "Shows a boxed light-bar menu. Arrows move, Enter chooses, the first letter of an item chooses it directly. Returns the item number from 1, or 0 for Esc. What the menu covered is put back when it returns.",
             "examples": ['choice = MENU(5, 10, "Add", "Edit", "Quit")']
         },
         "BROWSE": {
             "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [AT top, left, bottom, right] [TITLE t$] [INTO var]',
-            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$.",
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends.",
             "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78']
+        },
+        "SAVESCREEN": {
+            "syntax": 'saved$ = SAVESCREEN() | SAVESCREEN(top, left, bottom, right)',
+            "desc": "Copies the screen, or an area of it, with its colours and the cursor position into a string for RESTSCREEN. It covers what screen statements, PRINT and INPUT drew; query tables and SHELL output are not included.",
+            "examples": ['saved$ = SAVESCREEN(8, 20, 14, 60)\nBOX 8, 20, 14, 60, "Warning" DOUBLE\nk$ = INKEY$(0)\nRESTSCREEN saved$']
+        },
+        "RESTSCREEN": {
+            "syntax": 'RESTSCREEN saved$',
+            "desc": "Puts back the screen area saved by SAVESCREEN, in the same place, and returns the cursor to where it was.",
+            "examples": ['RESTSCREEN saved$']
         },
         "INKEY$": {
             "syntax": 'INKEY$ | INKEY$(seconds)',
@@ -2844,7 +2854,7 @@ class Interpreter:
         'HASH_VALUES', 'HEX$', 'HOUR', 'HTMLDECODE$', 'HTMLENCODE$', 'INSTR', 'INSTRREV',
         'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
         'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
-        'INKEY$', 'LASTKEY$', 'MENU',
+        'INKEY$', 'LASTKEY$', 'MENU', 'SAVESCREEN',
         'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
         'OCT$', 'ORDINAL$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
         'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
@@ -3979,7 +3989,7 @@ class Interpreter:
             self._error(f"Unknown statement: {token[0]}")
 
     # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see dbscreen.py) ---
-    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE'}
+    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN'}
 
     def _is_screen_statement(self, token):
         """True for CLS, LOCATE, COLOR, BOX, READ or BROWSE used as a statement rather than as
@@ -4036,6 +4046,8 @@ class Interpreter:
                 self._run_read()
             elif word == 'BROWSE':
                 self._parse_browse_statement()
+            elif word == 'RESTSCREEN':
+                SCREEN.restore_saved(self._parse_expression())
         except ScreenError as e:
             self._error(str(e))
 
@@ -4284,6 +4296,12 @@ class Interpreter:
         elif name == 'LASTKEY$':
             if args: self._error("LASTKEY$ takes no arguments.")
             return SCREEN.last_key
+        elif name == 'SAVESCREEN':
+            if len(args) not in (0, 4): self._error("SAVESCREEN takes no arguments, or top, left, bottom, right.")
+            try:
+                return SCREEN.save(*[int(a) for a in args])
+            except ScreenError as e:
+                self._error(str(e))
         elif name == 'MENU':
             if len(args) < 3: self._error("MENU requires row, col and at least one item (or an array of items).")
             items = args[2] if len(args) == 3 and isinstance(args[2], list) else args[2:]
@@ -5134,7 +5152,7 @@ class Interpreter:
             
             var_name = actual_var_name
             
-            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$', 'SAVESCREEN'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                 self._next_token(); 
                 return self._call_builtin(var_name, [])
             
@@ -6411,6 +6429,8 @@ class Interpreter:
         SCREEN.keys.raw_off()   # INPUT needs the terminal's normal line editing
         while True:
             user_input = input(prompt)
+            if SCREEN.used:
+                SCREEN.track(prompt + user_input + '\n', emit=False)   # the terminal already showed it
             if var_name.endswith('$'):
                 self.variables[var_name] = user_input
                 break
@@ -6470,7 +6490,9 @@ class Interpreter:
                 self._next_token()
                 suppress_nl = True
             formatted_output = Formatter.format(format_string, values)
-            if target == sys.stdout:
+            if target == sys.stdout and SCREEN.used:
+                SCREEN.track(formatted_output + ("" if suppress_nl else "\n"))
+            elif target == sys.stdout:
                 print(formatted_output, end="" if suppress_nl else "\n")
             else:
                 target.write(formatted_output)
@@ -6520,7 +6542,8 @@ class Interpreter:
                 else:
                     parts.append('\n')
         output = "".join(parts)
-        if target == sys.stdout: print(output, end='')
+        if target == sys.stdout and SCREEN.used: SCREEN.track(output)   # keep the screen copy current
+        elif target == sys.stdout: print(output, end='')
         else: target.write(output)   
             
     def _parse_write_statement(self):

@@ -205,6 +205,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | PRINT                   | Outputs text, variables, or expressions to the console or an open file. |
 | PUSH                    | Adds a new element to the end of an array. |
 | READ                    | Edits the pending `@ ... GET` fields; Esc restores the original values. |
+| RESTSCREEN              | Puts back a screen area saved with `SAVESCREEN()`. |
 | READ FILE               | Reads the entire content of a text file into a single string variable. |
 | REDIM                   | Resizes a previously declared ARRAY. |
 | RESUME                  | Used within an error-handling routine to resume program execution at the statement after the one that caused the error. |
@@ -332,6 +333,7 @@ This document provides a quick reference to all available functions in the DbBas
 | RND([max_val])          | MATH        | Returns a random number. If max_val is provided, returns an integer between 1 and max_val. Otherwise, returns a float between 0 and 1. |
 | ROUND(number, [decimals]) | MATH      | Rounds a number to a specified number of decimals. |
 | RTRIM$(string$)         | STRING      | Removes whitespace from the end (right side) of a string. |
+| SAVESCREEN([top, left, bottom, right]) | SCREEN | Copies the screen or an area (with colours) into a string for `RESTSCREEN`. |
 | SECOND(time$)           | DATE/TIME   | Returns the seconds component (0-59) from a time/datetime string. |
 | MINUTE(time$)           | DATE/TIME   | Returns the minutes component (0-59) from a time/datetime string. |
 | HOUR(time$)             | DATE/TIME   | Returns the hours component (0-23) from a time/datetime string. |

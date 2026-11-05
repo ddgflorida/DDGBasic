@@ -1,6 +1,6 @@
 # Chapter 3: Built-in Functions
 
-This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **127 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
+This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **128 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
 
 The examples in this chapter were run against the interpreter, and the output shown is what it printed. Output from functions that depend on the clock, the file system or the environment (`DATE$`, `FILETIME`, `CURDIR$` and so on) will differ on your machine.
 
@@ -164,6 +164,7 @@ Related chapters:
 | [`RND`](#fn-rnd) | Math | Number | Random number |
 | [`ROUND`](#fn-round) | Math | Number | Round to decimals |
 | [`RTRIM$`](#fn-rtrim-str) | String | String | Trim the right side |
+| [`SAVESCREEN`](06-files-system-network-ui.md#savescreen-and-restscreen) | Screen | String | Copy of the screen or an area, for `RESTSCREEN` |
 | [`SECOND`](#fn-second) | Date | Number | Second from a time string |
 | [`SGN`](#fn-sgn) | Math | Number | Sign |
 | [`SIN`](#fn-sin) | Math | Number | Sine |
@@ -1659,7 +1660,7 @@ PRINT "[" + ENVIRON$("DBB_TEST") + "][" + ENVIRON$("NO_SUCH_VAR_X") + "]"
 [hi][]
 ```
 
-`CURDIR$`, `FREEFILE` and `DISKSPACE` are described in [3.10](#310-file-and-directory-functions). The screen functions `INKEY$`, `LASTKEY$` and `MENU` are described with the text-screen statements in [6.7](06-files-system-network-ui.md#67-text-screens).
+`CURDIR$`, `FREEFILE` and `DISKSPACE` are described in [3.10](#310-file-and-directory-functions). The screen functions `INKEY$`, `LASTKEY$`, `MENU` and `SAVESCREEN` are described with the text-screen statements in [6.7](06-files-system-network-ui.md#67-text-screens).
 
 ---
 
@@ -1987,4 +1988,4 @@ This section lists the places where `README.md` (function table) or `docs/DbBasi
 24. **`FORMAT$` treats the literal characters `0`, `9`, `$`, `*`, `!` and `&` in the mask as field markers.** Negative exponents in `^^^^` output are now zero-padded (`E-04`; this used to be `E-4`).
 25. **Bad arguments to built-in functions** (fixed): functions that don't check their arguments (`LEFT$`, `MID$`, `INT`, `SIN` and others) failed with bare Python errors. These are now reported as `Invalid arguments for LEFT$(): ...` with the line and column.
 26. **`HASH_JOIN`** (fixed): an unreachable duplicate block after its `return` has been removed.
-27. **Function names usable as references** for `FILTER`, `MAP`, `REDUCE` and `SORT WITH` are found by scanning the source code of `_execute_function` at run time (`_get_builtin_fn_names`). A compiled (Nuitka) build cannot read its source, so it uses the static list `Interpreter.BUILTIN_FN_NAMES`, which contains all 127 built-ins. `compilenuitka.sh` checks that list against the source before building and stops if they differ, so add new functions to it.
+27. **Function names usable as references** for `FILTER`, `MAP`, `REDUCE` and `SORT WITH` are found by scanning the source code of `_execute_function` at run time (`_get_builtin_fn_names`). A compiled (Nuitka) build cannot read its source, so it uses the static list `Interpreter.BUILTIN_FN_NAMES`, which contains all 128 built-ins. `compilenuitka.sh` checks that list against the source before building and stops if they differ, so add new functions to it.

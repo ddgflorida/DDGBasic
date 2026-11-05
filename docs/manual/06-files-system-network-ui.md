@@ -24,7 +24,7 @@ Related material in other chapters:
 5. [HTTP: FETCH](#65-http-fetch)
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
 7. [Text screens](#67-text-screens)
-   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [MENU()](#menu) · [BROWSE](#browse) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
+   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [MENU()](#menu) · [BROWSE](#browse) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
 8. [TUI forms](#68-tui-forms)
    * [Requirements](#requirements) · [FORM ... ENDFORM](#form--endform) · [Form elements](#form-elements) · [FIELD attributes and validation](#field-attributes-and-validation) · [BUTTON and actions](#button-and-actions) · [OPENFORM](#openform) · [Returned values](#values-returned-by-openform) · [GRIDEDIT](#gridedit)
 9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
@@ -897,7 +897,7 @@ choice = MENU(row, col, item1$, item2$, ...)
 choice = MENU(row, col, items)                 REM an array of items
 ```
 
-`MENU` draws a box at `row, col` with one item per line and a highlighted bar. Up and Down move the bar, Enter chooses, and typing the first letter of an item chooses it at once. It returns the item number, counting from 1, or `0` for Esc. The menu stays on the screen afterwards. Redraw the screen (`CLS`, `BOX`) to remove it.
+`MENU` draws a box at `row, col` with one item per line and a highlighted bar. Up and Down move the bar, Enter chooses, and typing the first letter of an item chooses it at once. It returns the item number, counting from 1, or `0` for Esc. When it returns, the menu disappears and what it covered is put back.
 
 ### BROWSE
 
@@ -907,7 +907,29 @@ BROWSE (SELECT ...) | BROWSE table$  [AT top, left, bottom, right] [TITLE title$
 
 `BROWSE` runs the query and shows the rows in a box: a header line, the rows, and a status line (`2 of 3   Enter=select  Esc=cancel`). Without `AT`, it fills the terminal. A string that does not start with `SELECT` or `WITH` is taken as a table name. Bind variables (`:id`) work as in any query.
 
-Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns are as wide as their widest value, up to 30 characters. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. The grid is read-only; to change a row, use `GET`/`READ` and an `UPDATE`, as `examples/retro_contacts.bas` does.
+Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns are as wide as their widest value, up to 30 characters. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. When `BROWSE` ends, what the grid covered is put back. The grid is read-only; to change a row, use `GET`/`READ` and an `UPDATE`, as `examples/retro_contacts.bas` does.
+
+### SAVESCREEN and RESTSCREEN
+
+```
+saved$ = SAVESCREEN()                          REM the whole screen
+saved$ = SAVESCREEN(top, left, bottom, right)  REM an area
+RESTSCREEN saved$
+```
+
+`SAVESCREEN` copies the screen, or an area of it, with its colours and the cursor position, into a string. `RESTSCREEN` puts that area back where it came from and returns the cursor. Use them around a pop-up window:
+
+```basic
+saved$ = SAVESCREEN(8, 20, 14, 60)
+BOX 8, 20, 14, 60, "Warning" DOUBLE
+@ 11, 24 SAY "Credit limit exceeded. Press a key."
+k$ = INKEY$(0)
+RESTSCREEN saved$
+```
+
+A terminal cannot report what it is showing, so DbBasic keeps its own copy of the screen. The copy includes everything drawn by `CLS`, `BOX`, `SAY`, `GET`, `MENU` and `BROWSE`, and the text of `PRINT`, `PRINT USING` and `INPUT` once a screen statement has been used. Output that bypasses it, such as query result tables, `SHELL` output or error messages, is not in the copy, and `RESTSCREEN` will draw over it with what the copy holds. `CLS` resets the copy to the terminal's current size.
+
+Compare two saved strings to see whether the screen changed: `IF SAVESCREEN() <> saved$ THEN ...`.
 
 ### INKEY$ and LASTKEY$
 
@@ -1203,7 +1225,7 @@ These were found while checking the source against behaviour. Line numbers refer
 17. **Web runner** (removed). The experimental web runner (`src/dbbasicweb.py`, `.htb` templates, the `REDIRECT` statement, `Interpreter.execute()` and the unused `WebFormRunner` import) has been removed from `main`. Its known problems were the `cgi` dependency (removed in Python 3.13), one interpreter shared by all requests, an unsanitised request path, and no static files. The last working version is kept on the `experiment/web-runner` branch.
 18. **`SHELL` without `INTO`** writes directly to the process's stdout, bypassing `SET OUTPUT`.
 19. **Text screens are a prototype** (6.7, new). Known limits:
-    - nothing saves and restores the screen under a menu or grid; redraw it yourself;
+    - `SAVESCREEN` and `RESTSCREEN` (added) work from DbBasic's own copy of the screen, which does not include query tables, `SHELL` output or error messages;
     - `GET` edits simple variables only, not array elements or hash fields;
     - a numeric field's `PICTURE` sets only its width;
     - `BROWSE` reads every row into memory and is read-only;
