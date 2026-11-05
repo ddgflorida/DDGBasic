@@ -216,7 +216,7 @@ PRINT "[" + LEFT$("Hi", 10) + "]"
 
 `RIGHT$(s$, n)` returns a **String**.
 
-Returns the last `n` characters of `s$`. **Edge case:** `RIGHT$(s$, 0)` returns the *whole* string rather than an empty string, because it is implemented as `s[-0:]`. The SQL version of `RIGHT$` returns `""` for 0.
+Returns the last `n` characters of `s$`. `RIGHT$(s$, 0)` returns `""`.
 
 ```basic
 PRINT "[" + RIGHT$("Hello World", 5) + "]"
@@ -224,7 +224,7 @@ PRINT "[" + RIGHT$("Hello", 0) + "]"
 ```
 ```
 [World]
-[Hello]
+[]
 ```
 
 <a id="fn-mid-str"></a>
@@ -379,7 +379,7 @@ PRINT "[" + RTRIM$("hi!!!", "!") + "]"
 
 `LEN(value)` returns a **Number**.
 
-Returns the number of characters in the text form of `value`. Numbers are converted with Python `str()`, so `LEN(10)` is 4 (`"10.0"`). An array is measured by its Python text form, so `LEN(ARRAY(1, 2))` is 10. Use `ARRAY_SIZE` to count array elements.
+Returns the number of characters in the text form of `value`. Numbers are measured as `PRINT` shows them without the leading space, so `LEN(10)` is 2 and `LEN(12.5)` is 4. An array is measured by its Python text form, so `LEN(ARRAY(1, 2))` is 10. Use `ARRAY_SIZE` to count array elements.
 
 ```basic
 PRINT LEN("Hello")
@@ -389,7 +389,7 @@ PRINT LEN(10)
 ```
  5
  4
- 4
+ 2
 ```
 
 <a id="fn-instr"></a>
@@ -583,7 +583,7 @@ PRINT "[" + HEX$(-255) + "]"
 ```
 [ff]
 [10]
-[xff]
+[-ff]
 ```
 
 <a id="fn-str-str"></a>
@@ -635,7 +635,7 @@ PRINT "[" + FORMAT$(0.256, "0.00%") + "][" + FORMAT$(42, "### units") + "]"
 
 `SOUNDEX$(s$)` returns a **String**.
 
-Returns the four-character Soundex code of `s$`, made of the first letter followed by three digits. It returns an empty value if `s$` is empty or does not start with a letter A-Z. In this implementation, vowels do **not** separate repeated codes, so a few names differ from the standard American Soundex (for example `Tymczak` gives `T520` instead of `T522`). The same code is used by the SQL `SOUNDEX` function.
+Returns the four-character Soundex code of `s$`, made of the first letter followed by three digits. It returns an empty value if `s$` is empty or does not start with a letter A-Z. It follows the standard American Soundex rules: a vowel between two letters with the same code lets both be coded, but `H` and `W` do not (`Tymczak` gives `T522`, `Ashcraft` gives `A261`). The same code is used by the SQL `SOUNDEX` function.
 
 ```basic
 PRINT "[" + SOUNDEX$("Robert") + "]"
@@ -668,7 +668,7 @@ PRINT "[" + SOUNDEX$("Ashcraft") + "]"
 
 `ISNUMERIC(value)` returns a **Boolean**.
 
-Returns -1 if `value` can be converted to a number with Python `float()`. Leading and trailing spaces, signs, decimals and exponents (`"-3e2"`) are accepted, and so are the special words `"nan"` and `"inf"`. Thousands separators (`"1,000"`) and the empty string are rejected.
+Returns -1 if `value` can be converted to a number with Python `float()`. Leading and trailing spaces, signs, decimals and exponents (`"-3e2"`) are accepted. The special words `"nan"` and `"inf"` are not numbers. Thousands separators (`"1,000"`) and the empty string are rejected.
 
 ```basic
 PRINT ISALPHA("abc"); ISALPHA("ab1"); ISALPHA("")
@@ -682,7 +682,7 @@ PRINT ISNUMERIC("nan"); ISNUMERIC("1,000")
 -1 0 0
 -1 0
 -1-1 0 0-1
--1 0
+ 0 0
 ```
 
 ---
@@ -900,14 +900,14 @@ rnd6 ok
 
 `VAL(s$)` returns a **Number**.
 
-Converts text to a number with Python `float()`. Surrounding whitespace and exponents are accepted. **Unlike classic BASIC, VAL does not read a leading numeric prefix.** `VAL("12abc")` returns 0. Any text that cannot be converted, including `""`, returns 0 without an error. If `s$` is already a number, it is returned unchanged.
+Converts text to a number. As in classic BASIC, VAL reads the number at the start of the text and ignores the rest, so `VAL("12abc")` returns 12. Leading spaces, a sign, decimals and an exponent are accepted (`VAL("  -3.5e2 x")` is -350). Text that does not start with a number, including `""`, returns 0 without an error. If `s$` is already a number, it is returned unchanged.
 
 ```basic
 PRINT VAL("3.14"); VAL("abc"); VAL(""); VAL("12abc"); VAL(" 5 ")
 PRINT VAL("1e3")
 ```
 ```
- 3.14 0 0 0 5
+ 3.14 0 0 12 5
  1000
 ```
 
@@ -924,7 +924,7 @@ DbBasic stores dates as **strings**. Different functions accept different input 
 | The `ISDATE` formats plus `YYYY-MM-DD HH:MM:SS` (auto-detected), or any format given by an input mask | `FORMATDATE$` |
 | `HH:MM:SS` text split on `:` | `HOUR`, `MINUTE`, `SECOND` |
 
-If you pass another format, for example `"07/04/2024"`, to one of the strict functions, the program stops with `Runtime Error: Invalid date format: 07/04/2024`. To use such a date, normalise it first: `FORMATDATE$(d$, "YYYY-MM-DD")`.
+The date functions (`DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`, `ISDATE`, `FORMATDATE$`) all accept the same input formats: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY/MM/DD`, `YYYYMMDD` and a `YYYY-MM-DD HH:MM:SS` datetime. Any other text stops the program with `Invalid date: '...'`, with the line and column.
 
 Functions that return a date always return `YYYY-MM-DD`.
 
@@ -1216,9 +1216,9 @@ red
 <a id="fn-array_join"></a>
 ### ARRAY_JOIN
 
-`ARRAY_JOIN(arr, delimiter$)` returns a **String**.
+`ARRAY_JOIN(arr [, delimiter$])` returns a **String**.
 
-Joins the elements of `arr` with `delimiter$`. Both arguments are required. Each element is converted with Python `str()`, so numbers appear as `1.0`.
+Joins the elements of `arr` with `delimiter$` (default `,`). Numbers appear as `PRINT` shows them, without `.0` (`1`, `2.5`).
 
 ```basic
 PRINT FIND(a, "green"); FIND(a, "pink")
@@ -1230,7 +1230,7 @@ PRINT FIND(n, 2.5)
 ```
  1-1
 [red, green, blue]
-[1.0|2.5|3.0]
+[1|2.5|3]
  1
 ```
 
@@ -1262,7 +1262,7 @@ PRINT FIND(n, 2.5)
 <a id="fn-hash_delete"></a>
 ### HASH_DELETE
 
-`HASH_DELETE(h, key$)` returns a **Number**. It removes `key$` if it exists. It **always returns 0**, whether or not the key was present.
+`HASH_DELETE(h, key$)` returns a **Number**. It removes `key$` if it exists and returns -1, or returns 0 if the key was not present.
 
 These hash functions are functions, not statements. You must use the result, for example `r = HASH_DELETE(h, "city")`. A bare `HASH_DELETE(h, "city")` line fails with `Expected token RPAREN but got COMMA`.
 
@@ -1284,7 +1284,7 @@ PRINT r; HASH_COUNT(h)
  5
 -1 0
  30
- 0 4
+-1 4
 ```
 
 <a id="fn-hash_join"></a>
@@ -1340,8 +1340,8 @@ PRINT ARRAY_JOIN(FILTER(names, "an", 0), ",")
 PRINT ARRAY_JOIN(FILTER(ARRAY("12", "abc", "3.5"), ISNUMERIC), ",")
 ```
 ```
-2.0,4.0
-1.0,3.0,5.0
+2,4
+1,3,5
 banana
 apple,cherry
 12,3.5
@@ -1359,8 +1359,8 @@ PRINT ARRAY_JOIN(MAP(names, LEN), ",")
 ```
 ```
 APPLE,BANANA,CHERRY
-2.0,4.0,6.0,8.0,10.0
-5.0,6.0,6.0
+2,4,6,8,10
+5,6,6
 ```
 
 <a id="fn-reduce"></a>
@@ -1776,10 +1776,10 @@ PRINT "[" + FORMAT$(0.00012, "##.##^^^^") + "]"
 [100.00]
 [1.23E+04]
 [-1.23E+04]
-[ 1.20E-4]
+[ 1.20E-04]
 ```
 
-Note that a negative exponent is not zero-padded (`E-4`, whereas positive exponents are written `E+04`). Also, `#.##` shows a leading `0` for values below 1.
+Exponents are always two digits with a sign (`E+04`, `E-04`). Also, `#.##` shows a leading `0` for values below 1.
 
 ### String fields
 
@@ -1825,18 +1825,18 @@ PRINT "[" + FORMAT$(3, "### units") + "]"
 ```
 [Qty:   3]
 [Total =  5]
-[Item 5]
-[Wow5!]
-[  3 ]
+[Item 5: ]
+[Wow5! ]
+[  3 units]
 ```
 
-To add a prefix or suffix, use concatenation, for example `"Qty " + FORMAT$(n, "###") + " units"`, or use backtick interpolation, for example `` `${FORMAT$(n, "###")} units` ``.
+Text after the last field is kept (`"### units"` gives `  3 units`), up to the next field character. For literal text that contains one of those characters, use concatenation, for example `"Item 9: " + FORMAT$(n, "##")`, or backtick interpolation, for example `` `Item 9: ${FORMAT$(n, "##")}` ``.
 
 ---
 
 ## 3.14 FORMATDATE$ mask tokens
 
-`FORMATDATE$` converts a DbBasic date mask into a Python `strftime` pattern. **The whole mask is upper-cased first.** The tokens are then replaced in this order:
+`FORMATDATE$` converts a DbBasic date mask into a Python `strftime` pattern. The tokens below are recognised in any case (`yyyy`, `YYYY`):
 
 | Token | Meaning | Example (2024-07-04 14:35:09) |
 |---|---|---|
@@ -1848,9 +1848,9 @@ To add a prefix or suffix, use concatenation, for example `"Qty " + FORMAT$(n, "
 | `MI` | 2-digit minute | `35` |
 | `SS` | 2-digit second | `09` |
 
-Everything else is copied through, but because of the upper-casing, literal letters come out in upper case: `"Day: DD"` produces `DAY: 04`. There are no tokens for month names, day names or 12-hour time, and `MON` is copied as literal text. The same tokens are used to read `input_mask$`.
+Everything else is copied through exactly as written: `"Day: DD"` produces `Day: 04`. There are no tokens for month names, day names or 12-hour time, and `MON` is copied as literal text. The same tokens are used to read `input_mask$`.
 
-**strftime passthrough (not officially documented).** Python `strftime` directives in the mask are passed through after upper-casing. Directives that are already upper case therefore work, notably `%A` (full weekday name) and `%B` (full month name). Lower-case directives such as `%p`, `%j`, `%a` and `%b` are changed into different directives and give wrong output (for example `%p` gives `P`, and `%j` gives `J`).
+**strftime directives.** Python `strftime` directives in the mask are passed through unchanged, so `%A` (weekday name), `%B` (month name), `%a`, `%b`, `%I` with `%p` (12-hour time) and `%j` (day of the year) all work.
 
 ```basic
 PRINT "[" + FORMATDATE$("2024-07-04", "yyyy/mm/dd") + "]"
@@ -1862,9 +1862,9 @@ PRINT "[" + FORMATDATE$("2024-07-04 14:35:09", "%I:MI %p") + "]"
 ```
 [2024/07/04]
 [04 MON 2024]
-[DAY: 04]
+[Day: 04]
 [Thursday, July 04, 2024]
-[02:35 P]
+[02:35 PM]
 ```
 
 ---
@@ -1960,9 +1960,9 @@ This section lists the places where `README.md` (function table) or `docs/DbBasi
 6. **`WEEKDAYNAME$`** (fixed): it mapped 1 to Monday, not Sunday, so it did not match `WEEKDAY`. It now uses 1 = Sunday ... 7 = Saturday.
 7. **`FORMAT$`** (fixed): it had no percent support and dropped any text after the field. A numeric field followed by `%` now scales by 100, and trailing literal text is kept (3.13).
 8. **`HOUR`, `MINUTE`, `SECOND`** (fixed): `HOUR` returned 0 for a `YYYY-MM-DD HH:MM:SS` datetime. All three now use the time part of a datetime.
-9. **`HASH_DELETE` and `HASH_RENAME`**: `DbBasicFunctionReference.md` shows them as statements (`HASH_DELETE(h, "city")`). That form is a syntax error; you must use the result, for example `r = HASH_DELETE(h, "city")`. `HASH_DELETE` always returns 0, so it cannot tell you whether the key existed. Use `HASH_EXISTS` first.
+9. **`HASH_DELETE` and `HASH_RENAME`**: `DbBasicFunctionReference.md` showed them as statements (`HASH_DELETE(h, "city")`). That form is a syntax error; you must use the result, for example `r = HASH_DELETE(h, "city")`. `HASH_DELETE` now returns -1 if the key was deleted and 0 if it was not present (it used to always return 0).
 10. **`NVL(value, default)`**: the README describes it as "non-null/non-empty". It actually takes any number of arguments (at least two) and also treats `0` as empty.
-11. **`ARRAY_JOIN`**: the code contains a default delimiter of `","`, but it is never used, because the function requires two or three arguments. Any third argument is ignored.
+11. **`ARRAY_JOIN`** (fixed): its default delimiter `","` could never be used, because two arguments were required. The delimiter is now optional.
 12. **`STR$`**: the documentation says "converts a number to its string representation". It also adds a leading space for zero and positive numbers, as `PRINT` does.
 
 ### Missing from `docs/DbBasicFunctionReference.md`
@@ -1971,17 +1971,17 @@ This section lists the places where `README.md` (function table) or `docs/DbBasi
 
 ### Implementation quirks (not documented elsewhere)
 
-14. **`RIGHT$(s$, 0)`** returns the whole string, not `""`. The SQL `RIGHT$` returns `''`.
-15. **`HEX$` and `OCT$` with negative numbers** return a malformed result (`HEX$(-255)` returns `"xff"`).
-16. **Date input formats are inconsistent.** `DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY` and `WEEKDAY` accept only `YYYY-MM-DD` and `YYYYMMDD`, while `ISDATE` and `FORMATDATE$` accept several more formats. `ISDATE("07/04/2024")` is true, but `YEAR("07/04/2024")` stops the program. That error (`Invalid date format: ...`) is a plain Python `ValueError`, without the usual line and column information.
-17. **`FORMATDATE$` upper-cases the whole mask**, so literal text changes case. Upper-case `strftime` directives (`%A`, `%B`) happen to work; lower-case ones do not.
-18. **Numbers converted to text show `.0`** in `LEN`, `ARRAY_JOIN`, `MAP` results joined as text, and `FILTER` substring matching (`LEN(10)` is 4).
-19. **`VAL` does not read numeric prefixes** (`VAL("12abc")` is 0, whereas in classic BASIC it is 12). It does accept `"nan"` and `"inf"`, and so does `ISNUMERIC`.
-20. **`SOUNDEX$` and SQL `SOUNDEX`** do not let vowels separate repeated codes, so a few names differ from standard Soundex (`Tymczak` gives `T520`).
+14. **`RIGHT$(s$, 0)`** (fixed): it returned the whole string; it now returns `""`, like the SQL `RIGHT$`.
+15. **`HEX$` and `OCT$` with negative numbers** (fixed): `HEX$(-255)` returned `"xff"`; it now returns `"-ff"`.
+16. **Date input formats** (fixed). `DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY` and `WEEKDAY` accepted only `YYYY-MM-DD` and `YYYYMMDD`, and stopped with a plain Python error otherwise. They now accept the same formats as `ISDATE` and `FORMATDATE$`, and a bad date is a normal error with line and column.
+17. **`FORMATDATE$` masks** (fixed): the whole mask was upper-cased, which changed literal text and broke lower-case `strftime` directives. Tokens are now matched in any case and everything else is kept as written.
+18. **Numbers converted to text** (fixed): `LEN`, `ARRAY_JOIN` and `FILTER` substring matching used Python `str()`, so `LEN(10)` was 4 and joined numbers showed `.0`. They now use the same text form as `PRINT`.
+19. **`VAL`** (fixed): it did not read a leading number (`VAL("12abc")` was 0) and accepted `"nan"` and `"inf"`. It now reads the leading number like classic BASIC. `ISNUMERIC` no longer treats `"nan"`/`"inf"` as numbers.
+20. **`SOUNDEX$` and SQL `SOUNDEX`** (fixed): vowels did not separate repeated codes (`Tymczak` gave `T520`). They now follow standard Soundex (`T522`).
 21. **`STRIPHTML$` needs the `lxml` package** as well as BeautifulSoup. If it is missing, the function fails at run time.
 22. **`INSTR` argument order differs** between DbBasic (`INSTR(start, s$, sub$)`) and SQL (`INSTR(s, sub, start)`).
 23. **The SQLite functions are not registered for DuckDB.** SQL that uses `LPAD`, `SPLIT_PART` and so on may fail, or use DuckDB's own versions with different semantics, after `DATABASE ENGINE DUCKDB`.
-24. **`FORMAT$` treats the literal characters `0`, `9`, `$`, `*`, `!` and `&` in the mask as field markers**, and a negative exponent in `^^^^` output is not zero-padded (`E-4`).
-25. **Argument-count checking is uneven.** Some of the classic functions (`LEFT$`, `MID$`, `INT`, `SIN` and others) do not validate their arguments, so mistakes show up as Python errors (`list index out of range`, `must be real number, not str`).
-26. **`HASH_JOIN`'s source code contains an unreachable duplicate block** after its `return`. It is harmless.
+24. **`FORMAT$` treats the literal characters `0`, `9`, `$`, `*`, `!` and `&` in the mask as field markers.** Negative exponents in `^^^^` output are now zero-padded (`E-04`; this used to be `E-4`).
+25. **Bad arguments to built-in functions** (fixed): functions that don't check their arguments (`LEFT$`, `MID$`, `INT`, `SIN` and others) failed with bare Python errors. These are now reported as `Invalid arguments for LEFT$(): ...` with the line and column.
+26. **`HASH_JOIN`** (fixed): an unreachable duplicate block after its `return` has been removed.
 27. **Function names usable as references** for `FILTER`, `MAP`, `REDUCE` and `SORT WITH` are found by scanning the source code of `_execute_function` at run time (`_get_builtin_fn_names`). A compiled (Nuitka) build cannot read its source, so it uses the static list `Interpreter.BUILTIN_FN_NAMES`, which contains all 124 built-ins. `compilenuitka.sh` checks that list against the source before building and stops if they differ, so add new functions to it.

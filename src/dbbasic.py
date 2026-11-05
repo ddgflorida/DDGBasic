@@ -237,6 +237,8 @@ class SqliteStringFunctions:
                 code += current_code
             if current_code:
                 prev_code = current_code
+            elif char in 'AEIOUY':
+                prev_code = ''      # a vowel separates two letters with the same code; H and W do not
         return (code + '000')[:4]
         
     @classmethod
@@ -1448,8 +1450,8 @@ class Formatter:
         mantissa_str, exponent_str = f"{value:e}".split('e')
         mantissa, exponent = float(mantissa_str), int(exponent_str)
         mantissa_formatted = Formatter._format_numeric(mantissa, before_caret, force_positive=True)
-        exp_sign = '+' if exponent >= 0 else ''
-        result = f"{mantissa_formatted}E{exp_sign}{exponent:02d}"
+        exp_sign = '+' if exponent >= 0 else '-'
+        result = f"{mantissa_formatted}E{exp_sign}{abs(exponent):02d}"
         if is_negative:
             if ' ' in result: return result.replace(' ', '-', 1)
             else: return '-' + result
@@ -2744,7 +2746,7 @@ class Interpreter:
         if name_upper in self.user_functions:
             return self._execute_user_function(name_upper, call_args)
         if name_upper in self._get_builtin_fn_names():
-            return self._execute_function(name_upper, call_args)
+            return self._call_builtin(name_upper, call_args)
         self._error(f"Unknown function reference: '{name_upper}'")
 
     def _interpolate_backtick_string(self, content):
@@ -3976,6 +3978,14 @@ class Interpreter:
         else:
             self._error("Expected NEXT after RESUME.")
  
+    def _call_builtin(self, name, args):
+        """Call a built-in function. A Python error caused by bad arguments (too few,
+        wrong type) is reported as a DbBasic error with the line and column."""
+        try:
+            return self._execute_function(name, args)
+        except (IndexError, TypeError, AttributeError) as e:
+            self._error(f"Invalid arguments for {name.upper()}(): {e}")
+
     def _execute_function(self, name, args):
         name = name.upper()
         args = ["" if a is None else a for a in args]   # a SQL NULL argument is ""
@@ -3987,7 +3997,9 @@ class Interpreter:
             if len(args) != 1 or not isinstance(args[0], list): self._error("UBOUND requires one array argument.")
             return float(len(args[0]) - 1 if args[0] else -1)
         elif name == 'LEFT$': return str(args[0])[:int(args[1])]
-        elif name == 'RIGHT$': return str(args[0])[-int(args[1]):]
+        elif name == 'RIGHT$':
+            n = int(args[1])
+            return str(args[0])[-n:] if n > 0 else ""
         elif name == 'MID$': s, st = str(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
         elif name == 'UCASE$': return str(args[0]).upper()
         elif name == 'LCASE$': return str(args[0]).lower()
@@ -4041,10 +4053,10 @@ class Interpreter:
             if not isinstance(args[0], list): self._error("ARRAY_SIZE requires an array argument.")
             return float(len(args[0]))
         elif name == 'ARRAY_JOIN':
-            if not (2 <= len(args) <= 3): self._error("ARRAY_JOIN requires 2 or 3 arguments.")
+            if not (1 <= len(args) <= 2): self._error("ARRAY_JOIN requires 1 or 2 arguments: array, [delimiter$].")
             if not isinstance(args[0], list): self._error("First argument to ARRAY_JOIN must be an array.")
             delimiter = str(args[1]) if len(args) >= 2 else ","
-            return delimiter.join(str(item) for item in args[0])
+            return delimiter.join(self._to_string(item) for item in args[0])
         elif name == 'ARRAY':
             # The 'args' parameter is already a Python list of the evaluated arguments.
             # We simply return it, and the interpreter will assign this new list
@@ -4120,15 +4132,6 @@ class Interpreter:
                     self._error("All arguments to HASH_JOIN must be HASH variables.")
                 new_hash.update(h)
             return new_hash
-            if len(args) < 2:
-                self._error("HASH_JOIN requires at least two HASH arguments.")
-            
-            new_hash = {}
-            for h in args:
-                if not isinstance(h, dict):
-                    self._error("All arguments to HASH_JOIN must be HASH variables.")
-                new_hash.update(h)
-            return new_hash       
         elif name == 'HASH_KEYS':
             if len(args) != 1 or not isinstance(args[0], dict):
                 self._error("HASH_KEYS requires one HASH argument.")
@@ -4165,8 +4168,8 @@ class Interpreter:
             lookup_key = self._normalize_hash_key(args[1])
             if lookup_key in args[0]: 
                 del args[0][lookup_key]
-                return 0
-            return 0
+                return -1.0     # the key existed and was deleted
+            return 0.0
         elif name == 'HASH_COUNT':
             if len(args) != 1 or not isinstance(args[0], dict): 
                 self._error("HASH_COUNT requires a hash argument.")
@@ -4446,13 +4449,7 @@ class Interpreter:
                 self._error("ISDATE requires 1 string argument.")
             date_str = str(args[0])
             # Try a few common formats
-            for fmt in ('%Y-%m-%d', '%m/%d/%Y', '%m-%d-%Y', '%Y/%m/%d', '%Y%m%d'):
-                try:
-                    datetime.strptime(date_str, fmt)
-                    return -1.0 # BASIC True
-                except ValueError:
-                    continue
-            return 0.0 # BASIC False
+            return -1.0 if self._try_parse_date(date_str.strip()) else 0.0
 
         elif name == 'WEEKDAYNAME$':
             if len(args) != 1:
@@ -4503,10 +4500,10 @@ class Interpreter:
                 return result_array
 
             # EXISTING: string criteria (substring match), unchanged.
-            criteria = str(predicate)
+            criteria = self._to_string(predicate)
             result_array = []
             for item in source_array:
-                item_str = str(item)
+                item_str = self._to_string(item)
                 is_match = criteria in item_str
                 if (is_match and include) or (not is_match and not include):
                     result_array.append(item)
@@ -4561,7 +4558,7 @@ class Interpreter:
                 return "HASH"
             else:
                 return "UNKNOWN"
-        elif name == 'LEN': return float(len(str(args[0])))
+        elif name == 'LEN': return float(len(self._to_string(args[0])))
         elif name == 'SPLIT':
             if not (2 <= len(args) <= 3): self._error("SPLIT requires 2 or 3 arguments.")
             source_str, delimiter_str = str(args[0]), str(args[1])
@@ -4631,8 +4628,7 @@ class Interpreter:
         elif name == 'ISNUMERIC':
             if len(args) != 1: self._error("ISNUMERIC requires 1 argument.")
             try:
-                float(args[0])
-                return -1.0 # True
+                return -1.0 if math.isfinite(float(args[0])) else 0.0   # "nan" and "inf" are not numbers
             except (ValueError, TypeError):
                 return 0.0 # False
         elif name == 'ISALNUM':
@@ -4652,8 +4648,8 @@ class Interpreter:
             ignore_case = (args[4] != 0) if len(args) == 5 else False
             if ignore_case: return re.sub(re.escape(old_str), new_str, source_str, count=count if count != -1 else 0, flags=re.IGNORECASE)
             return source_str.replace(old_str, new_str, count)
-        elif name == 'HEX$': return hex(int(args[0]))[2:]
-        elif name == 'OCT$': return oct(int(args[0]))[2:]
+        elif name == 'HEX$': n = int(args[0]); return ('-' if n < 0 else '') + format(abs(n), 'x')
+        elif name == 'OCT$': n = int(args[0]); return ('-' if n < 0 else '') + format(abs(n), 'o')
         elif name == 'SPACE$': return ' ' * int(args[0])
         elif name == 'TRIM$': 
             if len(args) == 1:
@@ -4701,13 +4697,12 @@ class Interpreter:
         elif name == 'URLDECODE$':
             if len(args) != 1: self._error("URLDECODE$ requires one string argument.")
             return unquote_plus(str(args[0]))
-        elif name == 'VAL': 
-            try:
-                # Attempt to convert the argument to a float
+        elif name == 'VAL':
+            # Like classic BASIC, read the number at the start of the text ("12abc" -> 12)
+            if isinstance(args[0], (int, float)):
                 return float(args[0])
-            except (ValueError, TypeError):
-                # If conversion fails (e.g., for an empty or non-numeric string), return 0.0
-                return 0.0
+            m = re.match(r'\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?', str(args[0]))
+            return float(m.group(0)) if m else 0.0
         elif name == 'INT': return float(math.floor(args[0]))
         elif name == 'FIX': return float(math.trunc(args[0]))
         elif name == 'ATN': return math.atan(args[0])
@@ -4839,7 +4834,7 @@ class Interpreter:
             
             if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                 self._next_token(); 
-                return self._execute_function(var_name, [])
+                return self._call_builtin(var_name, [])
             
             self._next_token()    
             #print("DEBUG: getting current_value, var_name=", var_name)            
@@ -4876,7 +4871,7 @@ class Interpreter:
                                 if self._current_token()[0] == 'RPAREN': break
                                 self._expect('COMMA')
                         self._expect('RPAREN')
-                        current_value = self._execute_function(var_name, args)
+                        current_value = self._call_builtin(var_name, args)
                         continue
                     if self._current_token()[0] == 'RPAREN': self._expect('RPAREN'); break
                     key_or_index = self._parse_expression(); self._expect('RPAREN')
@@ -4952,7 +4947,7 @@ class Interpreter:
                     self._expect('COMMA')
             
             self._expect('RPAREN')
-            return self._execute_function(function_name, args)
+            return self._call_builtin(function_name, args)
         else:
             self._error(f"Unexpected token in factor: {token}")
             print("\n--- TOKEN DUMP IN LEXER ---")
@@ -5844,9 +5839,13 @@ class Interpreter:
         return string_value
         
     def _parse_date_string(self, date_str):
-        date_str = date_str.replace('-', '')
-        if len(date_str) == 8 and date_str.isdigit(): return datetime.strptime(date_str, '%Y%m%d').date()
-        raise ValueError(f"Invalid date format: {date_str}")
+        """Parse a date for DATEADD, DATEDIFF, YEAR, MONTH, DAY and WEEKDAY. Accepts the same
+        formats as ISDATE and FORMATDATE$ (YYYY-MM-DD, MM/DD/YYYY, MM-DD-YYYY, YYYY/MM/DD,
+        YYYYMMDD, and a YYYY-MM-DD HH:MM:SS datetime)."""
+        parsed = self._try_parse_date(str(date_str).strip())
+        if parsed is None:
+            self._error(f"Invalid date: '{date_str}'. Use a format such as YYYY-MM-DD or MM/DD/YYYY.")
+        return parsed.date()
         
     def _python_to_basic_data(self, data):
         if isinstance(data, dict): 
@@ -10249,12 +10248,12 @@ class Interpreter:
 
     def _convert_basic_to_python_date_mask(self, basic_mask):
         """Converts a DbBasic date mask (YYYY) to a Python strftime mask (%Y)."""
-        py_format_str = str(basic_mask).upper()
-        # Use a defined order to prevent incorrect replacements (e.g., YYYY -> %y%y)
+        # Tokens are matched in any case; everything else (literal text and strftime
+        # directives such as %A or %b) is kept exactly as written.
         format_map = {'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d', 'HH': '%H', 'MI': '%M', 'SS': '%S'}
-        for key in ['YYYY', 'YY', 'MM', 'DD', 'HH', 'MI', 'SS']:
-            py_format_str = py_format_str.replace(key, format_map[key])
-        return py_format_str
+        token_re = re.compile(r'%.|YYYY|YY|MM|DD|HH|MI|SS', re.IGNORECASE)
+        return token_re.sub(lambda m: m.group(0) if m.group(0).startswith('%') else format_map[m.group(0).upper()],
+                            str(basic_mask))
         
     def _format_date_with_mask(self, date_obj, mask):
         """Applies DbBasic date format masks to a datetime object."""

@@ -226,7 +226,7 @@ This document provides a quick reference to all available functions in the DbBas
 |-------------------------|-------------|-------------|
 | ABS(number)             | MATH        | Returns the absolute value of a number. |
 | ARRAY(...)              | ARRAY       | A constructor that creates and returns a new ARRAY from the provided arguments. |
-| ARRAY_JOIN(array, delimiter$) | ARRAY  | Concatenates the elements of an array into a single string, separated by delimiter$. |
+| ARRAY_JOIN(array, [delimiter$]) | ARRAY  | Concatenates the elements of an array into a single string, separated by delimiter$ (default comma). |
 | ARRAY_SIZE(array)       | ARRAY       | Returns the total number of elements in an array. |
 | ASC(string$)            | STRING      | Returns the ASCII code of the first character in the string. |
 | ATN(number)             | MATH        | Returns the arctangent of a number in radians. |
@@ -266,7 +266,7 @@ This document provides a quick reference to all available functions in the DbBas
 | FORMATDATE$(date$, output_mask$, [input_mask$]) | DATE/TIME | Formats a date string according to a specified mask (e.g. "YYYY-MM-DD"). Optional input_mask$ tells DbBasic how to parse the input. |
 | FREEFILE()              | FILE        | Returns the next available integer for use as a file handle. |
 | HASH_COUNT(hash)        | HASH        | Returns the number of key-value pairs in a hash. |
-| HASH_DELETE(hash, key$) | HASH        | Deletes a key-value pair from a hash. Use it in an expression (`r = HASH_DELETE(h, k$)`); it always returns 0. |
+| HASH_DELETE(hash, key$) | HASH        | Deletes a key-value pair from a hash. Use it in an expression (`r = HASH_DELETE(h, k$)`); it returns -1 if the key was deleted, 0 if it was not present. |
 | HASH_EXISTS(hash, key$) | HASH        | Returns true (-1) if the key$ exists in the hash, otherwise false (0). |
 | HASH_JOIN(hash1, hash2, ...) | HASH   | Merges two or more hashes into a new hash. Keys from later hashes overwrite earlier ones. |
 | HASH_KEYS(hash)         | HASH        | Returns an ARRAY containing all the keys from a hash. |
@@ -343,7 +343,7 @@ This document provides a quick reference to all available functions in the DbBas
 | URL_SCHEME$(url$)       | STRING      | Returns the scheme (e.g., "http", "https") of a URL. |
 | URLDECODE$(string$)     | STRING      | URL-decodes a percent-encoded string. |
 | URLENCODE$(string$)     | STRING      | Percent-encodes a string for safe use in a URL. |
-| VAL(string$)            | STRING/MATH | Converts a string representation of a number into a numeric value. |
+| VAL(string$)            | STRING/MATH | Returns the number at the start of string$ (`VAL("12abc")` is 12), or 0. |
 | WEEKDAY(date$)          | DATE/TIME   | Returns the day of the week as a number (1 for Sunday, 7 for Saturday). |
 | WEEKDAYNAME$(weekday_num) | DATE/TIME | Returns the English name of the given weekday (1 = Sunday ... 7 = Saturday, matching WEEKDAY). |
 | YEAR(date$)             | DATE/TIME   | Returns the year from a date string. |

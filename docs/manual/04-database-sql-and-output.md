@@ -1401,7 +1401,7 @@ PRINT " <- same line"
 [$1,500.50]
 [  $25.00]
 [1.23E+05]
-[7.89E-4]
+[7.89E-04]
 [12345.68]
 [    2]
 [H]
@@ -1519,6 +1519,5 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
     - It treats spaces as part of numeric fields.
     - It does not accept `9` after the decimal point.
     - It gives no overflow indicator.
-    - Negative scientific exponents are not padded (`E-4` rather than `E-04`).
 23. **`PRINT #n, USING ...`** (fixed). Without a trailing `;` it crashed with `cannot access local variable 'parts'`, and with one it never wrote a line ending to the file.
 24. **A trailing `,` in `PRINT` does not suppress the newline.** It emits a tab and then ends the line, unlike classic BASIC.
