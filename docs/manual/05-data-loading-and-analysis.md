@@ -1826,7 +1826,7 @@ The following points were found while checking the source and running the exampl
 24. **Primary keys come from one shared counter** across all tables, so child keys do not start at 1.
 25. **The table counts after a normalised load** (fixed). They listed every table in the database; now only the tables the load created.
 26. **`normalize=true` ignores the destination mode** and drops any existing tables with the generated names.
-27. **Dead code.** The streaming metadata-table XML normalizer (`_run_xml_normalize` and helpers, 8303-8636) is never reached, because `_parse_load_statement` handles `normalize` first and returns. That code also contains leftover `DEBUG` prints.
+27. **Dead code** (removed). An unreachable streaming XML normaliser (`_run_xml_normalize` and three helpers, about 335 lines, with leftover `DEBUG` prints) has been removed. `normalize=true` was always handled by `LegacyJsonNormalizer` before that code could run.
 
 **USING SCHEMA and UPGRADE**
 
