@@ -13,6 +13,7 @@ Rows and columns are 1-based: (1, 1) is the top-left corner, as in LOCATE.
 """
 import atexit
 import json
+from datetime import datetime
 import os
 import re
 import shutil
@@ -46,6 +47,29 @@ class ScreenError(Exception):
     pass
 
 
+_KEY_NAMES = {'ENTER': '\r', 'ESC': '\x1b', 'TAB': '\t', 'BACKSPACE': '\x08', 'SPACE': ' '}
+_NAMED_KEYS = {'UP', 'DOWN', 'LEFT', 'RIGHT', 'HOME', 'END', 'PGUP', 'PGDN', 'INS', 'DEL', 'BTAB',
+               'CLICK', 'RCLICK', 'MCLICK', 'WHEELUP', 'WHEELDOWN'} | {f'F{n}' for n in range(1, 13)}
+
+
+def key_from_name(name):
+    """The key ON KEY means by a name: F1-F12, UP, DEL, ..., CTRL-A..CTRL-Z, ALT-A..ALT-Z,
+    ENTER, ESC, TAB, SPACE, or a single character."""
+    text = str(name)
+    upper = text.upper().replace('+', '-')
+    if upper in _NAMED_KEYS:
+        return upper
+    if upper in _KEY_NAMES:
+        return _KEY_NAMES[upper]
+    if upper.startswith('CTRL-') and len(upper) == 6 and 'A' <= upper[5] <= 'Z':
+        return chr(ord(upper[5]) - 64)
+    if upper.startswith('ALT-') and len(upper) == 5:
+        return upper
+    if len(text) == 1:
+        return text
+    raise ScreenError(f"Unknown key name '{text}'. Use F1-F12, CTRL-X, ALT-X, UP, DEL, ENTER, ESC or one character.")
+
+
 class KeyReader:
     """Reads single keys. Characters come back as themselves (Enter is CHR$(13),
     Esc CHR$(27), Tab CHR$(9), Backspace CHR$(8)); other keys as names such as
@@ -63,6 +87,10 @@ class KeyReader:
         self._mouse_on = False
         self._win_saved_mode = None
         self.mouse_row = self.mouse_col = 0
+        # ON KEY: key name -> handler; on_hotkey(key) runs it (set by the Screen)
+        self.hotkeys = {}
+        self.on_hotkey = None
+        self._in_hotkey = False
 
     # --- mouse -----------------------------------------------------------
     _MOUSE_ON, _MOUSE_OFF = '\x1b[?1000h\x1b[?1006h', '\x1b[?1000l\x1b[?1006l'
@@ -168,7 +196,22 @@ class KeyReader:
 
     def read_key(self, timeout=None):
         """The next key, waiting up to timeout seconds (None waits forever).
-        Returns '' if no key arrives in time, or None when input has ended."""
+        Returns '' if no key arrives in time, or None when input has ended.
+        A key bound with ON KEY runs its handler instead of being returned."""
+        while True:
+            key = self._read_key_once(timeout)
+            if key and key in self.hotkeys and self.on_hotkey and not self._in_hotkey:
+                self._in_hotkey = True
+                try:
+                    self.on_hotkey(key)
+                finally:
+                    self._in_hotkey = False
+                if timeout is not None:
+                    return ''              # a polling INKEY$ sees no key
+                continue
+            return key
+
+    def _read_key_once(self, timeout=None):
         ch = self._read_char(timeout)
         if ch is None:
             return '' if (timeout is not None and self.is_tty) else None
@@ -190,6 +233,8 @@ class KeyReader:
                 return _CSI_KEYS.get(seq, '')
             if nxt == 'O':
                 return _SS3_KEYS.get(self._read_char(0.05) or '', '')
+            if nxt is not None and self.is_tty and len(nxt) == 1 and nxt.isprintable():
+                return 'ALT-' + nxt.upper()        # a terminal sends Alt-letter as Esc + letter
             if nxt is not None:
                 self.pending.insert(0, nxt)
             return ESC
@@ -207,7 +252,7 @@ class KeyReader:
         except ValueError:
             return ''
         if seq[-1] == 'm' or button & 32:          # a release, or movement with a button held
-            return self.read_key(timeout)
+            return self._read_key_once(timeout)
         self.mouse_row, self.mouse_col = row, col
         if button & 64:
             return 'WHEELDOWN' if button & 1 else 'WHEELUP'
@@ -221,16 +266,28 @@ class Field:
         self.row, self.col = row, col
         self.var_name, self.valid = var_name, valid
         self.numeric = numeric
-        self.upper = False
+        self.upper = self.blank_zero = self.raw = self.clear_first = self.is_date = False
         width = None
         template = picture or ''
         if template.startswith('@'):
             funcs, _, template = template[1:].partition(' ')
             funcs = funcs.upper()
             self.upper = '!' in funcs
+            self.blank_zero = 'Z' in funcs      # @Z: show nothing for zero
+            self.raw = 'R' in funcs             # @R: the template's fixed characters are not stored
+            self.clear_first = 'K' in funcs     # @K: the first key typed clears the field
+            self.is_date = 'D' in funcs and not numeric
             m = re.search(r'S(\d+)', funcs)
             if m:
                 width = int(m.group(1))
+        if self.is_date:
+            template = template or '9999-99-99'
+        # A numeric field with a mask such as 99,999.99 is typed like a calculator
+        self.calc = numeric and bool(re.fullmatch(r'[9#,.]+', template or ''))
+        if self.calc:
+            self.decimals = len(template.split('.', 1)[1]) if '.' in template else 0
+            self.commas = ',' in template
+            self.typed = None
         self.template = '' if numeric else template
         self.mask = template if numeric else ''
         if self.template:
@@ -255,11 +312,31 @@ class Field:
         if m == 'N': return ch.isalnum()
         return ch.isprintable()
 
+    def _calc_text(self, number):
+        """A calculator field's value, formatted with its mask and right-aligned."""
+        if self.blank_zero and not number:
+            return ' ' * self.width
+        text = f"{number:,.{self.decimals}f}" if self.commas else f"{number:.{self.decimals}f}"
+        return ('*' * self.width) if len(text) > self.width else text.rjust(self.width)
+
     def _initial_buffer(self, value):
+        if self.calc:
+            self.typed = None
+            try:
+                self.number = float(value) if value not in (None, '') else 0.0
+            except (TypeError, ValueError):
+                self.number = 0.0
+            return list(self._calc_text(self.number))
         if self.numeric:
+            if self.blank_zero and not value:
+                return [' '] * self.width
             text = format_number(value)
             return list(text[:self.width].ljust(self.width))
+        if self.is_date and hasattr(value, 'isoformat'):
+            value = value.isoformat()
         text = str(value)
+        if self.is_date:
+            text = text[:10]
         if not self.template:
             return list(text[:self.width].ljust(self.width))
         if len(text) == len(self.template):
@@ -272,17 +349,38 @@ class Field:
         raw = ''.join(self.buffer)
         if self.template and all(raw[i] == ' ' for i in range(self.width) if self._editable(i)):
             return ''
+        if self.raw and self.template:
+            return ''.join(raw[i] for i in range(self.width) if self._editable(i)).rstrip()
         return raw.rstrip()
+
+    def clear(self):
+        """Empties the field (Ctrl-Y, and the first key in a numeric or @K field)."""
+        if self.calc:
+            self.typed = ''
+            self.buffer = [' '] * self.width
+        else:
+            self.buffer = [' ' if self._editable(i) else self.template[i] for i in range(self.width)]
 
     def value(self):
         """The typed value, converted for a numeric field. Raises ValueError."""
+        if self.calc:
+            if self.typed is None:
+                return self.number
+            typed = self.typed.strip()
+            return float(typed) if typed not in ('', '-', '.', '-.') else 0.0
         text = self.text()
+        if self.is_date:
+            if text:
+                datetime.strptime(text, '%Y-%m-%d')   # raises ValueError for an impossible date
+            return text
         if not self.numeric:
             return text
         text = text.replace(',', '').strip()
         return float(text) if text else 0.0
 
     def first_pos(self):
+        if self.calc:
+            return self.width - 1               # the cursor sits at the right, as on a calculator
         return next((i for i in range(self.width) if self._editable(i)), 0)
 
     def _step(self, pos, direction):
@@ -294,10 +392,38 @@ class Field:
     def last_pos(self):
         return next((i for i in range(self.width - 1, -1, -1) if self._editable(i)), self.width - 1)
 
+    def _calc_key(self, key):
+        """Calculator-style typing: digits build the number, '.' starts the decimals,
+        '-' changes the sign, Backspace removes the last character."""
+        typed = self.typed if self.typed is not None else ''
+        if key in ('\x19', 'DEL'):
+            typed = ''
+        elif key == BACKSPACE:
+            typed = typed[:-1]
+        elif len(key) == 1 and key.isdigit():
+            candidate = typed + key
+            if '.' in typed and len(typed.split('.', 1)[1]) >= self.decimals:
+                bell()                              # no more decimals than the mask has
+            elif '*' in self._calc_text(float(candidate.replace('-', '') or 0)):
+                bell()                              # the number would no longer fit the mask
+            else:
+                typed = candidate
+        elif key == '.' and self.decimals and '.' not in typed:
+            typed += '.'
+        elif key == '-':
+            typed = typed[1:] if typed.startswith('-') else '-' + typed
+        elif len(key) == 1 and key.isprintable():
+            bell()
+        self.typed = typed
+        self.buffer = list(typed.rjust(self.width)[-self.width:])
+        return self.width - 1
+
     def edit_key(self, key, pos, insert):
         """Applies an editing key; returns the new cursor position. Sets self.filled when
         a character was typed into the field's last position (for SET AUTOADVANCE)."""
         self.filled = False
+        if self.calc:
+            return self._calc_key(key)
         if key == 'LEFT':
             return self._step(pos, -1)
         if key == 'RIGHT':
@@ -342,6 +468,94 @@ class Field:
         return pos
 
 
+class CheckBox(Field):
+    """GET ... CHECKBOX: [X] or [ ]. Space (or a click) toggles it; Y/N/X/1/0 set it."""
+    is_check = True
+
+    def __init__(self, row, col, var_name, value, valid, as_text):
+        self.row, self.col, self.var_name, self.valid = row, col, var_name, valid
+        self.numeric = self.calc = self.is_date = self.clear_first = self.raw = False
+        self.upper = self.blank_zero = False
+        self.template, self.width, self.as_text = '[X]', 3, as_text
+        self.buffer = self._initial_buffer(value)
+
+    def _editable(self, i):
+        return i == 1
+
+    def _initial_buffer(self, value):
+        if isinstance(value, str):
+            on = value.strip().upper() in ('Y', 'YES', 'T', 'TRUE', 'X', '1', '-1')
+        else:
+            on = bool(value)
+        return list('[X]' if on else '[ ]')
+
+    def text(self):
+        return 'Y' if self.buffer[1] == 'X' else 'N'
+
+    def value(self):
+        on = self.buffer[1] == 'X'
+        return ('Y' if on else 'N') if self.as_text else (-1.0 if on else 0.0)
+
+    def edit_key(self, key, pos, insert):
+        self.filled = False
+        if key == ' ':
+            self.buffer[1] = ' ' if self.buffer[1] == 'X' else 'X'
+        elif len(key) == 1 and key.upper() in ('Y', 'X', '1', 'T'):
+            self.buffer[1] = 'X'
+        elif len(key) == 1 and key.upper() in ('N', '0', 'F'):
+            self.buffer[1] = ' '
+        elif len(key) == 1 and key.isprintable():
+            bell()
+        return 1
+
+
+class ListField(Field):
+    """GET ... LIST: a drop-down. Space, F2 or a click opens the list; a letter jumps to the
+    next item that starts with it."""
+    is_list = True
+
+    def __init__(self, row, col, var_name, value, valid, items):
+        self.row, self.col, self.var_name, self.valid = row, col, var_name, valid
+        self.numeric = self.calc = self.is_date = self.clear_first = self.raw = False
+        self.upper = self.blank_zero = False
+        self.items = [str(i) for i in items]
+        if not self.items:
+            raise ScreenError("GET ... LIST needs at least one item.")
+        self.inner = max([len(i) for i in self.items] + [len(str(value))])
+        self.template, self.width = '', self.inner + 2
+        self.buffer = self._initial_buffer(value)
+
+    def _editable(self, i):
+        return i == 0
+
+    def _initial_buffer(self, value):
+        self.current = '' if value is None else str(value)
+        return list(self.current.ljust(self.inner) + ' ▼')
+
+    def set(self, value):
+        self.buffer = self._initial_buffer(value)
+
+    def text(self):
+        return self.current
+
+    def value(self):
+        return self.current
+
+    def edit_key(self, key, pos, insert):
+        self.filled = False
+        if len(key) == 1 and key.isprintable() and key != ' ':
+            start = self.items.index(self.current) + 1 if self.current in self.items else 0
+            for k in range(len(self.items)):
+                item = self.items[(start + k) % len(self.items)]
+                if item[:1].upper() == key.upper():
+                    self.set(item)
+                    return 0
+            bell()
+        elif key in ('\x19', 'DEL'):
+            self.set('')
+        return 0
+
+
 class Button:
     """A [ label ] button among the GET fields. READ ends when it is pressed."""
     is_button = True
@@ -379,11 +593,24 @@ class Screen:
         self.used = False
         self.auto_advance = False   # SET AUTOADVANCE ON: filling a field moves to the next one
         self.last_button = ''       # BUTTON$: the label of the button that ended the last READ
+        self.hotkey_call = None     # set by the interpreter: runs the function bound to a key
+        self.keys.on_hotkey = self._run_hotkey
         # A copy of what is on the screen, one (char, fg, bg) cell per position, so that
         # SAVESCREEN, MENU and BROWSE can put back what they cover (ANSI can't read it back)
         self.rows, self.cols = self.size()
         self.cells = self._blank(self.rows, self.cols, 7, 0)
         self.cur_row, self.cur_col = 1, 1
+
+    def _run_hotkey(self, key):
+        """Runs an ON KEY handler, then puts back the screen it may have drawn over."""
+        if not self.hotkey_call:
+            return
+        under = self.save() if self.used else None
+        try:
+            self.hotkey_call(self.keys.hotkeys[key])
+        finally:
+            if under:
+                self.restore_saved(under)
 
     # --- output helpers ------------------------------------------------
     def _activate(self):
@@ -564,8 +791,13 @@ class Screen:
 
     # --- GET / READ ----------------------------------------------------
     def add_get(self, row, col, var_name, value, picture, valid, numeric, target=None,
-                message=None, when=None, lookup=None):
-        field = Field(row, col, var_name, value, picture, valid, numeric)
+                message=None, when=None, lookup=None, kind=None, items=None):
+        if kind == 'check':
+            field = CheckBox(row, col, var_name, value, valid, isinstance(value, str) or var_name.endswith('$'))
+        elif kind == 'list':
+            field = ListField(row, col, var_name, value, valid, items or [])
+        else:
+            field = Field(row, col, var_name, value, picture, valid, numeric)
         field.target = target       # where READ stores the value (the interpreter's description)
         field.message, field.when, field.lookup = message, when, lookup
         self.gets.append(field)
@@ -671,6 +903,8 @@ class Screen:
                             index, pos, fresh = j, click_pos(fields[j]), True
                             if getattr(fields[j], 'is_button', False):
                                 self.keys.pending.insert(0, '\r')
+                            elif getattr(fields[j], 'is_check', False) or getattr(fields[j], 'is_list', False):
+                                self.keys.pending.insert(0, ' ')   # toggle the box / open the list
                             continue
                         key = ENTER                # a click on this button presses it
                     if key == ESC or (key in (ENTER, ' ') and field.cancel):
@@ -709,9 +943,16 @@ class Screen:
                     if j is None:
                         continue
                     if j == index:                 # inside this field: move the cursor
-                        pos = click_pos(field)
-                        continue
-                    click_target, key = j, TAB     # leave this field with the usual checks first
+                        if getattr(field, 'is_check', False) or getattr(field, 'is_list', False):
+                            key = ' '              # a click toggles a check box or opens a list
+                        else:
+                            pos = click_pos(field)
+                            continue
+                    else:
+                        click_target, key = j, TAB     # leave this field with the usual checks first
+                if getattr(field, 'is_list', False) and key in (' ', 'F2'):
+                    self._choose_from_list(field)
+                    continue
                 if key == 'F2' and getattr(field, 'lookup', None) is not None and lookup:
                     if self._pick(field, lookup) is not None:
                         pos = field.first_pos()
@@ -721,6 +962,8 @@ class Screen:
                         value = field.value()
                     except ValueError:
                         bell()
+                        if getattr(field, 'is_date', False):
+                            message_under = self._show_message("Not a valid date: type it as YYYY-MM-DD")
                         continue
                     if getattr(field, 'lookup', None) is not None and lookup and str(value).strip() \
                             and not self._in_lookup(field, value, lookup):
@@ -730,6 +973,8 @@ class Screen:
                             continue
                         value = field.value()
                     assign(field, value)
+                    if getattr(field, 'calc', False):
+                        field.buffer = field._initial_buffer(value)   # show it formatted with the mask
                     if field.valid is not None and not check_valid(field):
                         bell()
                         if getattr(field, 'message', None):
@@ -742,6 +987,8 @@ class Screen:
                         index, pos, fresh = click_target, click_pos(fields[click_target]), True
                         if getattr(fields[index], 'is_button', False):
                             self.keys.pending.insert(0, '\r')   # a click on a button presses it
+                        elif getattr(fields[index], 'is_check', False) or getattr(fields[index], 'is_list', False):
+                            self.keys.pending.insert(0, ' ')    # toggle the box / open the list
                         continue
                     nxt = step(index, -1 if key in ('UP', 'BTAB') else 1)
                     if nxt is None:
@@ -755,9 +1002,9 @@ class Screen:
                 if key == 'INS':
                     insert = not insert
                     continue
-                if fresh and field.numeric and len(key) == 1 and key.isprintable():
-                    field.buffer = [' '] * field.width
-                    pos = 0
+                if fresh and (field.numeric or field.clear_first) and len(key) == 1 and key.isprintable():
+                    field.clear()                  # the first key typed replaces the old value
+                    pos = field.first_pos()
                 fresh = False
                 pos = field.edit_key(key, pos, insert)
                 if self.auto_advance and getattr(field, 'filled', False):
@@ -767,6 +1014,17 @@ class Screen:
             if message_under:
                 self.restore_saved(message_under)
             self._w(self._normal())
+
+    def _choose_from_list(self, field):
+        """Opens a LIST field's drop-down under it; the chosen item becomes the value."""
+        items = field.items
+        if len(items) <= 10 and field.row + len(items) + 2 <= self.rows:
+            n = self.menu(field.row + 1, field.col, items)
+            if n:
+                field.set(items[n - 1])
+        else:
+            self._pick(field, lambda f: (['Choose'], [[i] for i in f.items]), field.current)
+        self._draw_field(field)
 
     def _show_message(self, text):
         """Shows a message on the bottom line; returns what it covered, for restore_saved."""

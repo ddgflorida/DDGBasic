@@ -36,7 +36,7 @@ Related material in other chapters:
 6. [Editing and viewing text](#76-editing-and-viewing-text)
    * [EDIT TEXT](#edit-text) · [VIEW](#view)
 7. [The keyboard and mouse](#77-the-keyboard-and-mouse)
-   * [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [The mouse](#the-mouse) · [Keyboard and terminal](#keyboard-and-terminal)
+   * [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Hot keys: ON KEY](#hot-keys-on-key) · [The mouse](#the-mouse) · [Keyboard and terminal](#keyboard-and-terminal)
 8. [Replacing the old FORM statements](#78-replacing-the-old-form-statements)
 9. [Implementation notes](#79-implementation-notes)
 
@@ -330,9 +330,35 @@ NEXT
 | (none) | Text: as wide as the current value, and at least 20. Numbers: 10 wide. |
 | `@!` | Upper-case every letter typed. |
 | `@Sn` | A field `n` characters wide, for example `@S30`. Combine with `!`: `@!S30`. |
+| `@D` | A date, typed as `YYYY-MM-DD` (the `-` are fixed). Leaving the field with an impossible date, such as `2024-02-30`, shows `Not a valid date` and keeps the cursor there. An empty date is allowed. |
+| `@Z` | Show nothing when a number is zero. |
+| `@R` | Store only what was typed, not the template's fixed characters: `@R (999) 999-9999` stores `5551234567`. |
+| `@K` | The first key typed clears the field, so a new value replaces the old one (numeric fields always do this). |
 | template | One character per position. `9` digit, `A` letter, `N` letter or digit, `X` any character, `!` any character in upper case, `#` digit, space or sign. Any other character is fixed and is skipped by the cursor, as in `(999) 999-9999`. The stored value includes the fixed characters, or is `""` when nothing was typed. |
 
-For a numeric field, a template only sets the width. The value is typed as a number (commas are ignored), and an entry that is not a number is refused with a beep.
+Functions and a template combine with a space between them: `@Z 9999`, `@R (999) 999-9999`.
+
+**Numeric masks.** A numeric field whose template is made of `9`, `#`, `,` and `.` (such as `"99,999.99"`) is typed like a calculator: the cursor stays at the right, the first key replaces the old value, digits build the number, `.` starts the decimals, `-` changes the sign and Backspace removes the last character. Digits that would not fit the mask, or more decimals than it has, are refused with a beep. When the cursor leaves the field, the value is shown formatted with the mask (`1,234.50`). A numeric field without a template is typed as free text, and an entry that is not a number is refused with a beep.
+
+**Check boxes.** `GET target CHECKBOX` shows `[X]` or `[ ]`. Space toggles it, as does a click; `Y`, `X`, `1` or `T` tick it and `N`, `0` or `F` clear it. A numeric target gets `-1` (ticked) or `0`; a string target (`active$`) gets `"Y"` or `"N"`.
+
+**Lists.** `GET target LIST items` makes a drop-down: the field shows the value and `▼`, and only values from the list can be chosen. The items are a comma-separated string (`LIST "CA,FL,NY,TX"`), an array, or a query whose first column holds them (`LIST (SELECT code FROM states ORDER BY code)`; the query runs when the `@` statement runs). Space, F2 or a click opens the list under the field (a scrolling picker for more than 10 items); typing a letter jumps to the next item that starts with it.
+
+```basic
+@ 2, 5 SAY "Joined : " GET joined$ PICTURE "@D"
+@ 3, 5 SAY "Amount : " GET amount PICTURE "99,999.99"
+@ 4, 5 SAY "Phone  : " GET phone$ PICTURE "@R (999) 999-9999"
+@ 5, 5 SAY "Active : " GET active CHECKBOX
+@ 6, 5 SAY "State  : " GET state$ LIST "CA,FL,NY,TX"
+```
+
+```
+    Joined :     -  -
+    Amount :  1,234.50
+    Phone  : (   )    -
+    Active : [ ]
+    State  : FL ▼
+```
 
 `VALID condition` is checked whenever the cursor leaves the field, after the variable has been given the typed value. If the condition is false, DbBasic beeps and the cursor stays in the field. With `MESSAGE text$`, the text is also shown on the bottom line of the screen until the next key, so the user knows why:
 
@@ -665,6 +691,29 @@ DO
     PRINT "You pressed "; k$
 LOOP
 ```
+
+### Hot keys: ON KEY
+
+```
+ON KEY key$ CALL function
+ON KEY key$ OFF
+```
+
+`ON KEY` makes a key run a `FUNCTION` (with no arguments) whenever the program is waiting for a key: in `READ`, `BROWSE`, `MENU`, `MENUBAR$`, `ALERT`, `EDIT TEXT`, `VIEW` and `INKEY$`. When the function returns, the screen it may have drawn over is put back and the statement carries on as if the key had not been pressed. This is how an application gets F1 help or a save key that works everywhere:
+
+```basic
+FUNCTION show_help()
+    BOX 8, 10, 14, 70, "Help" DOUBLE
+    @ 10, 12 SAY "Tab moves between fields, F2 opens a list, Esc cancels."
+    k$ = INKEY$(0)
+END FUNCTION
+
+ON KEY "F1" CALL show_help
+```
+
+`key$` is a key name: `F1` to `F12`, `CTRL-A` to `CTRL-Z`, `ALT-A` to `ALT-Z`, `UP`, `DOWN`, `LEFT`, `RIGHT`, `HOME`, `END`, `PGUP`, `PGDN`, `INS`, `DEL`, `ENTER`, `ESC`, `TAB`, `SPACE`, or a single character. The function must be defined in the program. While a hot-key function runs, other hot keys are switched off, so it can wait for keys of its own. A polling `INKEY$` (no argument) returns `""` for a hot key. `ON KEY key$ OFF` removes the binding, and the key then reaches the program normally.
+
+Alt keys are recognised from the keyboard, where a terminal sends Alt-letter as Esc followed by the letter (on macOS Terminal, turn on *Use Option as Meta key*).
 
 ### The mouse
 

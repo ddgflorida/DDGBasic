@@ -153,7 +153,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
-| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field (`GET`) for a variable, a hash field such as `rec.name`, or an array element, with optional `PICTURE`, `VALID ... MESSAGE`, `WHEN` and `LOOKUP (SELECT ...)` clauses. See `READ`. |
+| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field (`GET`) for a variable, a hash field such as `rec.name`, or an array element, with optional `PICTURE`, `VALID ... MESSAGE`, `WHEN` and `LOOKUP (SELECT ...)` clauses, date fields (`@D`), numeric masks, `CHECKBOX` and drop-down `LIST` fields. See `READ`. |
 | @ ... BUTTON            | Adds a `[ label ]` button to a form; pressing it ends `READ`, and `BUTTON$` returns its label (`CANCEL` buttons put the old values back). |
 | ANALYZE CSV             | Provides a detailed statistical report on a CSV file, including delimiter detection, header presence, and column data types. |
 | ANALYZE FIXED           | Analyzes a fixed-width text file, automatically guessing column breaks if not specified, and reports on the layout. |
@@ -203,6 +203,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | MKDIR                   | Creates a new directory. |
 | NAME ... AS             | Renames a file. |
 | ON ERROR GOTO           | Specifies a label to jump to when a runtime error occurs. |
+| ON KEY                  | Makes a key (F1, CTRL-S, ALT-H, ...) run a FUNCTION whenever the program waits for a key, in any form, grid or menu. |
 | OPEN                    | Opens a file for reading, writing, or appending, assigning it a file handle. |
 | POP                     | Removes the last element from an array, optionally storing it in a variable. |
 | PRINT                   | Outputs text, variables, or expressions to the console or an open file. |

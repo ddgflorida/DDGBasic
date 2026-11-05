@@ -32,7 +32,7 @@ import xlrd3
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from bs4 import BeautifulSoup
-from dbscreen import SCREEN, ScreenError, bell as dbscreen_bell
+from dbscreen import SCREEN, ScreenError, bell as dbscreen_bell, key_from_name
 from dbreport import build_report
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, quote_plus, unquote_plus, urljoin
@@ -323,7 +323,7 @@ class HelpRegistry:
             "examples": ['BOX 2, 5, 10, 60, "Customer" DOUBLE']
         },
         "@": {
-            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [WHEN condition] [LOOKUP (SELECT ...)]]\n@ row, col BUTTON label$ [CANCEL]',
+            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [WHEN condition] [LOOKUP (SELECT ...)]]\n@ row, col BUTTON label$ [CANCEL]\nGET ... CHECKBOX | GET ... LIST "a,b,c" | GET ... LIST (SELECT ...)',
             "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left; MESSAGE text is shown on the bottom line when it fails. WHEN skips the field when false. LOOKUP gives a list of allowed values (first column): F2 opens it, and leaving with a value not in the list opens it too.",
             "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Email: " GET rec.email PICTURE "@S40"', '@ 7, 10 SAY "State: " GET state$ PICTURE "!!" LOOKUP (SELECT code, name FROM states)', '@ 8, 10 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000" WHEN type$ = "B"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 20, 1 SAY total PICTURE "$#,###.##"']
         },
@@ -386,6 +386,11 @@ class HelpRegistry:
             "syntax": 'MOUSEROW | MOUSECOL',
             "desc": "The row and column (from 1) of the last mouse click or wheel turn. INKEY$ returns CLICK, RCLICK, MCLICK, WHEELUP or WHEELDOWN for them. The screen statements (READ, MENU, ALERT, MENUBAR$, BROWSE, EDIT TEXT, VIEW) take clicks themselves. SET MOUSE OFF turns the mouse off.",
             "examples": ['k$ = INKEY$(0)\nIF k$ = "CLICK" THEN @ MOUSEROW, MOUSECOL SAY "*"']
+        },
+        "ON KEY": {
+            "syntax": 'ON KEY key$ CALL function | ON KEY key$ OFF',
+            "desc": "Makes a key run a FUNCTION (no arguments) whenever the program waits for a key: READ, BROWSE, MENU, MENUBAR$, ALERT, EDIT TEXT, VIEW, INKEY$. The screen is put back afterwards. Key names: F1-F12, CTRL-A..CTRL-Z, ALT-A..ALT-Z, UP, DOWN, DEL, ENTER, ESC, TAB, SPACE, or one character.",
+            "examples": ['ON KEY "F1" CALL show_help', 'ON KEY "CTRL-S" CALL save_all', 'ON KEY "F1" OFF']
         },
         "BUTTON$": {
             "syntax": 'BUTTON$',
@@ -3951,6 +3956,9 @@ class Interpreter:
             self._parse_write_statement()
         elif token[0] == 'DATABASE':                              # define database in use
             self._parse_database_statement()
+        elif token[0] == 'ID' and token[1].upper() == 'ON' and self._peek_token() and \
+                str(self._peek_token()[1]).upper() == 'KEY':      # ON KEY key$ CALL fn | OFF
+            self._parse_on_key_statement()
         elif token[0] == 'AT_SYM':                                # @ row, col SAY ... GET ...
             self._parse_at_statement()
         elif self._is_email_statement(token):                     # EMAIL TO ... SUBJECT ... BODY ...
@@ -4063,6 +4071,32 @@ class Interpreter:
             values.append(int(self._parse_expression()))
         return values + [None] * (count - len(values))
 
+    def _parse_on_key_statement(self):
+        """ON KEY key$ CALL fn: whenever the key is pressed while the program waits for a key
+        (READ, BROWSE, MENU, INKEY$, ...), the FUNCTION fn runs, and the screen is put back after
+        it. ON KEY key$ OFF removes the binding."""
+        self._next_token()   # ON
+        self._next_token()   # KEY
+        name = self._to_string(self._parse_expression())
+        try:
+            key = key_from_name(name)
+        except ScreenError as e:
+            self._error(str(e))
+        tok = self._current_token()
+        word = str(tok[1]).upper() if tok and tok[0] not in ('STRING', 'NUMBER') else ''
+        if word == 'OFF':
+            self._next_token()
+            SCREEN.keys.hotkeys.pop(key, None)
+            return
+        if word != 'CALL':
+            self._error("Expected CALL function or OFF after ON KEY key$")
+        self._next_token()
+        fn = self._expect('ID')[1].upper()
+        if fn not in self.user_functions:
+            self._error(f"ON KEY: '{fn}' is not a FUNCTION defined in this program.")
+        SCREEN.keys.hotkeys[key] = fn
+        SCREEN.hotkey_call = lambda function_name: self._call_fn_ref(function_name, [])
+
     def _parse_screen_statement(self):
         word = self._expect('ID')[1].upper()
         try:
@@ -4139,6 +4173,7 @@ class Interpreter:
             last = target[1][-1][1] if target[1] else target[0]
             numeric = not str(last).endswith('$') and isinstance(value, (int, float)) and not isinstance(value, bool)
             picture = valid = message = when = lookup = None
+            kind, items = None, None
             # The clauses can come in any order
             while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
                 if keyword('PICTURE'):
@@ -4149,6 +4184,19 @@ class Interpreter:
                     when = self._skip_get_condition()      # evaluated by READ when the field is reached
                 elif keyword('MESSAGE'):
                     message = self._to_string(self._parse_expression())
+                elif keyword('CHECKBOX'):
+                    kind = 'check'
+                elif keyword('LIST'):
+                    # LIST "a,b,c" | LIST array | LIST (SELECT value FROM ...)
+                    kind = 'list'
+                    tok, nxt = self._current_token(), self._peek_token()
+                    if tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING':
+                        rows = self._execute_sql(self._extract_sql_from_parens(), is_query=True) or []
+                        items = ['' if r[0] is None else self._to_string(r[0]) for r in rows]
+                    else:
+                        source = self._parse_expression()
+                        items = [self._to_string(v) for v in source] if isinstance(source, list) \
+                            else [s.strip() for s in self._to_string(source).split(',') if s.strip()]
                 elif keyword('LOOKUP'):
                     tok, nxt = self._current_token(), self._peek_token()
                     if not (tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING'):
@@ -4156,10 +4204,12 @@ class Interpreter:
                     lookup = self._extract_sql_from_parens()
                 else:
                     self._error(f"Unexpected '{self._current_token()[1]}' after GET {var_name}: "
-                                "expected PICTURE, VALID, MESSAGE, WHEN or LOOKUP")
+                                "expected PICTURE, VALID, MESSAGE, WHEN, LOOKUP, CHECKBOX or LIST")
+            if picture and picture.startswith('@') and 'D' in picture[1:].split(' ')[0].upper():
+                numeric = False             # a date field holds text (YYYY-MM-DD)
             try:
                 SCREEN.add_get(row, col, var_name, value, picture, valid, numeric, target,
-                               message=message, when=when, lookup=lookup)
+                               message=message, when=when, lookup=lookup, kind=kind, items=items)
             except ScreenError as e:
                 self._error(str(e))
         elif not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
@@ -4236,7 +4286,7 @@ class Interpreter:
         container, key = self._get_target_slot(target)
         container[key] = value
 
-    GET_CLAUSE_WORDS = ('PICTURE', 'VALID', 'MESSAGE', 'WHEN', 'LOOKUP')
+    GET_CLAUSE_WORDS = ('PICTURE', 'VALID', 'MESSAGE', 'WHEN', 'LOOKUP', 'CHECKBOX', 'LIST')
 
     def _skip_get_condition(self):
         """Remembers where a VALID or WHEN condition starts and moves past it. The condition
@@ -8565,7 +8615,8 @@ class Interpreter:
                         'CSV', 'JSON', 'JSONL', 'XML', 'FIXED', 'TEXT', 'EXCEL', 'PARQUET', 
                         'IN', 'OUTPUT', 'EMAIL', 'USING',  # Keywords
                         'ENGINE', 'OPEN', 'TABLES', 'VARIABLES', 'INDEXES', 'BROWSER', # IDs
-                        'CREATE', 'TABLE' # SQL Keywords
+                        'CREATE', 'TABLE', # SQL Keywords
+                        'KEY', 'ERROR' # ON KEY, ON ERROR
                     ]
 
                     if sub_word in valid_sub_words:

@@ -92,6 +92,7 @@ STDIN = {
     'tests/auto_advance': 'ca01234\x1990210' '5551234567' 'xyz\tq\r',
     'tests/form_buttons': '\x19new\r5\r\r' '\x19zzz\t\t\t\r' '\x19x\x1b' '\x19\rok\t\t\t\t\t\t ' '\x1b[C\r',
     'tests/mouse': '\x1b[<0;10;5M\x1b[<0;10;5m\x1b[<65;10;5M\x1b[<0;13;4M7\x1b[<0;7;6M\x1b[<0;23;12M\x1b[<0;43;13M\x1b[<0;9;1M\x1b[<0;10;4M\x1b[<0;5;5M\x1b[<0;5;5M\x1b[<0;9;4M!\x17',
+    'tests/fields_and_keys': '20240230\r\x1920240229\r\x1bOPx7.25\r12\r5551234567\r \rY\rn t\r\x14new\r\x1bOPx\x1bOP \x1b[B\r\r',
     'tests/form_helpers': ('\x19x\r\x19b\r' 'zz\r\x1b[B\x1b[B\r' '9999\r\x194000\r' '\rAnn\r'
                            '\r\x1bOQ\x1b[B\r\r\r' '\x1b[C\r' '\r' 'c' '\x1b' '\r'),
     'tests/menubar': ('\r\x1b[B\r' '\x1b[C\r\x1b[B\x1b[B\r' '\r\x1b[C\x1b[C\r' 'ca' '\r\x1b[A\r'
