@@ -600,13 +600,17 @@ class Screen:
             self._w('\x1b[?25h')
 
     # --- BROWSE --------------------------------------------------------
-    def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=()):
+    def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None):
         """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
 
         With save, the grid is editable: Left/Right move between cells, Enter (or typing)
         edits the current cell, and save(row_index, col_index, value) stores the new value,
         returning an error message or None. Columns in hidden are not shown; columns in
-        locked can't be edited. rows is updated in place with the saved values."""
+        locked can't be edited. rows is updated in place with the saved values.
+
+        With add, Ins calls add(), which inserts a row, reloads rows in place and returns the
+        index of the new row (or None if it isn't known), or False when cancelled. With delete,
+        Del asks for confirmation and calls delete(row_index), which returns an error or None."""
         screen_rows, screen_cols = self.size()
         r1, c1, r2, c2 = area or (1, 1, screen_rows, screen_cols)
         if r2 - r1 < 4 or c2 - c1 < 10:
@@ -620,8 +624,12 @@ class Screen:
                 return ''
             return format_number(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)
 
-        cells = [[show(v) for v in row] for row in rows]
-        widths = [min(30, max([len(str(c))] + [len(r[i]) for r in cells])) for i, c in enumerate(columns)]
+        def layout():
+            cells = [[show(v) for v in row] for row in rows]
+            widths = [min(30, max([len(str(c))] + [len(r[i]) for r in cells])) for i, c in enumerate(columns)]
+            return cells, widths
+
+        cells, widths = layout()
         page = r2 - r1 - 4                     # rows between the header line and the status line
         inner = c2 - c1 - 1
         top, current, first_col, cur_col = 0, 0, 0, 0   # cur_col indexes visible[]
@@ -698,7 +706,8 @@ class Screen:
                 if message:
                     status = ' ' + message
                 elif save:
-                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=edit  Esc=done  ←→=cells'
+                    extra = ('  Ins=add' if add else '') + ('  Del=delete' if delete else '')
+                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=edit{extra}  Esc=done'
                 else:
                     status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns'
                 message = ''
@@ -710,6 +719,28 @@ class Screen:
                 self.last_key = key
                 if key == ESC:
                     return -1
+                if save and add and key == 'INS':
+                    new_index = add()
+                    if new_index is not False:
+                        cells, widths = layout()
+                        if new_index is not None:
+                            current = new_index
+                        current = min(current, len(cells) - 1)
+                        cur_col = 0
+                    continue
+                if save and delete and key == 'DEL' and cells:
+                    self._w(self._put(r2 - 1, c1 + 1, ' Delete this row? (Y/N)'[:inner].ljust(inner), self.fg, self.bg))
+                    answer = self.keys.read_key()
+                    if answer and answer.upper() == 'Y':
+                        error = delete(current)
+                        if error:
+                            bell()
+                            message = 'Not deleted: ' + error
+                        else:
+                            rows.pop(current)
+                            cells.pop(current)
+                            current = max(0, min(current, len(cells) - 1))
+                    continue
                 if save and cells and (key in (ENTER, 'F2') or (len(key) == 1 and key.isprintable())):
                     ci = visible[cur_col]
                     if ci in locked:

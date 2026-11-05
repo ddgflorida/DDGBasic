@@ -338,7 +338,7 @@ class HelpRegistry:
         },
         "BROWSE": {
             "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [INTO var]',
-            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, and each change is saved with an UPDATE (a table is edited by rowid; a query needs KEY \"column\").",
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\").",
             "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"']
         },
         "EDIT": {
@@ -4210,6 +4210,35 @@ class Interpreter:
                 hidden.add(0)
             locked.add(key_index)
 
+            # The form for Ins: every visible column, keyed by the table's primary key
+            info = self._table_column_info(table)
+            form_columns = [c for i, c in enumerate(columns) if i not in hidden]
+            pk = [c for c, (_, is_pk) in info.items() if is_pk]
+            form_key = key_column or (pk[0] if len(pk) == 1 else None)
+            form_key_index = next((i for i, c in enumerate(form_columns) if form_key and c.lower() == form_key.lower()), None)
+
+            def add():
+                record = self._record_form(table, form_columns, None, form_key_index, info, f'New {table} row')
+                if record is None:
+                    return False
+                new_rowid = getattr(self.db_cursor, 'lastrowid', None) if self.db_engine != 'duckdb' else None
+                results[:] = [list(r) for r in (self._execute_sql(sql, is_query=True) or [])]
+                if hidden and new_rowid:          # table mode: find the new rowid
+                    return next((i for i, r in enumerate(results) if r[0] == new_rowid), None)
+                if form_key_index is not None:
+                    wanted = record.get(form_columns[form_key_index].upper())
+                    at = columns.index(form_columns[form_key_index])   # its place in the grid's rows
+                    return next((i for i, r in enumerate(results) if r[at] == wanted), None)
+                return None
+
+            def delete(row_index):
+                try:
+                    self.db_cursor.execute(f"DELETE FROM {self._quote_identifier(table)} WHERE {key_sql} = ?",
+                                           [results[row_index][key_index]])
+                except Exception as e:
+                    return str(e).splitlines()[0]
+                return None
+
             def save(row_index, col_index, value):
                 column = columns[col_index]
                 value = apply_null_handling(null_handling_rules(table, [column]), [value])[0]
@@ -4221,7 +4250,8 @@ class Interpreter:
                     return str(e).splitlines()[0]
                 return None
 
-        chosen = SCREEN.browse(columns, results, area, title, save=save, hidden=hidden, locked=locked)
+        chosen = SCREEN.browse(columns, results, area, title, save=save, hidden=hidden, locked=locked,
+                               add=add if edit else None, delete=delete if edit else None)
         if into:
             record = {}
             if chosen >= 0:
@@ -4307,16 +4337,27 @@ class Interpreter:
         if not new_record and len(columns) == 1:
             self._error("EDIT RECORD: the query has only the KEY column, so there is nothing to edit.")
 
-        def is_numeric_type(dtype):
-            return re.search(r'INT|REAL|FLOA|DOUB|NUM|DEC', dtype.upper()) is not None
+        record = self._record_form(table, columns, rows[0] if rows else None, key_index, info, title, at)
+        if into:
+            self.variables[into] = record if record is not None else {}
+
+    @staticmethod
+    def _is_numeric_type(dtype):
+        return re.search(r'INT|REAL|FLOA|DOUB|NUM|DEC', str(dtype).upper()) is not None
+
+    def _record_form(self, table, columns, row, key_index, info, title='', at=None):
+        """The EDIT RECORD form: one labelled field per column of row (None for a new, blank
+        record), saved with UPDATE or INSERT. Returns the saved record as a hash keyed by
+        upper-case column name, or None when the user pressed Esc."""
+        new_record = row is None
 
         values = []
         for i, column in enumerate(columns):
-            value = rows[0][i] if rows else None
+            value = row[i] if row is not None else None
             if isinstance(value, Decimal):
                 value = float(value)
             if value is None:
-                value = 0 if is_numeric_type(info.get(column.lower(), ('', False))[0]) else ''
+                value = 0 if self._is_numeric_type(info.get(column.lower(), ('', False))[0]) else ''
             values.append(value)
         record = {column.upper(): value for column, value in zip(columns, values)}
         holder = '__EDIT_RECORD__'
@@ -4353,9 +4394,7 @@ class Interpreter:
                 SCREEN.say(bottom - 1, left + 2, hint.ljust(inner - 4)[:inner - 4])
                 self._run_read()
                 if SCREEN.last_key == '\x1b':
-                    if into:
-                        self.variables[into] = {}
-                    return
+                    return None
                 error = self._save_edit_record(table, columns, values, record, key_index, new_record)
                 if error is None:
                     break
@@ -4364,8 +4403,7 @@ class Interpreter:
                 dbscreen_bell()
                 SCREEN.keys.read_key()          # show the message until a key is pressed
                 SCREEN.say(bottom + 1, left, ' ' * len(message[:max(1, screen_cols - left + 1)]))
-            if into:
-                self.variables[into] = dict(record)
+            return dict(record)
         finally:
             self.variables.pop(holder, None)
             SCREEN.restore_saved(underneath)

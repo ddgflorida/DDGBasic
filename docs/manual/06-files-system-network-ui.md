@@ -923,7 +923,7 @@ BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$]] [AT top, left, bottom, ri
 
 Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns are as wide as their widest value, up to 30 characters. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. When `BROWSE` ends, what the grid covered is put back.
 
-**Editing.** With `EDIT`, the grid is a spreadsheet-like editor and each change is saved to the table at once with an `UPDATE`:
+**Editing.** With `EDIT`, the grid is a spreadsheet-like editor for the table. Each change is saved at once: cell edits with an `UPDATE`, new rows with an `INSERT`, deleted rows with a `DELETE`:
 
 | Key | Action |
 |---|---|
@@ -932,12 +932,14 @@ Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns.
 | Any character | Edit the current cell, starting with that character (the old value is replaced). |
 | Enter, Tab, Up, Down (while editing) | Save the cell. Tab, Up and Down also move. |
 | Esc (while editing) | Cancel the edit. |
+| Ins | Add a row. A blank form opens over the grid, the same form `EDIT RECORD` shows for a new row: one field per column, saved with an `INSERT` (see [EDIT RECORD](#edit-record) for how the key is filled in). The grid then reloads and moves to the new row. |
+| Del | Delete the current row. The status line asks `Delete this row? (Y/N)`; only `Y` deletes it. |
 | Esc | End `BROWSE`. `INTO` gets an empty hash. |
 
 - `BROWSE "items" EDIT` edits a table by its `rowid`, which is fetched but not shown.
 - A query needs the column that identifies a row: `BROWSE (SELECT id, name FROM items) EDIT KEY "id"`. The query must read `FROM` one table, and the edited columns must be plain column names of that table. The `KEY` column can't be edited.
 - A cell that held a number is edited as a number. Emptying it stores `NULL`. An emptied text cell follows `SET NULL_HANDLING`: `NULL` by default.
-- If the database refuses a change (a `CHECK` or `NOT NULL` constraint, a wrong type), DbBasic beeps, the status line shows `Not saved: ...` with the database's message, and the cell keeps its old value.
+- If the database refuses a change (a `CHECK` or `NOT NULL` constraint, a wrong type), DbBasic beeps, the status line shows `Not saved: ...` (or `Not deleted: ...`) with the database's message, and the cell keeps its old value. A refused new row keeps its form open, as in `EDIT RECORD`.
 
 `examples/retro_contacts.bas` uses `BROWSE ... EDIT KEY "id"` for its contact list.
 
@@ -1031,7 +1033,7 @@ The declarative forms (`FORM ... ENDFORM`, `OPENFORM`, `GRIDEDIT`), built on the
 
 | Old | New |
 |---|---|
-| `GRIDEDIT "orders"` | `BROWSE "orders" EDIT` |
+| `GRIDEDIT "orders"` | `BROWSE "orders" EDIT` (Enter edits a cell, Ins adds a row, Del deletes one) |
 | A list `FORM` with `OPENFORM` and `FORM_SELECTED_ID` | `BROWSE (SELECT ...) INTO row` |
 | An entry `FORM`, `FORM_RESULT$`, `FORM_DATA` and an `UPDATE` | `@ ... SAY ... GET`, `READ`, `LASTKEY$` and an `UPDATE` |
 | `BUTTON` actions | `MENU(...)` |
@@ -1076,6 +1078,6 @@ These were found while checking the source against behaviour. Line numbers refer
     - `SAVESCREEN` and `RESTSCREEN` (added) work from DbBasic's own copy of the screen, which does not include query tables, `SHELL` output or error messages;
     - (added) `GET` edits hash fields and array elements as well as variables;
     - a numeric field's `PICTURE` sets only its width;
-    - `BROWSE` reads every row into memory; `BROWSE ... EDIT` (added) updates cells but can't add or delete rows;
+    - `BROWSE` reads every row into memory (and again after a row is added);
     - the Windows key handling has not been tested;
     - (fixed) words such as `choice` and `title`, once reserved by the FORM statements, are ordinary variable names again.

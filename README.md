@@ -162,7 +162,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | ANALYZE XML             | Analyzes an XML file to determine its structure, infer the primary record tag, and list its fields. |
 | BELL                    | Emits an audible system beep sound. |
 | BOX                     | Draws a single- or double-line box with an optional title on the text screen. |
-| BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. With `EDIT`, cells are edited in place and saved to the table. |
+| BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. With `EDIT`, cells are edited in place and saved to the table, Ins adds a row and Del deletes one. |
 | BROWSER                 | Opens a specified URL in the system's default web browser. |
 | CHAIN                   | Transfers program execution to a different DbBasic script, optionally preserving variables. |
 | CHDIR                   | Changes the current working directory. |
