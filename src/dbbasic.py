@@ -709,7 +709,7 @@ class HelpRegistry:
             ]
         },
         "LOAD JSON": {
-            "syntax": 'LOAD JSON "file" INTO TABLE "tbl" [OPTIONS "normalize=true"]',
+            "syntax": 'LOAD JSON "file" CREATE TABLE name | INTO TABLE name [APPEND|TRUNCATE|UPSERT USING KEY col|IGNORE] [OPTIONS "normalize=true"]',
             "desc": "Loads a JSON file. Use normalize=true to auto-relationalize nested data.",
             "examples": ['LOAD JSON "data.json" CREATE TABLE users']
         },
@@ -730,7 +730,7 @@ class HelpRegistry:
             ]
         },
         "LOAD FIXED": {
-            "syntax": 'LOAD FIXED "file" INTO TABLE "tbl" OPTIONS "fields=..."',
+            "syntax": 'LOAD FIXED "file" CREATE TABLE name | INTO TABLE name [APPEND|TRUNCATE|UPSERT USING KEY col|IGNORE] OPTIONS "fields=..."',
             "desc": "Loads fixed-width files. Fields syntax: 'Name:Start-End' OR 'Name:Start+Length'.",
             "examples": [
                 'LOAD FIXED "dat.txt" INTO TABLE t OPTIONS "fields=ID:1-5,Name:6-20"',
@@ -738,7 +738,7 @@ class HelpRegistry:
             ]
         },
         "LOAD EXCEL": {
-            "syntax": 'LOAD EXCEL "file.xlsx" INTO TABLE "tbl" OPTIONS "sheetname=Sheet1"',
+            "syntax": 'LOAD EXCEL "file.xlsx" CREATE TABLE name | INTO TABLE name [APPEND|TRUNCATE|UPSERT USING KEY col|IGNORE] [OPTIONS "sheetname=Sheet1"]',
             "desc": "Loads data from an Excel worksheet.",
             "examples": ['LOAD EXCEL "sales.xlsx" INTO TABLE sales']
         },
@@ -1671,6 +1671,8 @@ class LegacyJsonNormalizer:
         ,"TEMP","TEMPORARY","THEN","TIES","TO","TRANSACTION","TRIGGER","UNBOUNDED","UNION","UNIQUE","UPDATE"
         ,"USING","VACUUM","VALUES","VIEW","VIRTUAL","WHEN","WHERE","WINDOW","WITH","WITHOUT"}
 
+    _SKIPPED = object()   # marks rows whose parent row failed validation
+
     def __init__(self, db_connection, data, root_table_name, options=None, db_engine='sqlite'):
         self.db_conn = db_connection
         self.cursor = self.db_conn.cursor()
@@ -1758,7 +1760,7 @@ class LegacyJsonNormalizer:
                 parts = rule.strip().split(':', 1)
                 if len(parts) == 2:
                     col_name, func_def = parts[0].strip(), parts[1].strip()
-                    self.transform_rules[col_name.lower()] = func_def
+                    self.transform_rules[col_name.lower()] = func_def.lower()
                 elif len(parts) == 1:
                     self.transform_rules[parts[0].lower()] = True # For global rules like 'trimall'
 
@@ -1796,8 +1798,10 @@ class LegacyJsonNormalizer:
 
         # 2. Apply VALIDATE rules
         if self.validation_rules:
+            row_keys = {k.lower(): k for k in row_data}
             for col_name, rules in self.validation_rules.items():
-                if col_name in row_data:
+                if col_name.lower() in row_keys:
+                    col_name = row_keys[col_name.lower()]
                     val = str(row_data[col_name] or '')
                     for rule in rules:
                         is_valid = True
@@ -1876,7 +1880,8 @@ class LegacyJsonNormalizer:
         for x in result_sorted:
             if x['type'] not in ('Array', 'Object', 'BeginRow', 'EndRow', 'EndArray'):
                 norm_key = self._normalize_key(x['pathname'])
-                if norm_key in array_keys:
+                # Elements of an array (paths ending in an index) are already in a list
+                if norm_key in array_keys and not x['pathname'].rsplit('/', 1)[-1].isdigit():
                     pathname = '/'.join(x['pathname'].split('/')[1:])
                     if pathname:
                         self._set_dict_by_path(self.data, pathname, [x['data']])
@@ -1930,9 +1935,7 @@ class LegacyJsonNormalizer:
             if x.get('type') == 'Array' or (len(self.result) == 1 and x.get('type') == 'Object'):
                 table_name = x.get('table_name')
                 if not table_name: continue
-                # Do not add tables that are just lists of simple values (e.g. "tags": ["a", "b"])
-                if x.get('data') and all(not isinstance(i, (dict, list)) for i in x['data']):
-                    continue
+                # A list of simple values (e.g. "tags": ["a", "b"]) becomes a one-column child table
                 
                 self.table_dict[table_name] = {
                     'tablename': x['table_name'], 'short_table_name': '', 'pk': '',
@@ -2068,6 +2071,8 @@ class LegacyJsonNormalizer:
                     if v.get('table_name') != table_name_path:
                         if v.get('table_name') == parent_table_path and 'pk' in v:
                             last_fk_value = v['pk']
+                        elif v.get('table_name') == parent_table_path and v.get('skipped'):
+                            last_fk_value = self._SKIPPED
                         continue
                     
                     node_type = v.get('type')
@@ -2076,12 +2081,17 @@ class LegacyJsonNormalizer:
                         row = {"data": {}, "idx": counter}
                     
                     elif node_type == 'EndRow':
-                        if row['data']:
+                        if last_fk_value is self._SKIPPED:
+                            processed_data = None   # the parent row was skipped
+                        elif row['data']:
                             processed_data = self._process_row(row['data'], short_name)
-                            if processed_data:
-                                row['data'] = processed_data
-                        
-                        self._insert_single_row(short_name, table_name_path, row, last_fk_value)
+                        else:
+                            processed_data = row['data']
+                        if processed_data is None:
+                            self.result[row['idx']]['skipped'] = True
+                        else:
+                            row['data'] = processed_data
+                            self._insert_single_row(short_name, table_name_path, row, last_fk_value)
                         row = {"data": {}, "idx": 0}
 
                     elif node_type not in ('Array', 'Object', 'EndArray'):
@@ -2375,7 +2385,8 @@ class Interpreter:
                 open_quote, close_quote = '"', '"'
 
             # Rule 1: If it's a reserved keyword, it must be quoted.
-            if identifier_str.upper() in self.SQL_RESERVED_WORDS:
+            if (identifier_str.upper() in self.SQL_RESERVED_WORDS
+                    or identifier_str.upper() in LegacyJsonNormalizer.SQL_RESERVED_WORDS):
                 return f'{open_quote}{identifier_str}{close_quote}'
             
             # Rule 2: If it's a "simple" identifier, it doesn't need quotes.
@@ -7911,11 +7922,8 @@ class Interpreter:
                         self._error("Expected KEY after USING.")
                     self._next_token() # Consume KEY
                     dest_info['key_column'] = self._parse_expression()
-            else: 
-                # If a mode is required after INTO TABLE, this error is correct.
-                # If APPEND is the default, this logic might need adjustment.
-                # For now, we assume a mode is required.
-                self._error("Expected APPEND, TRUNCATE, UPSERT, or IGNORE for INTO TABLE clause.")
+            else:
+                dest_info['db_mode'] = 'APPEND'   # the default mode
         else: 
             self._error("Expected CREATE TABLE or INTO TABLE clause after filename.")
 
@@ -8568,11 +8576,12 @@ class Interpreter:
                 if add_line_num: headers.append('_linenum')
                 yield {'type': 'headers', 'data': headers}
                 
+                base_url = options.get('base_url', source_url)
+
                 links = soup.find_all('a', href=True)
                 for i, link in enumerate(links):
                     relative_href = link.get('href')
-                    # 'filename' holds the original URL passed to LOAD HTML
-                    absolute_href = urljoin(filename, relative_href)
+                    absolute_href = urljoin(base_url, relative_href)
                     data_row = [source_url, link.get_text(strip=True), absolute_href]
                     if add_line_num: data_row.append(i + 1)
                     yield {'type': 'data', 'data': data_row, 'physical_line_num': 0, 'logical_line_num': i + 1}
@@ -8582,7 +8591,7 @@ class Interpreter:
                 if add_line_num: headers.append('_linenum')
                 yield {'type': 'headers', 'data': headers}
 
-                base_url = options.get('base_url', filename)
+                base_url = options.get('base_url', source_url)
 
                 images = soup.find_all('img', src=True)
                 for i, img in enumerate(images):
@@ -8624,6 +8633,8 @@ class Interpreter:
             seen_headers = set()
             ordered_headers = [] # Preserve order of discovery
             sample_size = int(options.get('samplesize', 1000))
+            if int(options.get('limit', -1)) != -1:   # no need to look past the last record loaded
+                sample_size = min(sample_size, max(1, int(options.get('skip', 0)) + int(options.get('limit'))))
             records_sampled = 0
             
             context_for_headers = ET.iterparse(filename, events=('end',))
@@ -8661,7 +8672,7 @@ class Interpreter:
                     if row_num < skip:
                         row_num += 1
                     elif limit != -1 and (row_num - skip) >= limit:
-                        pass # Continue loop to ensure all elements get cleared
+                        break   # limit reached: stop reading the file
                     else:
                         # Build a dictionary of the current record's children for efficient lookup
                         current_record_children = {self._clean_tag(child.tag): child for child in element}
@@ -9208,10 +9219,12 @@ class Interpreter:
             transform_spec = options.get('transform')
             if transform_spec:
                 for rule in transform_spec.split(';'):
-                    parts = rule.strip().split(':')
+                    parts = rule.strip().split(':', 1)
                     if len(parts) == 2:
                         col_name = parts[0].strip().strip('[]')
                         func_def = parts[1].strip()
+                        if func_def.lower() in ('upper', 'lower', 'trim', 'proper'):
+                            func_def = func_def.lower()
                         transform_rules[col_name.lower()] = func_def
                     elif len(parts) == 1:
                         transform_rules[parts[0].lower()] = True
@@ -9259,6 +9272,8 @@ class Interpreter:
                         new_headers.append(new_name)
                     
                     final_headers, column_map = new_headers, new_map
+            elif options.get('fields') and dest_info['load_type'] != 'FIXED':
+                print(f"Warning: the fields option is ignored by LOAD {dest_info['load_type']}.", file=sys.stderr)
             if not final_headers:
                 error_msg = f"Could not determine any columns from the source file '{filename}'. "
                 if dest_info['load_type'] == 'XML':
@@ -9407,11 +9422,12 @@ class Interpreter:
                     is_row_valid = True
                     if validation_rules:
                         # Create a dictionary of the current row's data for easy lookup by column name
-                        row_dict = dict(zip(final_headers, processed_row))
-                        
+                        row_dict = {h.lower(): (h, v) for h, v in zip(final_headers, processed_row)}
+
                         for col_name, rules in validation_rules.items():
-                            if col_name in row_dict:
-                                val = str(row_dict[col_name]) # Ensure value is a string for checks
+                            if col_name.strip().lower() in row_dict:
+                                col_name, value = row_dict[col_name.strip().lower()]
+                                val = '' if value is None else str(value) # Ensure value is a string for checks
                                 
                                 for rule in rules:
                                     # Use regex to parse rules like "MINLENGTH(10)" into name and argument
@@ -9552,6 +9568,9 @@ class Interpreter:
                 
                 batch = []
                 total_rows = 0
+                count_sql = f"SELECT COUNT(*) FROM {self._quote_identifier(dest_info['target'])}"
+                if dest_info.get('db_mode') == 'IGNORE':
+                    rows_before = cursor.execute(count_sql).fetchone()[0]
                 self.db_connection.execute('BEGIN TRANSACTION;')
                 try:
                     for processed_row in row_iterator:
@@ -9563,7 +9582,11 @@ class Interpreter:
                     
                     if batch: cursor.executemany(insert_sql, batch)
                     self.db_connection.execute('COMMIT;')
-                    print(f"{total_rows} records loaded into table {dest_info['target']}")
+                    if dest_info.get('db_mode') == 'IGNORE':
+                        inserted = cursor.execute(count_sql).fetchone()[0] - rows_before
+                        print(f"{inserted} records loaded into table {dest_info['target']} ({total_rows - inserted} ignored)")
+                    else:
+                        print(f"{total_rows} records loaded into table {dest_info['target']}")
                 except Exception as e:
                     self.db_connection.execute('ROLLBACK;')
                     raise e
@@ -9574,7 +9597,7 @@ class Interpreter:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during the LOAD operation: {e}")
 
-    def _show_table_counts(self): 
+    def _show_table_counts(self, tables):
         # Safely attempt to commit/refresh for DuckDB.
         # This persists data if the Normalizer ran inside an open transaction.
         if self.db_engine == 'duckdb':
@@ -9584,7 +9607,6 @@ class Interpreter:
                 # Ignore "no transaction is active" errors if it was already committed
                 pass
 
-        tables = self._get_table_list()
         print(f"  - Created {len(tables)} tables:")
         for table in tables:
             # Use the Interpreter's _quote_identifier method
@@ -9722,7 +9744,7 @@ class Interpreter:
                 # Instantiate and run the ported normalizer
                 normalizer = LegacyJsonNormalizer(self.db_connection, data, dest_info['target'], options, db_engine=self.db_engine)
                 normalizer.run()
-                self._show_table_counts()
+                self._show_table_counts([info['short_table_name'] for info in normalizer.table_dict.values()])
 
             except FileNotFoundError:
                 self._error(f"File not found: {filename}")

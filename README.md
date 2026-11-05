@@ -133,10 +133,10 @@ END FUNCTION
 DATABASE ENGINE SQLITE
 DATABASE OPEN "leads.sqlite"
 
-LOAD CSV "raw_leads.csv" CREATE TABLE leads
-  OPTIONS "header=true"
-  TRANSFORM name  WITH PROPER$
-  TRANSFORM phone WITH normalize_phone$
+LOAD CSV "raw_leads.csv" CREATE TABLE leads _
+  OPTIONS "header=true" _
+  TRANSFORM name  WITH PROPER$ _
+  TRANSFORM phone WITH normalize_phone$ _
   VALIDATE  email WITH is_valid_email
 
 PRINT `Imported ${(SELECT COUNT(*) FROM leads;)} clean rows.`

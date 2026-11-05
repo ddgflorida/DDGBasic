@@ -89,7 +89,7 @@ When the load finishes, `LOAD` prints `N records loaded into table T` (or `N rec
 
 ```
 CREATE [TABLE] table_name
-INTO   [TABLE] table_name  APPEND | TRUNCATE | IGNORE | UPSERT USING KEY key_expr
+INTO   [TABLE] table_name  [APPEND | TRUNCATE | IGNORE | UPSERT USING KEY key_expr]
 ```
 
 `table_name` can be an unquoted identifier or a quoted string, for example `CREATE TABLE "my table"`. The word `TABLE` is optional in both forms, so `CREATE "customers"` and `INTO "customers" APPEND` are valid.
@@ -99,10 +99,10 @@ INTO   [TABLE] table_name  APPEND | TRUNCATE | IGNORE | UPSERT USING KEY key_exp
 | `CREATE TABLE t` | Creates `t` with one column per final header. Every column is `TEXT`, except a column named `_linenum`, which is `INTEGER`. If `t` already exists, the load fails with `Table 't' already exists. Use INTO TABLE ... TRUNCATE to overwrite.` |
 | `INTO TABLE t APPEND` | Inserts into an existing table. The table must exist (`no such table: t`), and its column names must match the final headers. |
 | `INTO TABLE t TRUNCATE` | Runs `DELETE FROM t`, then inserts. |
-| `INTO TABLE t IGNORE` | Uses `INSERT OR IGNORE`, so rows that violate a unique or primary key constraint are skipped silently. |
+| `INTO TABLE t IGNORE` | Uses `INSERT OR IGNORE`, so rows that violate a unique or primary key constraint are skipped. The message gives the number of rows inserted and the number ignored. |
 | `INTO TABLE t UPSERT USING KEY "col"` | Loads the rows into a temporary staging table. It then `UPDATE`s every row of `t` whose key matches, and `INSERT`s the rows whose key is not yet in `t`. `col` must be one of the final headers (case-sensitive). `t` does not need a unique constraint on `col`. |
 
-With `INTO TABLE`, the mode keyword is **required**. Without it you get `Expected APPEND, TRUNCATE, UPSERT, or IGNORE for INTO TABLE clause.`
+With `INTO TABLE`, the mode keyword is optional. Without it, the rows are appended, as with `APPEND`.
 
 `key_expr` is evaluated as an expression, so write the column name as a string literal: `USING KEY "id"`. An unquoted `id` would be read as a variable.
 
@@ -133,7 +133,7 @@ Here `emp.csv` holds ids 1 to 4, and `emp2.csv` holds id 2 (changed) and id 5 (n
 | 5  | Eve Adams      | 90000  |
 +----+----------------+--------+
 (5 rows returned)
-2 records loaded into table emp
+0 records loaded into table emp (2 ignored)
 2 records loaded into table emp
 +----+----------------+
 | id |      name      |
@@ -144,7 +144,7 @@ Here `emp.csv` holds ids 1 to 4, and `emp2.csv` holds id 2 (changed) and id 5 (n
 (2 rows returned)
 ```
 
-The `IGNORE` load reports `2 records loaded` even though both rows were duplicates and nothing was inserted. The count is the number of rows *sent* to the database.
+Both rows of the `IGNORE` load were duplicates, so nothing was inserted.
 
 **Transactions.** For `CREATE`, `APPEND`, `TRUNCATE` and `IGNORE`, the inserts run inside one transaction. If any insert fails, for example on a duplicate key with `APPEND` or on a row with too few fields, the whole insert is rolled back. The `CREATE TABLE` and the `TRUNCATE` delete run *before* that transaction starts, so a failed `CREATE TABLE` load leaves an empty table behind.
 
@@ -195,7 +195,7 @@ These are every key the `LOAD` extractors and pipeline read. Unknown keys are ig
 | `element_type` | HTML | `TABLES` | `TABLES`, `LINKS` or `IMAGES` (case-insensitive). |
 | `table_index` | HTML | `0` | Which `<table>` to load (0-based). |
 | `source_url` | HTML | the filename | The value written into the `source` column. |
-| `base_url` | HTML (IMAGES) | the filename | The base used to resolve relative `<img src>` values. |
+| `base_url` | HTML (LINKS, IMAGES) | `source_url` | The base used to resolve relative `<a href>` and `<img src>` values. |
 | `sheetname` | EXCEL | none | The sheet to load. Matched exactly first, then case-insensitively. |
 | `sheetindex` | EXCEL | `0` | The sheet to load by 0-based position, used when `sheetname` is not given. |
 | `transform` | all (pipeline) | none | Option-string transform rules (see [5.7](#57-option-string-transform-and-validate-rules)). |
@@ -388,7 +388,7 @@ Notice: Automatically using single key ('inventory') as the record source.
 (2 rows returned)
 ```
 
-`fields=` is **ignored** for JSON. For relational loading of nested data, see `normalize=true` in [5.12](#512-normalising-json-and-xml-into-related-tables).
+`fields=` is **ignored** for JSON, with a warning. For relational loading of nested data, see `normalize=true` in [5.12](#512-normalising-json-and-xml-into-related-tables).
 
 ### 5.5.5 LOAD JSONL
 
@@ -476,8 +476,8 @@ The `element_type` option decides what is extracted. It is an option, **not** a 
 | `element_type` | Columns | Notes |
 |---|---|---|
 | `TABLES` (default) | `source`, then one column per header cell | Uses `<table>` number `table_index`. With `header=true`, the first `<tr>` (its `th` or `td` cells) supplies the names. Header names have `[` and `]` removed, and duplicates get `_2`, `_3`, and so on. Data cells are the `<td>` elements of each later row. |
-| `LINKS` | `source`, `text`, `href` | Every `<a>` that has an `href`. `href` is resolved against the *filename* passed to `LOAD`, so it only becomes absolute when you load from a URL. |
-| `IMAGES` | `source`, `src`, `alt`, `title` | Every `<img>` that has a `src`. `src` is resolved against `base_url`. |
+| `LINKS` | `source`, `text`, `href` | Every `<a>` that has an `href`. `href` is resolved against `base_url`, which defaults to `source_url`. |
+| `IMAGES` | `source`, `src`, `alt`, `title` | Every `<img>` that has a `src`. `src` is resolved against `base_url`, which defaults to `source_url`. |
 
 The `source` column holds `source_url`, which defaults to the filename or URL.
 
@@ -670,12 +670,12 @@ Rules are separated by **semicolons**. Column names are case-insensitive and ref
 |---|---|
 | `trimall` | Strips whitespace from every column. |
 | `upperall` / `lowerall` / `properall` | Upper-, lower- or title-cases every column. |
-| `col:upper` / `col:lower` / `col:trim` / `col:proper` | Case or whitespace change for one column. These names must be lowercase. |
+| `col:upper` / `col:lower` / `col:trim` / `col:proper` | Case or whitespace change for one column. |
 | `col:round(n)` | Formats the value as a number with `n` decimals. Values that are empty or not numeric become `0.00...`. |
 | `col:format(mask)` | Formats the value with the `PRINT USING` style formatter (Chapter 3), for example `format('#,##0.00')`. Values that are not numeric are passed through unchanged. |
 | `col:date(IN,OUT)` | Re-formats a date. The mask tokens are `YYYY YY MM DD HH MI SS`. If parsing fails, the original value is kept. If `IN` has a time part and the full parse fails, the date part alone is tried. |
 
-The rule is split on `:`, and must give exactly two parts. So **date masks cannot contain `:`**: `date(YYYY-MM-DD HH:MI,...)` is not parsed as a rule. Writing several rules separated by commas (`transform=trimall,State:upper`) is also wrong. It becomes a single rule for a column named `trimall,state`.
+The rule is split at its first `:`, so masks can contain `:`, as in `date(YYYY-MM-DD HH:MI,DD/MM/YYYY HH:MI)`. Writing several rules separated by commas (`transform=trimall,State:upper`) is also wrong. It becomes a single rule for a column named `trimall,state`.
 
 ```basic
 LOAD CSV "emp.csv" CREATE TABLE emp OPTIONS "header=true, transform=dept:upper;salary:format('#,##0.00')"
@@ -707,7 +707,7 @@ LOAD CSV "dates.csv" CREATE TABLE d OPTIONS "header=true, transform=joined:date(
 validate=col:RULE[:RULE...];col:RULE...
 ```
 
-Column names here are **case-sensitive** and must match the final column name exactly. Rule names are case-insensitive. Rules run in order. Only `REQUIRED` looks at empty values; every other rule ignores an empty value.
+Column names here are case-insensitive and refer to the final column names. Rule names are case-insensitive. Rules run in order. Only `REQUIRED` looks at empty values; every other rule ignores an empty value.
 
 | Rule | Fails when |
 |---|---|
@@ -933,16 +933,16 @@ With `normalize=true`, the file is parsed in full and handed to the `LegacyJsonN
 
 1. **Flatten** the document into a node list. A top-level object is wrapped in a one-element list.
 2. **Upgrade** scalars that sit at paths elsewhere holding arrays into one-element lists, then flatten again.
-3. **Discover tables.** Each array of objects becomes a table. The top-level array gets `root_name`. Child tables are named from their path with a parent prefix where needed, for example `orders_items`, `person_phones` or `catalog_book`. Arrays that contain only scalar values do not become tables of their own.
+3. **Discover tables.** Each array becomes a table. The top-level array gets `root_name`. Child tables are named from their path with a parent prefix where needed, for example `orders_items`, `person_phones` or `catalog_book`. An array of scalar values, such as `"tags": ["x", "y"]`, becomes a child table with one column named after the key (`person_tags`, column `tags`), one row per value.
 4. **Discover columns.** Scalar values under an object become columns, named from the tail of their path: `ship/city` becomes `ship_city`, and an XML attribute `@id` becomes `book_id`. Types are `INTEGER`, `REAL` or `TEXT`. Any string value forces `TEXT`.
 5. **Create tables.** Each table first runs `DROP TABLE IF EXISTS`, then is created with a primary key `pk_<table>` and, for child tables, a foreign key `fk_<parent> REFERENCES parent(pk_parent)` plus an index on it. Names that are reserved words, or that contain punctuation or a leading digit, are double-quoted.
 6. **Insert rows**, assigning primary key values from one counter shared by all tables.
 
-Afterwards it prints a count for every table in the database.
+Afterwards it prints a row count for each table it created.
 
-The destination mode is ignored on this path. `CREATE TABLE` does **not** fail when the table exists, because the existing table is dropped. `INTO TABLE` still requires a mode keyword, but the mode has no effect. `fields=`, `process_by`, `USING SCHEMA` and the `WITH` clauses are not used.
+The destination mode is ignored on this path. `CREATE TABLE` does **not** fail when the table exists, because the existing table is dropped. `INTO TABLE` accepts a mode keyword, but the mode has no effect. `fields=`, `process_by`, `USING SCHEMA` and the `WITH` clauses are not used.
 
-The normalizer supports a reduced set of option rules. In `transform=`: `trimall`, `upperall`, and per-column `upper`, `lower`, `trim` and `proper`, keyed by the generated column name, for example `customer` or `ship_city`. In `validate=`: `REQUIRED`, `MINLENGTH(n)` and `REGEX(p)`. A validation failure prints `Validation failed for table ...` **but the row is still inserted**, with the transform result discarded (see [5.18](#518-implementation-notes--discrepancies)).
+The normalizer supports a reduced set of option rules. In `transform=`: `trimall`, `upperall`, and per-column `upper`, `lower`, `trim` and `proper`, keyed by the generated column name, for example `customer` or `ship_city`. In `validate=`: `REQUIRED`, `MINLENGTH(n)` and `REGEX(p)`. A validation failure prints `Validation failed for table ... Skipping row.`, and the row is not inserted. Neither are its child rows, for example the `items` of a rejected order. Column names in `validate=` are case-insensitive.
 
 **Example: JSON**
 
@@ -1793,36 +1793,36 @@ The following points were found while checking the source and running the exampl
 **LOAD syntax and options**
 
 1. **No INTO-variable or TO-file destination.** `_parse_load_destination_clause` (7346) accepts only `CREATE [TABLE]` and `INTO [TABLE] ... APPEND|TRUNCATE|UPSERT|IGNORE`. `LOAD` always targets a database table. To write files, use `SET OUTPUT` (5.13).
-2. **The `INTO TABLE` mode is mandatory.** There is no default `APPEND`, as the in-code comment admits.
-3. **The README ETL example** writes `LOAD ... CREATE TABLE leads` and `OPTIONS ...` / `TRANSFORM ...` on separate lines **without** `_` continuation. As written, it fails with `Unknown statement: OPTIONS`.
+2. **The `INTO TABLE` mode** (fixed). It was mandatory; it now defaults to `APPEND`.
+3. **The README ETL example** (fixed). It wrote `LOAD ... CREATE TABLE leads` and `OPTIONS ...` / `TRANSFORM ...` on separate lines **without** `_` continuation, so it failed with `Unknown statement: OPTIONS`. The lines now end in `_`.
 4. **Examples updated to current syntax** (fixed). `examples/loadfixed.bas`, `loadinto.bas`, `loadexcelex.bas`, `analyzecsv.bas`, `loadhtmllink.bas`, `loadhtmlimage.bas` and `npilinks.bas` used `LOAD FIXED ... FIELDS`, `fields=[col] as new`, comma-separated transform rules, or `LOAD HTML LINKS/IMAGES`. They now use the syntax described in this chapter. `examples/loadinto.bas` also gained the `example.csv` file it reads. A commented-out line in `loadcsvnohead.bas` still shows the old `fields=` form.
 5. **`ANALYZE FIXED` example command** (fixed). It printed `FIELDS "..."`, which `LOAD FIXED` does not accept; it now prints `OPTIONS "fields=..."`.
 6. **Option parsing breaks on values that contain `word=`.** The `\b(\w+)=` scan cannot tell them apart from keys. Values cannot be escaped.
-7. **The option `transform` rule split** uses `split(':')` and requires exactly two parts. So `date()` masks containing `:` silently do nothing, and a `format()` mask containing `:` also fails.
-8. **Option `validate` column names are case-sensitive**, while `transform` names, `fields` names and `WITH`-clause names are case-insensitive.
-9. **The `HELP LOAD JSON` / `HELP LOAD FIXED` syntax lines** show `INTO TABLE "tbl"` with no mode keyword. That would fail.
+7. **The option `transform` rule split** (fixed). It split on every `:`, so `date()` and `format()` masks containing `:` silently did nothing. It now splits at the first `:`. The rule names `upper`, `lower`, `trim` and `proper` are also accepted in any case now.
+8. **Option `validate` column names** (fixed). They were case-sensitive, unlike `transform`, `fields` and `WITH`-clause names. They are case-insensitive now, in the normalizer too.
+9. **The `HELP LOAD JSON` / `LOAD FIXED` / `LOAD EXCEL` syntax lines** (fixed). They showed only `INTO TABLE "tbl"`; they now show `CREATE TABLE` and the modes, like `HELP LOAD CSV`.
 
 **LOAD formats**
 
-10. **`fields=` is ignored** for JSON, FIXED, TEXT, XML, HTML and PARQUET (pipeline line 8691). No warning is given.
+10. **`fields=` is ignored** for JSON, TEXT, XML, HTML and PARQUET (for FIXED it is the column layout). A warning is now printed: `Warning: the fields option is ignored by LOAD JSON.`
 11. **JSON values are inserted with their native types.** `NULL` is used for missing keys and booleans become 1/0. All other formats insert strings. Empty fields are stored as `NULL` unless `SET NULL_HANDLING` says otherwise (4.9.3).
 12. **XML record attributes are dropped** by the flat `LOAD XML`. Only child elements become columns.
-13. **The XML `limit` option** stops emitting rows but keeps scanning to the end of the file.
+13. **The XML `limit` option** (fixed). It stopped emitting rows but kept scanning to the end of the file; it now stops reading.
 14. **HTML `header=false`** (fixed). The header list stayed `['source']`, so every cell was dropped. Columns are now named `C1..Cn` after the widest row.
-15. **HTML `LINKS` resolves `href` against the filename**, not `source_url` or `base_url`. For local files, links stay relative. The extractor builds `data_row` twice; the first assignment is dead code.
+15. **HTML `LINKS`** (fixed). It resolved `href` against the filename, so links in local files stayed relative. Links and images are now resolved against `base_url`, which defaults to `source_url`.
 16. **Excel `.xlsx` with `header=false`** (fixed). It failed with "Could not determine any columns", because the `C1..Cn` names were worked out only after the headers had been sent. They are now taken from the first data row.
 17. **Parquet nested columns** (fixed). Leaf names from `schema.names` were used, so a list column `tags` appeared as `element` with empty values. The top-level names from `schema_arrow` are used now, and list and struct values are stored as JSON text.
 18. **Blank lines in a CSV file are skipped** (fixed: a trailing blank line used to abort the load with `Incorrect number of bindings supplied`). **CSV rows with fewer fields than the header still abort the whole load.** Rows with more fields lose the extras silently. A failed `CREATE TABLE` load leaves an empty table behind.
-19. **`IGNORE` mode reports rows sent, not rows inserted.**
+19. **`IGNORE` mode count** (fixed). It reported the rows sent, not the rows inserted. It now reports both: `0 records loaded into table emp (2 ignored)`.
 20. **`LOAD` and `ERR`** (fixed). A successful `LOAD` did not reset `ERR`, so `IF ERR <> 0` after it could see a stale value from an earlier statement.
 21. **`SET NULL_HANDLING`** (fixed). It used to be stored and never read. It now decides whether `LOAD` stores empty fields as `NULL` (the default) or `''` (see [4.9.3](04-database-sql-and-output.md#493-set-null_handling)).
 
 **Normalisation**
 
-22. **Normalizer validation does not reject rows.** `LegacyJsonNormalizer._process_row` returns `None` on failure, but `_insert_rows` only replaces the row data when the result is truthy. The row is therefore inserted anyway, with its *original* (untransformed) data, after the "Skipping row" message.
-23. **Scalar arrays produce spurious rows.** For example, `"tags": ["x","y"]` in a normalised JSON produces a `person_tags` table with 4 rows (`x`, NULL, `y`, NULL). The table-skip check in `_set_table_dict` runs after `_upgrade_to_list` has wrapped each scalar in a list.
+22. **Normalizer validation** (fixed). A row that failed validation was inserted anyway, with its untransformed data, after the "Skipping row" message. It is now skipped, together with its child rows.
+23. **Scalar arrays** (fixed). `"tags": ["x","y"]` produced a `person_tags` table with 4 rows (`x`, NULL, `y`, NULL), because each element was wrapped in its own list. It now gives one row per value.
 24. **Primary keys come from one shared counter** across all tables, so child keys do not start at 1.
-25. **`_show_table_counts` lists every table in the database**, not just the tables created by the load.
+25. **The table counts after a normalised load** (fixed). They listed every table in the database; now only the tables the load created.
 26. **`normalize=true` ignores the destination mode** and drops any existing tables with the generated names.
 27. **Dead code.** The streaming metadata-table XML normalizer (`_run_xml_normalize` and helpers, 8303-8636) is never reached, because `_parse_load_statement` handles `normalize` first and returns. That code also contains leftover `DEBUG` prints.
 
