@@ -1,4 +1,4 @@
-SET DATABASE ENGINE DUCKDB
+DATABASE ENGINE DUCKDB
 CREATE TABLE users (id INTEGER, name TEXT, status TEXT);
 INSERT INTO users VALUES (1, 'Alice', 'active');
 INSERT INTO users VALUES (2, 'Bob O''Malley', 'inactive');

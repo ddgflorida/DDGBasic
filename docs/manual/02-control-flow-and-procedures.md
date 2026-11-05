@@ -1161,7 +1161,7 @@ Replaces the running program with another script. Control does not come back to 
 - The arguments become the new program's `COMMAND$(n)` values.
 - Without `PRESERVE`, the new program starts with no variables. With `PRESERVE`, string and numeric variables are copied, except `ERR`, `ERRMSG$`, `SQL_ROWCOUNT`, `SQL_FOUND`, `SQL_NOTFOUND` and `RECNO`. Each array or hash `name` is serialized to JSON in a string variable named `name_JSON$`. Use `PARSEJSON` (Chapter 3) to rebuild it.
 - The engine choice (`DATABASE ENGINE`), `SQL_FATAL_ERRORS`, `HASH_KEYS` mode and `TRON` state are carried over. The `ON ERROR` handler is cleared.
-- `CHAIN` always prints status lines: `CHAIN: Transferred control to ...`, then, when they apply, `CHAIN: Arguments passed: ...`, `CHAIN: Variables preserved` and `CHAIN: Serialized X as X_JSON$`.
+- `CHAIN` prints nothing on standard output. With `PRESERVE`, a note such as `CHAIN: Serialized X as X_JSON$` goes to standard error for each array or hash that is converted.
 - A missing file is a raised error with `ERR = 2`.
 - The chained program's `FUNCTION`s replace the caller's.
 
@@ -1371,6 +1371,8 @@ If the file does not exist, the interpreter prints `Error: File 'x' not found.` 
 - the script file is missing or unreadable;
 - a `FUNCTION` definition is malformed. This error escapes as a Python exception.
 
+Pressing **Ctrl-C** stops a running program with `Interrupted at line N.` on standard error and exit status 130 (in the REPL, Ctrl-C only prints `Type 'EXIT' to quit.`).
+
 An error trapped by `ON ERROR GOTO` and resumed does not affect the exit status. A failing SQL statement under `SET SQL_FATAL_ERRORS OFF` doesn't either.
 
 ### Program arguments: COMMAND$
@@ -1439,7 +1441,6 @@ The help topics related to this chapter are `IF`, `FOR`, `FOR IN`, `WHILE`, `GOS
 
 ```
 DbBasic> HELP GOSUB
-('GOSUB', 'GOSUB', 5)
 
 === HELP: GOSUB ===
 Description: Jumps to a subroutine at the specified label. RETURN command jumps back.
@@ -1475,9 +1476,9 @@ Each of the following was confirmed by running the interpreter.
 11. **`INCLUDE`** (fixed): it used to fail for every file that existed, because its marker lines began with `'`. See [1.4.1](01-language-fundamentals.md#141-include).
 12. **`RECNO` numbering is inconsistent.** In `FOR ... IN CSV` it starts at 2 even without a header row. In `JSONL` it counts blank lines. It is deleted at the end of every loop, which also hides the outer loop's `RECNO` when loops are nested.
 13. **Exit status** (fixed): it was always 0, even after a runtime error; it is now 1 (see 2.17). `EXIT FUNCTION` outside a function still gives an empty `Runtime Error:` message.
-14. **`HELP` prints the raw token tuple** before every entry, for example `('GOSUB', 'GOSUB', 5)`. This looks like leftover debug output.
+14. **`HELP` debug output** (fixed). `HELP` printed the raw token tuple, for example `('GOSUB', 'GOSUB', 5)`, before every entry.
 15. `PRINT x;` immediately followed by `:` is a syntax error (`Unexpected token in factor: COLON`), so `FOR i = 1 TO 3: PRINT i;: NEXT` fails. Write `PRINT i : NEXT`, or split the line.
-16. `CHAIN` always prints its `CHAIN: ...` status lines to stdout, which cannot be turned off.
+16. **`CHAIN` status lines** (fixed). `CHAIN` always printed `CHAIN: ...` status lines to standard output.
 
 **Documentation that does not match the code**
 

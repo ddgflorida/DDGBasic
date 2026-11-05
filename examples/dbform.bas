@@ -4,7 +4,7 @@ REM  Demonstrates DISPLAY, view-switching, and all field types.
 REM =============================================
 REM --- 1. SETUP DATABASE (for a complete test) ---
 DATABASE OPEN "c:\ddg\data\sqlite\hospital.db"
-SET UI WEB
+REM SET UI WEB  (not implemented: forms run in the terminal)
 REM --- 2. DEFINE THE MASTER FORM ---
 FORM docform DISPLAY 10
    SOURCE (SELECT d.* FROM Doctor d ORDER BY 3)

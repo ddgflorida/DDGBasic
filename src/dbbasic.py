@@ -5118,6 +5118,8 @@ class Interpreter:
         global g_null_handling_default
         self._expect('SET')
         token = self._current_token()
+        if not token or token[0] in ('NEWLINE', 'COLON'):
+            self._error("SET requires an option: OUTPUT, EMAIL, NULL_HANDLING, SQL_FATAL_ERRORS or HASH_KEYS.")
         
         if token and token[0] == 'EMAIL':
             self._next_token() # Consume 'EMAIL'
@@ -5243,6 +5245,10 @@ class Interpreter:
                         self._error(f"Unknown format type '{output_format}'")
                 else: 
                     self._error("Missing or invalid format type after FORMAT")
+        else:
+            option = token[1] if token and token[0] not in ('NEWLINE', 'COLON') else '(nothing)'
+            self._error(f"Unknown SET option '{option}'. Expected OUTPUT, EMAIL, NULL_HANDLING, "
+                        "SQL_FATAL_ERRORS or HASH_KEYS.")
 
 
     def _handle_output(self, results, column_names):
@@ -7053,9 +7059,9 @@ class Interpreter:
                                 serialized_name = f"{var_name}_JSON$"
                                 json_data = self._execute_function('JSON_SERIALIZE$', [var_value])
                                 new_interpreter.variables[serialized_name] = json_data
-                                print(f"CHAIN: Serialized {var_name} as {serialized_name}")
+                                print(f"CHAIN: Serialized {var_name} as {serialized_name}", file=sys.stderr)
                             except Exception as e:
-                                print(f"CHAIN: Warning - Could not serialize {var_name}: {e}")
+                                print(f"CHAIN: Warning - Could not serialize {var_name}: {e}", file=sys.stderr)
                                 
             # Set up the new interpreter with the same configuration
             new_interpreter.db_engine = self.db_engine
@@ -7086,11 +7092,6 @@ class Interpreter:
             self.in_error_handler = False
             self.error_resume_index = None
             
-            print(f"CHAIN: Transferred control to {filename}")
-            if chain_args:
-                print(f"CHAIN: Arguments passed: {', '.join(chain_args)}")
-            if preserve_variables:
-                print("CHAIN: Variables preserved")
             
         except Exception as e:
             self.variables['ERR'] = 1.0
@@ -7468,7 +7469,6 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] not in ['NEWLINE', 'EOF']:
             token = self._current_token()
             
-            print(token)
             if token[0] == 'ID' and token[1].upper() == 'ALL':
                 all_topics = HelpRegistry.list_topics()
                 for i in range(0, len(all_topics)):
@@ -9506,6 +9506,7 @@ class Interpreter:
         New master function to handle all LOAD commands.
         Dispatches all NORMALIZE operations to the LegacyJsonNormalizer.
         """
+        self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('LOAD')
         token = self._current_token()
         valid_load_types = {'CSV', 'EXCEL', 'FIXED', 'JSON', 'JSONL', 'XML', 'HTML', 'TEXT', 'PARQUET'}
@@ -13743,6 +13744,16 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
         interpreter = Interpreter(lexer, cmd_args, debug=debug)
         interpreter.run()
         exit_code = interpreter.exit_code
+    except KeyboardInterrupt:
+        where = ""
+        try:
+            token = interpreter.tokens[interpreter.token_index]
+            line, _ = interpreter.lexer.get_line_col(token[2])
+            where = f" at line {line}"
+        except Exception:
+            pass
+        print(f"\nInterrupted{where}.", file=sys.stderr)
+        exit_code = 130
     except (RuntimeError, ValueError, sqlite3.Error) as e:
         print(f"Error: {e}", file=sys.stderr)
         exit_code = 1

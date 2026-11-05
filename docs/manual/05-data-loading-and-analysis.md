@@ -829,7 +829,7 @@ Jane was dropped by `VALIDATE email` because her email is empty. Al was dropped 
 
 **Errors** are different from rejections. A database error such as a constraint violation or a field-count mismatch, an unreadable file, or a bad option aborts the whole statement. It rolls back the inserts, sets `ERR=1` and `ERRMSG$`, and raises a runtime error.
 
-`LOAD` does not reset `ERR` to 0 when it succeeds. Scripts that test `IF ERR <> 0` after `LOAD` therefore see the value left by an earlier statement.
+`LOAD` sets `ERR` to 0 and `ERRMSG$` to `""` when it starts, so `IF ERR <> 0` after a successful `LOAD` is false.
 
 ---
 
@@ -1777,7 +1777,7 @@ The following points were found while checking the source and running the exampl
 17. **Parquet nested columns are mislabelled.** `pq.ParquetFile.schema.names` returns *leaf* column names. A `list<string>` column named `tags` therefore appears as `element`, and its values come out empty. `schema_arrow.names` would give the top-level names.
 18. **Blank lines in a CSV file are skipped** (fixed: a trailing blank line used to abort the load with `Incorrect number of bindings supplied`). **CSV rows with fewer fields than the header still abort the whole load.** Rows with more fields lose the extras silently. A failed `CREATE TABLE` load leaves an empty table behind.
 19. **`IGNORE` mode reports rows sent, not rows inserted.**
-20. **Successful loads do not reset `ERR`.** Example scripts that check `IF ERR <> 0` after `LOAD` can see a stale value.
+20. **`LOAD` and `ERR`** (fixed). A successful `LOAD` did not reset `ERR`, so `IF ERR <> 0` after it could see a stale value from an earlier statement.
 21. **`SET NULL_HANDLING`** (fixed). It used to be stored and never read. It now decides whether `LOAD` stores empty fields as `NULL` (the default) or `''` (see [4.9.3](04-database-sql-and-output.md#493-set-null_handling)).
 
 **Normalisation**

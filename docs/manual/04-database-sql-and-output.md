@@ -836,7 +836,7 @@ The following errors are **not** governed by `SQL_FATAL_ERRORS`. They always sto
 | `NULL_HANDLING` | `SET NULL_HANDLING [FOR expr] TO NULL \| CONVERT_EMPTY_TO_NULL \| PRESERVE_EMPTY_STRINGS \| EMPTY` |
 | `EMAIL` | `SET EMAIL keyword value [keyword value ...]` |
 
-These are the only options. Any other word after `SET` is **not** rejected: `SET` consumes nothing and the rest of the line is parsed as a new statement. So `SET x = 5` acts as an assignment, `SET FOO BAR` fails with `Invalid assignment statement for 'FOO'`, and `SET DATABASE ENGINE DUCKDB` (used in `examples/setoutputsql.bas`) works only because the `DATABASE ENGINE DUCKDB` part runs as its own statement.
+These are the only options. Any other word after `SET` is an error: `SET x = 5` gives `Unknown SET option 'x'. Expected OUTPUT, EMAIL, NULL_HANDLING, SQL_FATAL_ERRORS or HASH_KEYS.` To change the database engine, use `DATABASE ENGINE DUCKDB` (4.1), not `SET DATABASE ENGINE`.
 
 ### 4.9.1 SET SQL_FATAL_ERRORS
 
@@ -1481,7 +1481,7 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 
 **SET**
 
-7. **Unknown `SET` options are not rejected.** The rest of the line runs as a new statement. `SET DATABASE ENGINE DUCKDB` (in `examples/setoutputsql.bas`) only works by accident, and `SET x = 5` is an assignment.
+7. **Unknown `SET` options** (fixed). They used to be skipped silently, with the rest of the line run as a new statement (`SET DATABASE ENGINE DUCKDB` in `examples/setoutputsql.bas` only worked by accident, and `SET x = 5` was an assignment). They now raise `Unknown SET option`.
 8. **`SET NULL_HANDLING`** (fixed). It had no effect: the settings were stored but never read, and the global form was not parsed. It now controls `LOAD`, with empty fields stored as `NULL` by default (4.9.3).
 9. **`SET OUTPUT FORMAT TABLE`** (a `HELP SET OUTPUT` example) is rejected. The table format is called `TEXT`. The help's format list also leaves out `JSONL`, `XML`, `FIXED` and `PLAIN`.
 10. **`SET OUTPUT FORMAT ...` without a mode forces `CONSOLE`**, which silently cancels an earlier `FILE` or `OFF`. `SET OUTPUT CONSOLE` resets the format to `TEXT`, and `FILE` without `FORMAT` keeps the old format.
