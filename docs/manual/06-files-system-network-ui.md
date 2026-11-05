@@ -23,9 +23,11 @@ Related material in other chapters:
    * [SHELL](#shell) · [BROWSER](#browser) · [BELL](#bell) · [INPUT](#input)
 5. [HTTP: FETCH](#65-http-fetch)
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
-7. [TUI forms](#67-tui-forms)
+7. [Text screens](#67-text-screens)
+   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [MENU()](#menu) · [BROWSE](#browse) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
+8. [TUI forms](#68-tui-forms)
    * [Requirements](#requirements) · [FORM ... ENDFORM](#form--endform) · [Form elements](#form-elements) · [FIELD attributes and validation](#field-attributes-and-validation) · [BUTTON and actions](#button-and-actions) · [OPENFORM](#openform) · [Returned values](#values-returned-by-openform) · [GRIDEDIT](#gridedit)
-8. [Implementation notes / discrepancies](#68-implementation-notes--discrepancies)
+9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
 
 ---
 
@@ -803,7 +805,139 @@ ERR=-1 MSG=[Errno 61] Connection refused
 
 ---
 
-## 6.7 TUI forms
+## 6.7 Text screens
+
+DbBasic can draw full-screen, 1990s-style text applications: a coloured screen, boxes, `@ ... SAY ... GET` entry fields edited with `READ`, light-bar menus and a scrolling grid for query results. `examples/retro_contacts.bas` is a complete contact manager built this way.
+
+The screen is drawn with ANSI escape sequences, so `PRINT` keeps working between screen statements and no extra packages are needed. The code is in `src/dbscreen.py`. It has been tested in macOS terminals; Linux terminals work the same way. Windows 10 and later (Windows Terminal or the console) are supported by the code, but the Windows key handling has not been tested yet.
+
+**Coordinates** are `row, col`, counted from 1 at the top left, as with `LOCATE`.
+
+```basic
+COLOR 15, 1                          REM bright white on blue
+CLS
+BOX 2, 5, 9, 60, "Customer" DOUBLE
+name$ = "" : phone$ = "" : credit = 0
+@ 4, 8 SAY "Name  : " GET name$  PICTURE "@!S20"
+@ 5, 8 SAY "Phone : " GET phone$ PICTURE "(999) 999-9999"
+@ 6, 8 SAY "Credit: " GET credit VALID credit >= 0
+READ
+IF LASTKEY$ = CHR$(27) THEN GOTO cancelled
+```
+
+```
+    ╔══════════════════════ Customer ══════════════════════╗
+    ║                                                      ║
+    ║  Name  : ANN SMITH                                   ║
+    ║  Phone : (555) 123-4567                              ║
+    ║  Credit: 12                                          ║
+    ║                                                      ║
+    ║                                                      ║
+    ╚══════════════════════════════════════════════════════╝
+```
+
+### CLS, LOCATE, COLOR and BOX
+
+| Statement | Effect |
+|---|---|
+| `CLS` | Clears the screen in the current colours and moves the cursor to 1, 1. Pending `GET` fields are discarded. |
+| `LOCATE row [, col]` | Moves the cursor. The next `PRINT` or `INPUT` starts there. `col` defaults to 1. |
+| `COLOR [fg] [, bg] [, field_fg] [, field_bg]` | Sets the text colours. Any value can be left out (`COLOR , 4` changes only the background). `field_fg`/`field_bg` colour `GET` fields, the menu bar and the `BROWSE` bar; they start as black on white. |
+| `BOX top, left, bottom, right [, title$] [DOUBLE]` | Draws a single- or double-line box, clears its inside in the current colours, and centres the title in the top line. |
+
+The colour numbers are those of QBasic:
+
+| | | | | | | | |
+|---|---|---|---|---|---|---|---|
+| 0 black | 1 blue | 2 green | 3 cyan | 4 red | 5 magenta | 6 brown | 7 white |
+| 8 grey | 9 light blue | 10 light green | 11 light cyan | 12 light red | 13 light magenta | 14 yellow | 15 bright white |
+
+### @ ... SAY ... GET
+
+```
+@ row, col [SAY expr [PICTURE mask$]] [GET var [PICTURE mask$] [VALID condition]]
+```
+
+`SAY` writes the value of `expr` at the position. With `PICTURE`, the value is formatted as `FORMAT$(expr, mask$)` would format it: `@ 20, 1 SAY 1234.5 PICTURE "#,###.##"` shows `1,234.50`.
+
+`GET` puts an entry field for a variable straight after the `SAY` text, or at `col` if there is no `SAY`. It shows the variable's current value in the field colours. Nothing is edited until `READ`. Only simple variables can be edited, not array elements or hash fields. A variable whose name ends in `$`, or that holds a string, gets a text field; any other variable gets a numeric field.
+
+| `GET` picture | Meaning |
+|---|---|
+| (none) | Text: as wide as the current value, and at least 20. Numbers: 10 wide. |
+| `@!` | Upper-case every letter typed. |
+| `@Sn` | A field `n` characters wide, for example `@S30`. Combine with `!`: `@!S30`. |
+| template | One character per position. `9` digit, `A` letter, `N` letter or digit, `X` any character, `!` any character in upper case, `#` digit, space or sign. Any other character is fixed and is skipped by the cursor, as in `(999) 999-9999`. The stored value includes the fixed characters, or is `""` when nothing was typed. |
+
+For a numeric field, a template only sets the width. The value is typed as a number (commas are ignored), and an entry that is not a number is refused with a beep.
+
+`VALID condition` is checked whenever the cursor leaves the field, after the variable has been given the typed value. If the condition is false, DbBasic beeps and the cursor stays in the field.
+
+### READ
+
+`READ` edits the pending `GET` fields in the order they were defined, then clears the list.
+
+| Key | Action |
+|---|---|
+| Enter, Tab, Down | Next field. On the last field, Enter, Tab or Down ends `READ`. |
+| Shift-Tab, Up | Previous field. |
+| PgDn, PgUp, Ctrl-W | End `READ`. |
+| Esc | End `READ` and put back the values every variable had when `READ` started. |
+| Left, Right, Home, End | Move within the field. |
+| Backspace, Del | Delete. |
+| Ins | Switch between insert mode (the default) and overwrite mode. |
+| Ctrl-Y | Clear the field. |
+
+Each value is stored when you leave its field. The first key you type in a numeric field replaces the old number. Afterwards, `LASTKEY$` holds the key that ended `READ`, so `IF LASTKEY$ = CHR$(27)` tells you the user cancelled.
+
+### MENU()
+
+```
+choice = MENU(row, col, item1$, item2$, ...)
+choice = MENU(row, col, items)                 REM an array of items
+```
+
+`MENU` draws a box at `row, col` with one item per line and a highlighted bar. Up and Down move the bar, Enter chooses, and typing the first letter of an item chooses it at once. It returns the item number, counting from 1, or `0` for Esc. The menu stays on the screen afterwards. Redraw the screen (`CLS`, `BOX`) to remove it.
+
+### BROWSE
+
+```
+BROWSE (SELECT ...) | BROWSE table$  [AT top, left, bottom, right] [TITLE title$] [INTO var]
+```
+
+`BROWSE` runs the query and shows the rows in a box: a header line, the rows, and a status line (`2 of 3   Enter=select  Esc=cancel`). Without `AT`, it fills the terminal. A string that does not start with `SELECT` or `WITH` is taken as a table name. Bind variables (`:id`) work as in any query.
+
+Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns are as wide as their widest value, up to 30 characters. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. The grid is read-only; to change a row, use `GET`/`READ` and an `UPDATE`, as `examples/retro_contacts.bas` does.
+
+### INKEY$ and LASTKEY$
+
+| Function | Returns |
+|---|---|
+| `INKEY$` | The key that has been pressed, or `""` if none is waiting. It does not wait. |
+| `INKEY$(0)` | The next key, waiting as long as it takes. |
+| `INKEY$(n)` | The next key, waiting at most `n` seconds; `""` if none arrives. |
+| `LASTKEY$` | The key that ended the last `READ`, `MENU` or `BROWSE`, or the last key `INKEY$` returned. |
+
+Ordinary keys come back as characters: Enter is `CHR$(13)`, Esc `CHR$(27)`, Tab `CHR$(9)` and Backspace `CHR$(8)`. Other keys come back as names: `UP`, `DOWN`, `LEFT`, `RIGHT`, `HOME`, `END`, `PGUP`, `PGDN`, `INS`, `DEL`, `BTAB` (Shift-Tab) and `F1` to `F12`.
+
+```basic
+PRINT "Press a key (Esc to stop)"
+DO
+    k$ = INKEY$(0)
+    IF k$ = CHR$(27) THEN EXIT DO
+    PRINT "You pressed "; k$
+LOOP
+```
+
+### Keyboard and terminal
+
+While a program reads keys, the terminal does not echo them and passes Ctrl-S, Ctrl-Q, Ctrl-Y, Ctrl-V and Ctrl-O to the program. Ctrl-C still stops the program. `INPUT` switches the terminal back to normal line editing. When the program ends, the colours, the cursor and the terminal mode are restored. The screen contents are left as they are, as they were in DOS.
+
+When standard input is not a terminal, keys are read from it as a stream, with arrow keys written as their escape sequences (`\x1b[A` for Up). This is how `tests/screen.bas` and `examples/retro_contacts.bas` are run by the test runner.
+
+---
+
+## 6.8 TUI forms
 
 DbBasic can define data-entry forms and data grids declaratively and display them as full-screen terminal applications. The terminal UI lives in `src/tui_runner.py` and is built on the **Textual** library.
 
@@ -1027,7 +1161,7 @@ GRIDEDIT "Orders" _
 
 ---
 
-## 6.8 Implementation notes / discrepancies
+## 6.9 Implementation notes / discrepancies
 
 These were found while checking the source against behaviour. Line numbers refer to `src/dbbasic.py` unless stated otherwise.
 
@@ -1068,3 +1202,10 @@ These were found while checking the source against behaviour. Line numbers refer
 16. **Optional dependencies** (fixed). `textual` is required for `OPENFORM`/`GRIDEDIT`; it is now listed in `requirements.txt`. Without it, forms fail with the unhelpful error `'NoneType' object is not callable`.
 17. **Web runner** (removed). The experimental web runner (`src/dbbasicweb.py`, `.htb` templates, the `REDIRECT` statement, `Interpreter.execute()` and the unused `WebFormRunner` import) has been removed from `main`. Its known problems were the `cgi` dependency (removed in Python 3.13), one interpreter shared by all requests, an unsanitised request path, and no static files. The last working version is kept on the `experiment/web-runner` branch.
 18. **`SHELL` without `INTO`** writes directly to the process's stdout, bypassing `SET OUTPUT`.
+19. **Text screens are a prototype** (6.7, new). Known limits:
+    - nothing saves and restores the screen under a menu or grid; redraw it yourself;
+    - `GET` edits simple variables only, not array elements or hash fields;
+    - a numeric field's `PICTURE` sets only its width;
+    - `BROWSE` reads every row into memory and is read-only;
+    - the Windows key handling has not been tested;
+    - some words are already keywords from the forms and output statements and cannot be variable names, for example `choice` and `title`.

@@ -36,6 +36,7 @@ try:
     from tui_runner import FormRunner
 except ImportError:
     FormRunner = None
+from dbscreen import SCREEN, ScreenError
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, quote_plus, unquote_plus, urljoin
 import xmltodict
@@ -303,6 +304,56 @@ class HelpRegistry:
             "syntax": 'BELL',
             "desc": "Plays a system sound (beep) to alert the user.",
             "examples": ['BELL', 'IF err THEN BELL']
+        },
+        "CLS": {
+            "syntax": 'CLS',
+            "desc": "Clears the screen in the current COLOR and moves the cursor to row 1, column 1. Pending GET fields are discarded.",
+            "examples": ['COLOR 15, 1\nCLS']
+        },
+        "LOCATE": {
+            "syntax": 'LOCATE row [, col]',
+            "desc": "Moves the cursor; the next PRINT starts there. Rows and columns count from 1 at the top left.",
+            "examples": ['LOCATE 10, 20: PRINT "Hello"']
+        },
+        "COLOR": {
+            "syntax": 'COLOR [fg] [, bg] [, field_fg] [, field_bg]',
+            "desc": "Sets the text colours (0-15: 0 black, 1 blue, 2 green, 3 cyan, 4 red, 5 magenta, 6 brown, 7 white, 8-15 bright versions, 14 yellow). field_fg and field_bg colour GET fields, menu bars and the BROWSE bar (default black on white).",
+            "examples": ['COLOR 14, 1', 'COLOR 15, 1, 0, 3', 'COLOR , 4']
+        },
+        "BOX": {
+            "syntax": 'BOX top, left, bottom, right [, title$] [DOUBLE]',
+            "desc": "Draws a box with line characters and clears its inside in the current COLOR. The title is centred in the top line.",
+            "examples": ['BOX 2, 5, 10, 60, "Customer" DOUBLE']
+        },
+        "@": {
+            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET var [PICTURE mask$] [VALID condition]]',
+            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field for a variable after the SAY text; READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left.",
+            "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 20, 1 SAY total PICTURE "$#,###.##"']
+        },
+        "READ": {
+            "syntax": 'READ',
+            "desc": "Edits the GET fields in order. Tab/Enter/Down go to the next field, Shift-Tab/Up to the previous one, PgDn or Ctrl-W finish, Ctrl-Y clears a field, Ins toggles insert mode. Enter on the last field finishes. Esc puts back the values the variables had and ends READ; check LASTKEY$ = CHR$(27).",
+            "examples": ['READ\nIF LASTKEY$ = CHR$(27) THEN GOTO cancelled']
+        },
+        "MENU": {
+            "syntax": 'choice = MENU(row, col, item1$, item2$, ... | items_array)',
+            "desc": "Shows a boxed light-bar menu. Arrows move, Enter chooses, the first letter of an item chooses it directly. Returns the item number from 1, or 0 for Esc.",
+            "examples": ['choice = MENU(5, 10, "Add", "Edit", "Quit")']
+        },
+        "BROWSE": {
+            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [AT top, left, bottom, right] [TITLE t$] [INTO var]',
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$.",
+            "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78']
+        },
+        "INKEY$": {
+            "syntax": 'INKEY$ | INKEY$(seconds)',
+            "desc": "Returns the key pressed, or \"\" if none is waiting. INKEY$(0) waits for a key; INKEY$(n) waits up to n seconds. Keys come back as characters (Enter is CHR$(13), Esc CHR$(27), Tab CHR$(9)) or names: UP, DOWN, LEFT, RIGHT, HOME, END, PGUP, PGDN, INS, DEL, BTAB, F1-F12.",
+            "examples": ['k$ = INKEY$(0)', 'IF INKEY$ = CHR$(27) THEN EXIT DO']
+        },
+        "LASTKEY$": {
+            "syntax": 'LASTKEY$',
+            "desc": "The key that ended the last READ, MENU or BROWSE, or the last key INKEY$ returned.",
+            "examples": ['IF LASTKEY$ = CHR$(27) THEN RETURN']
         },
         "BROWSER": {
             "syntax": 'BROWSER "url"',
@@ -1268,7 +1319,7 @@ class Lexer:
             ('ID', r'(?!INTO\b)[a-zA-Z_][a-zA-Z0-9_]*\$?'),
             ('OP', r"[+\*/-]"), ('CARET', r'\^'), ('AMPERSAND', r'&'),
             ('RELOP', r'<>|<=|>=|<|>'), ('HASH_SYM', r'#'), ('LPAREN', r'\('), ('RPAREN', r'\)'), 
-            ('LBRACKET', r'\['), ('RBRACKET', r'\]'),('COMMA', r','),
+            ('LBRACKET', r'\['), ('RBRACKET', r'\]'),('COMMA', r','), ('AT_SYM', r'@'),
             ('SEMICOLON', r';'), ('COLON', r':'), ('DOT', r'\.'), ('NEWLINE', r'\n'),
             ('SKIP', r'[ \t\u00A0]+'), ('MISMATCH', r'.'),
         ]
@@ -2793,6 +2844,7 @@ class Interpreter:
         'HASH_VALUES', 'HEX$', 'HOUR', 'HTMLDECODE$', 'HTMLENCODE$', 'INSTR', 'INSTRREV',
         'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
         'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
+        'INKEY$', 'LASTKEY$', 'MENU',
         'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
         'OCT$', 'ORDINAL$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
         'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
@@ -3842,6 +3894,10 @@ class Interpreter:
             self._parse_write_statement()
         elif token[0] == 'DATABASE':                              # define database in use
             self._parse_database_statement()
+        elif token[0] == 'AT_SYM':                                # @ row, col SAY ... GET ...
+            self._parse_at_statement()
+        elif self._is_screen_statement(token):                    # CLS, LOCATE, COLOR, BOX, READ, BROWSE
+            self._parse_screen_statement()
         elif token[0] == 'LET' or token[0] == 'ID':               # optional let var = value
              # If this is a UDF call used as a statement (no assignment), handle it here.
              # Pattern: name(...) at statement position, where name is a user-defined function.
@@ -3921,6 +3977,162 @@ class Interpreter:
             self._parse_gridedit_statement()
         else:
             self._error(f"Unknown statement: {token[0]}")
+
+    # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see dbscreen.py) ---
+    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE'}
+
+    def _is_screen_statement(self, token):
+        """True for CLS, LOCATE, COLOR, BOX, READ or BROWSE used as a statement rather than as
+        a variable being assigned (color = 3) or a user function being called."""
+        if token[0] != 'ID' or token[1].upper() not in self.SCREEN_STATEMENTS:
+            return False
+        if token[1].upper() in self.user_functions:
+            return False
+        i = self.token_index + 1
+        if i < len(self.tokens) and self.tokens[i][0] in ('ASSIGN', 'DOT'):
+            return False
+        while i < len(self.tokens) and self.tokens[i][0] not in ('NEWLINE', 'COLON'):
+            if self.tokens[i][0] == 'ASSIGN':
+                return False            # color(2) = 5 assigns an array element
+            i += 1
+        return True
+
+    def _screen_ints(self, count, optional=0):
+        """Parses count comma-separated whole numbers, the last `optional` of which may be left out."""
+        values = []
+        for n in range(count):
+            if n > 0:
+                if n >= count - optional and not (self._current_token() and self._current_token()[0] == 'COMMA'):
+                    break
+                self._expect('COMMA')
+            if (n >= count - optional or (n == 0 and optional == count - 1 and count > 2)) and \
+                    self._current_token() and self._current_token()[0] in ('COMMA', 'NEWLINE', 'COLON'):
+                values.append(None)     # COLOR , 1 leaves the foreground as it is
+                continue
+            values.append(int(self._parse_expression()))
+        return values + [None] * (count - len(values))
+
+    def _parse_screen_statement(self):
+        word = self._expect('ID')[1].upper()
+        try:
+            if word == 'CLS':
+                SCREEN.cls()
+            elif word == 'LOCATE':
+                row, col = self._screen_ints(2, optional=1)
+                SCREEN.locate(row, col or 1)
+            elif word == 'COLOR':
+                SCREEN.color(*self._screen_ints(4, optional=3))
+            elif word == 'BOX':
+                r1, c1, r2, c2 = self._screen_ints(4)
+                title, double = '', False
+                if self._current_token() and self._current_token()[0] == 'COMMA':
+                    self._next_token()
+                    title = self._to_string(self._parse_expression())
+                if self._current_token() and str(self._current_token()[1]).upper() == 'DOUBLE':
+                    self._next_token()
+                    double = True
+                SCREEN.box(r1, c1, r2, c2, title, double)
+            elif word == 'READ':
+                self._run_read()
+            elif word == 'BROWSE':
+                self._parse_browse_statement()
+        except ScreenError as e:
+            self._error(str(e))
+
+    def _parse_at_statement(self):
+        """@ row, col [SAY expr [PICTURE mask$]] [GET var [PICTURE mask$] [VALID condition]]"""
+        self._expect('AT_SYM')
+        row, col = self._screen_ints(2)
+
+        def keyword(word):
+            tok = self._current_token()
+            if tok and tok[0] not in ('STRING', 'NUMBER') and str(tok[1]).upper() == word:
+                self._next_token()
+                return True
+            return False
+
+        if keyword('SAY'):
+            value = self._parse_expression()
+            if keyword('PICTURE'):
+                text = Formatter.format(self._to_string(self._parse_expression()), [value])
+            else:
+                text = self._to_string(value)
+            SCREEN.say(row, col, text)
+            col += len(text)
+        if keyword('GET'):
+            var_name = self._expect('ID')[1]
+            value = self._get_variable_value(var_name, auto_create=True)
+            if isinstance(value, (list, dict)):
+                self._error(f"GET {var_name}: only simple variables can be edited.")
+            numeric = not var_name.endswith('$') and isinstance(value, (int, float))
+            picture = self._to_string(self._parse_expression()) if keyword('PICTURE') else None
+            valid = None
+            if keyword('VALID'):
+                # Remember where the condition is; READ evaluates it when the field is left
+                valid = (self.tokens, self.token_index)
+                while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+                    self._next_token()
+            try:
+                SCREEN.add_get(row, col, var_name, value, picture, valid, numeric)
+            except ScreenError as e:
+                self._error(str(e))
+        elif not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
+            self._error("Expected SAY or GET after @ row, col")
+        if not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
+            self._error("Unexpected text after the @ statement")
+
+    def _run_read(self):
+        def assign(name, value):
+            self.variables[name] = value
+
+        def check_valid(field):
+            saved = (self.tokens, self.token_index)
+            self.tokens, self.token_index = field.valid
+            try:
+                return bool(self._parse_condition())
+            finally:
+                self.tokens, self.token_index = saved
+
+        def current_values(names):
+            return {n: self._get_variable_value(n, auto_create=True) for n in names}
+
+        SCREEN.read(assign, check_valid, current_values)
+
+    def _parse_browse_statement(self):
+        """BROWSE (SELECT ...) | BROWSE table$ [AT r1, c1, r2, c2] [TITLE t$] [INTO var]"""
+        tok, nxt = self._current_token(), self._peek_token()
+        if tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING':
+            sql = self._extract_sql_from_parens()
+        else:
+            source = self._to_string(self._parse_expression()).strip()
+            sql = source if re.match(r'(?i)(SELECT|WITH)\b', source) else f"SELECT * FROM {self._quote_identifier(source)}"
+        area, title, into = None, '', None
+        while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+            tok = self._current_token()
+            word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
+            if word == 'AT':
+                self._next_token()
+                area = tuple(self._screen_ints(4))
+            elif word == 'TITLE':
+                self._next_token()
+                title = self._to_string(self._parse_expression())
+            elif tok[0] == 'INTO':
+                self._next_token()
+                into = self._expect('ID')[1]
+            else:
+                self._error(f"Unexpected '{tok[1]}' in BROWSE")
+        results = self._execute_sql(sql, is_query=True) or []
+        columns = [d[0] for d in self.db_cursor.description] if self.db_cursor.description else []
+        chosen = SCREEN.browse(columns, results, area, title)
+        if into:
+            record = {}
+            if chosen >= 0:
+                for i, cell in enumerate(results[chosen]):
+                    value = "" if cell is None else cell
+                    record[str(i + 1)] = value
+                    if i < len(columns):
+                        record[columns[i].upper()] = value
+            self.variables[into] = record
 
     def _parse_bell_statement(self):
         """Parses and executes a BELL statement."""
@@ -4066,7 +4278,20 @@ class Interpreter:
     def _execute_function(self, name, args):
         name = name.upper()
         args = ["" if a is None else a for a in args]   # a SQL NULL argument is ""
-        if name == 'RND':
+        if name == 'INKEY$':
+            if len(args) > 1: self._error("INKEY$ takes 0 or 1 arguments.")
+            return SCREEN.inkey(float(args[0]) if args else None)
+        elif name == 'LASTKEY$':
+            if args: self._error("LASTKEY$ takes no arguments.")
+            return SCREEN.last_key
+        elif name == 'MENU':
+            if len(args) < 3: self._error("MENU requires row, col and at least one item (or an array of items).")
+            items = args[2] if len(args) == 3 and isinstance(args[2], list) else args[2:]
+            try:
+                return float(SCREEN.menu(int(args[0]), int(args[1]), items))
+            except ScreenError as e:
+                self._error(str(e))
+        elif name == 'RND':
             if not args: return random.random()
             if len(args) == 1: max_val = int(args[0]); return float(random.randint(1, max_val)) if max_val >= 1 else self._error("RND arg must be >= 1")
             self._error("RND takes 0 or 1 arguments.")
@@ -4909,7 +5134,7 @@ class Interpreter:
             
             var_name = actual_var_name
             
-            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                 self._next_token(); 
                 return self._call_builtin(var_name, [])
             
@@ -6183,6 +6408,7 @@ class Interpreter:
             else:
                 self._error("Expected ; or , after the INPUT prompt")
         var_name = self._expect('ID')[1]
+        SCREEN.keys.raw_off()   # INPUT needs the terminal's normal line editing
         while True:
             user_input = input(prompt)
             if var_name.endswith('$'):
@@ -7582,7 +7808,7 @@ class Interpreter:
             else:
                 # Use Token Type if it's a Keyword, or Token Value if it's an ID
                 # e.g. "LOAD" -> topic="LOAD", "ENGINE" (ID) -> topic="ENGINE"
-                topic = token[1].upper() if token[0] == 'ID' else token[0]
+                topic = token[1].upper() if token[0] in ('ID', 'AT_SYM') else token[0]
                 self._next_token()
                 
                 # 2. Look for Sub-Topic (2nd word)

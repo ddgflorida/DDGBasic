@@ -10,10 +10,10 @@ Where the code and the older documents (`README.md`, the original `docs/DbBasicC
 |---|---------|--------|
 | 1 | [Language Fundamentals](01-language-fundamentals.md) | Running programs, source format, comments, `INCLUDE`, line continuation, `ECHO`, the lexer, data types, variables, `LET`, `DIM`/`REDIM`, arrays, hashes, array statements (`PUSH`, `POP`, `SHIFT`, `UNSHIFT`, `SPLICE`, `REVERSE`, `SORT`), operators, truth values, case sensitivity |
 | 2 | [Control Flow, Procedures & Program Control](02-control-flow-and-procedures.md) | `IF`, `FOR`/`NEXT`, the `FOR ... IN` family, `FOR EACH`, `WHILE`, `DO`/`LOOP`, `EXIT`, labels, `GOTO`, `GOSUB`, `FUNCTION`, functions as arguments, error handling (`ON ERROR`, `RESUME`, `ERROR`), `END`/`RUN`/`CHAIN`/`EVAL`/`EXECUTE`/`CLEAR`, debugging, command line, REPL and `HELP` |
-| 3 | [Built-in Functions](03-built-in-functions.md) | All 124 built-in functions with an alphabetical index, `FORMAT$` masks, `FORMATDATE$` tokens, and the 15 extra functions available inside SQL queries |
+| 3 | [Built-in Functions](03-built-in-functions.md) | All 127 built-in functions with an alphabetical index, `FORMAT$` masks, `FORMATDATE$` tokens, and the 15 extra functions available inside SQL queries |
 | 4 | [Database, SQL & Output](04-database-sql-and-output.md) | `DATABASE`, embedded SQL, bind variables, subqueries, `FOR row IN (SELECT ...)`, `EXECUTE`, `SHOW`/`DESCRIBE`, SQL errors, every `SET` option, the output pipeline and its 11 formats, SQLite vs DuckDB, `PRINT`, `PRINT USING`, `WRITE` |
 | 5 | [Data Loading, Conversion & Analysis](05-data-loading-and-analysis.md) | `LOAD` (all 9 formats, destination modes, every `OPTIONS` key, `fields=`, transform/validate rules, `TRANSFORM`/`VALIDATE ... WITH`), `USING SCHEMA`, JSON/XML normalisation, file-to-file conversion, `PARSEJSON`, `FOR ... IN` file loops, `ANALYZE`, `UPGRADE` |
-| 6 | [Files, System, Network & User Interface](06-files-system-network-ui.md) | Sequential file I/O, `FILES`, file and directory statements, `ZIP`/`UNZIP`/`UNPACK`, `SHELL`, `BROWSER`, `BELL`, `INPUT`, `FETCH`, `SET EMAIL`/`EMAIL`, TUI forms (`FORM`, `OPENFORM`, `GRIDEDIT`) |
+| 6 | [Files, System, Network & User Interface](06-files-system-network-ui.md) | Sequential file I/O, `FILES`, file and directory statements, `ZIP`/`UNZIP`/`UNPACK`, `SHELL`, `BROWSER`, `BELL`, `INPUT`, `FETCH`, `SET EMAIL`/`EMAIL`, 1990s-style text screens (`CLS`, `LOCATE`, `COLOR`, `BOX`, `@ SAY/GET`, `READ`, `MENU`, `BROWSE`, `INKEY$`), TUI forms (`FORM`, `OPENFORM`, `GRIDEDIT`) |
 
 ## Quick start
 

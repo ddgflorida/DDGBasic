@@ -1,0 +1,559 @@
+"""
+Text-mode screen support for DbBasic, in the style of 1990s BASIC and xBase:
+cursor positioning, colours, boxes, @ SAY/GET entry fields edited with READ,
+light-bar menus and a scrolling query browser.
+
+Everything is drawn with ANSI escape sequences written to stdout, so PRINT
+keeps working in between. Keys are read one at a time from the terminal
+(cbreak mode on macOS/Linux, msvcrt on Windows). When stdin is not a
+terminal, keys are read from it as a stream, so scripts can be tested with
+scripted keystrokes.
+
+Rows and columns are 1-based: (1, 1) is the top-left corner, as in LOCATE.
+"""
+import atexit
+import os
+import re
+import shutil
+import sys
+import time
+
+# QBasic colour numbers 0-15 -> ANSI colour (0-7); 8-15 are the bright versions
+_ANSI = [0, 4, 2, 6, 1, 5, 3, 7]
+
+# Key names returned for keys that are not characters
+_CSI_KEYS = {
+    'A': 'UP', 'B': 'DOWN', 'C': 'RIGHT', 'D': 'LEFT', 'H': 'HOME', 'F': 'END', 'Z': 'BTAB',
+    '1~': 'HOME', '7~': 'HOME', '4~': 'END', '8~': 'END', '2~': 'INS', '3~': 'DEL',
+    '5~': 'PGUP', '6~': 'PGDN',
+    '11~': 'F1', '12~': 'F2', '13~': 'F3', '14~': 'F4', '15~': 'F5', '17~': 'F6',
+    '18~': 'F7', '19~': 'F8', '20~': 'F9', '21~': 'F10', '23~': 'F11', '24~': 'F12',
+}
+_SS3_KEYS = {'P': 'F1', 'Q': 'F2', 'R': 'F3', 'S': 'F4', 'A': 'UP', 'B': 'DOWN',
+             'C': 'RIGHT', 'D': 'LEFT', 'H': 'HOME', 'F': 'END'}
+_WIN_KEYS = {'H': 'UP', 'P': 'DOWN', 'K': 'LEFT', 'M': 'RIGHT', 'G': 'HOME', 'O': 'END',
+             'R': 'INS', 'S': 'DEL', 'I': 'PGUP', 'Q': 'PGDN', '\x0f': 'BTAB',
+             ';': 'F1', '<': 'F2', '=': 'F3', '>': 'F4', '?': 'F5', '@': 'F6',
+             'A': 'F7', 'B': 'F8', 'C': 'F9', 'D': 'F10', '\x85': 'F11', '\x86': 'F12'}
+
+ENTER, ESC, TAB, BACKSPACE = '\r', '\x1b', '\t', '\x08'
+
+
+class ScreenError(Exception):
+    pass
+
+
+class KeyReader:
+    """Reads single keys. Characters come back as themselves (Enter is CHR$(13),
+    Esc CHR$(27), Tab CHR$(9), Backspace CHR$(8)); other keys as names such as
+    'UP', 'PGDN' or 'F1'."""
+
+    def __init__(self):
+        self.pending = []
+        self.is_tty = sys.stdin.isatty()
+        self.windows = os.name == 'nt'
+        self._saved_mode = None
+
+    # --- terminal mode (macOS/Linux) -----------------------------------
+    def raw_on(self):
+        """Stop the terminal echoing and buffering keys until raw_off()."""
+        if self.is_tty and not self.windows and self._saved_mode is None:
+            import termios
+            fd = sys.stdin.fileno()
+            self._saved_mode = termios.tcgetattr(fd)
+            mode = termios.tcgetattr(fd)
+            mode[3] &= ~(termios.ECHO | termios.ICANON)     # no echo, a key at a time
+            mode[0] &= ~termios.IXON                        # Ctrl-S / Ctrl-Q reach the program
+            mode[6][termios.VMIN], mode[6][termios.VTIME] = 1, 0
+            # Let Ctrl-Y, Ctrl-V and Ctrl-O through (on macOS Ctrl-Y would suspend the program).
+            # Ctrl-C still stops it.
+            try:
+                disabled = os.fpathconf(fd, 'PC_VDISABLE')
+            except (OSError, ValueError):
+                disabled = 0
+            slots = [getattr(termios, n) for n in ('VDSUSP', 'VLNEXT', 'VDISCARD') if hasattr(termios, n)]
+            if sys.platform == 'darwin' and not hasattr(termios, 'VDSUSP'):
+                slots.append(11)                            # VDSUSP in <sys/termios.h>
+            for slot in slots:
+                mode[6][slot] = bytes([disabled]) if isinstance(mode[6][slot], bytes) else disabled
+            termios.tcsetattr(fd, termios.TCSANOW, mode)    # TCSAFLUSH would drop keys typed ahead
+
+    def raw_off(self):
+        if self._saved_mode is not None:
+            import termios
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._saved_mode)
+            self._saved_mode = None
+
+    # --- reading -------------------------------------------------------
+    def _read_char(self, timeout=None):
+        """One character, or None when the timeout passes or input has ended."""
+        if self.pending:
+            return self.pending.pop(0)
+        if not self.is_tty:
+            ch = sys.stdin.read(1)
+            return ch or None
+        if self.windows:
+            import msvcrt
+            if timeout is not None:
+                deadline = time.time() + timeout
+                while not msvcrt.kbhit():
+                    if time.time() >= deadline:
+                        return None
+                    time.sleep(0.01)
+            return msvcrt.getwch()
+        import select
+        self.raw_on()
+        fd = sys.stdin.fileno()
+        ready, _, _ = select.select([fd], [], [], timeout)
+        if not ready:
+            return None
+        first = os.read(fd, 1)
+        if not first:
+            return None
+        # Complete a UTF-8 character
+        extra = 0
+        if first[0] >= 0xF0: extra = 3
+        elif first[0] >= 0xE0: extra = 2
+        elif first[0] >= 0xC0: extra = 1
+        data = first + (os.read(fd, extra) if extra else b'')
+        return data.decode('utf-8', errors='replace')
+
+    def read_key(self, timeout=None):
+        """The next key, waiting up to timeout seconds (None waits forever).
+        Returns '' if no key arrives in time, or None when input has ended."""
+        ch = self._read_char(timeout)
+        if ch is None:
+            return '' if (timeout is not None and self.is_tty) else None
+        if self.windows and self.is_tty and ch in ('\x00', '\xe0'):
+            return _WIN_KEYS.get(self._read_char() or '', '')
+        if ch == '\x1b':
+            nxt = self._read_char(0.05)
+            if nxt == '[':
+                seq = ''
+                while True:
+                    c = self._read_char(0.05)
+                    if c is None:
+                        break
+                    seq += c
+                    if '@' <= c <= '~':
+                        break
+                return _CSI_KEYS.get(seq, '')
+            if nxt == 'O':
+                return _SS3_KEYS.get(self._read_char(0.05) or '', '')
+            if nxt is not None:
+                self.pending.insert(0, nxt)
+            return ESC
+        if ch in ('\n', '\r'):
+            return ENTER
+        if ch in ('\x7f', '\x08'):
+            return BACKSPACE
+        return ch
+
+
+class Field:
+    """One GET entry field."""
+
+    def __init__(self, row, col, var_name, value, picture, valid, numeric):
+        self.row, self.col = row, col
+        self.var_name, self.valid = var_name, valid
+        self.numeric = numeric
+        self.upper = False
+        width = None
+        template = picture or ''
+        if template.startswith('@'):
+            funcs, _, template = template[1:].partition(' ')
+            funcs = funcs.upper()
+            self.upper = '!' in funcs
+            m = re.search(r'S(\d+)', funcs)
+            if m:
+                width = int(m.group(1))
+        self.template = '' if numeric else template
+        self.mask = template if numeric else ''
+        if self.template:
+            width = len(self.template)
+        elif width is None:
+            width = len(template) if (numeric and template) else (10 if numeric else max(len(value), 20))
+        self.width = width
+        self.buffer = self._initial_buffer(value)
+
+    def _editable(self, i):
+        return not self.template or self.template[i] in '9#ANX!'
+
+    def _accepts(self, i, ch):
+        if self.numeric:
+            return ch.isdigit() or ch in '.-+,'
+        if not self.template:
+            return ch.isprintable()
+        m = self.template[i]
+        if m == '9': return ch.isdigit()
+        if m == '#': return ch.isdigit() or ch in ' +-'
+        if m == 'A': return ch.isalpha()
+        if m == 'N': return ch.isalnum()
+        return ch.isprintable()
+
+    def _initial_buffer(self, value):
+        if self.numeric:
+            text = format_number(value)
+            return list(text[:self.width].ljust(self.width))
+        text = str(value)
+        if not self.template:
+            return list(text[:self.width].ljust(self.width))
+        if len(text) == len(self.template):
+            return list(text)
+        chars = iter(c for c in text)
+        return [next(chars, ' ') if self._editable(i) else self.template[i] for i in range(self.width)]
+
+    def text(self):
+        """The field's value as it should be stored."""
+        raw = ''.join(self.buffer)
+        if self.template and all(raw[i] == ' ' for i in range(self.width) if self._editable(i)):
+            return ''
+        return raw.rstrip()
+
+    def value(self):
+        """The typed value, converted for a numeric field. Raises ValueError."""
+        text = self.text()
+        if not self.numeric:
+            return text
+        text = text.replace(',', '').strip()
+        return float(text) if text else 0.0
+
+    def first_pos(self):
+        return next((i for i in range(self.width) if self._editable(i)), 0)
+
+    def _step(self, pos, direction):
+        i = pos + direction
+        while 0 <= i < self.width and not self._editable(i):
+            i += direction
+        return i if 0 <= i < self.width else pos
+
+    def edit_key(self, key, pos, insert):
+        """Applies an editing key; returns the new cursor position."""
+        if key == 'LEFT':
+            return self._step(pos, -1)
+        if key == 'RIGHT':
+            return self._step(pos, 1)
+        if key == 'HOME':
+            return self.first_pos()
+        if key == 'END':
+            end = len(''.join(self.buffer).rstrip())
+            return min(end, self.width - 1)
+        if key == '\x19':                      # Ctrl-Y clears the field
+            self.buffer = [' ' if self._editable(i) else self.template[i] for i in range(self.width)]
+            return self.first_pos()
+        if key == BACKSPACE:
+            prev = self._step(pos, -1)
+            if prev == pos and (pos == self.first_pos()):
+                return pos
+            pos = prev
+            key = 'DEL'
+        if key == 'DEL':
+            if self.template:
+                self.buffer[pos] = ' '
+            else:
+                del self.buffer[pos]
+                self.buffer.append(' ')
+            return pos
+        if len(key) == 1 and key.isprintable():
+            if not self._accepts(pos, key):
+                bell()
+                return pos
+            if self.upper or (self.template and self.template[pos] == '!'):
+                key = key.upper()
+            if insert and not self.template:
+                if self.buffer[-1] != ' ':
+                    bell()
+                    return pos
+                self.buffer.insert(pos, key)
+                self.buffer.pop()
+            else:
+                self.buffer[pos] = key
+            return self._step(pos, 1) if pos < self.width - 1 else pos
+        return pos
+
+
+def format_number(value):
+    """A number as PRINT shows it, without the leading space."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return str(int(f)) if f == int(f) and abs(f) < 1e15 else repr(f)
+
+
+def bell():
+    sys.stdout.write('\a')
+    sys.stdout.flush()
+
+
+class Screen:
+    def __init__(self):
+        self.keys = KeyReader()
+        self.fg, self.bg = 7, 0
+        self.field_fg, self.field_bg = 0, 7
+        self.gets = []
+        self.last_key = ''
+        self.used = False
+
+    # --- output helpers ------------------------------------------------
+    def _activate(self):
+        if self.used:
+            return
+        self.used = True
+        if os.name == 'nt':
+            try:   # let the Windows console interpret ANSI sequences
+                import ctypes
+                k32 = ctypes.windll.kernel32
+                handle = k32.GetStdHandle(-11)
+                mode = ctypes.c_uint32()
+                if k32.GetConsoleMode(handle, ctypes.byref(mode)):
+                    k32.SetConsoleMode(handle, mode.value | 0x0004)
+            except Exception:
+                pass
+        atexit.register(self.restore)
+
+    def restore(self):
+        """Puts the terminal back as it was: normal colours, cursor shown, keys echoed."""
+        self.keys.raw_off()
+        if self.used:
+            sys.stdout.write('\x1b[0m\x1b[?25h')
+            sys.stdout.flush()
+
+    def _w(self, text):
+        self._activate()
+        sys.stdout.write(text)
+        sys.stdout.flush()
+
+    @staticmethod
+    def _sgr(fg, bg):
+        fg_code = (90 if fg >= 8 else 30) + _ANSI[fg % 8]
+        bg_code = (100 if bg >= 8 else 40) + _ANSI[bg % 8]
+        return f'\x1b[0;{fg_code};{bg_code}m'
+
+    def _normal(self):
+        return self._sgr(self.fg, self.bg)
+
+    def _field_colour(self):
+        return self._sgr(self.field_fg, self.field_bg)
+
+    @staticmethod
+    def size():
+        cols, rows = shutil.get_terminal_size((80, 24))
+        return rows, cols
+
+    # --- statements ----------------------------------------------------
+    def color(self, fg=None, bg=None, field_fg=None, field_bg=None):
+        for v in (fg, bg, field_fg, field_bg):
+            if v is not None and not 0 <= v <= 15:
+                raise ScreenError("COLOR values must be 0 to 15.")
+        if fg is not None: self.fg = fg
+        if bg is not None: self.bg = bg
+        if field_fg is not None: self.field_fg = field_fg
+        if field_bg is not None: self.field_bg = field_bg
+        self._w(self._normal())
+
+    def cls(self):
+        self.gets = []
+        self._w(self._normal() + '\x1b[2J\x1b[H')
+
+    def locate(self, row, col):
+        self._w(f'\x1b[{max(1, row)};{max(1, col)}H')
+
+    def say(self, row, col, text):
+        self._w(f'\x1b[{row};{col}H' + self._normal() + text)
+
+    def box(self, r1, c1, r2, c2, title='', double=False):
+        if r2 - r1 < 1 or c2 - c1 < 1:
+            raise ScreenError("BOX needs a bottom-right corner below and to the right of the top-left corner.")
+        tl, tr, bl, br, h, v = ('╔', '╗', '╚', '╝', '═', '║') if double else ('┌', '┐', '└', '┘', '─', '│')
+        inner = c2 - c1 - 1
+        top = h * inner
+        if title:
+            label = f' {title} '[:inner]
+            start = (inner - len(label)) // 2
+            top = top[:start] + label + top[start + len(label):]
+        out = [self._normal(), f'\x1b[{r1};{c1}H', tl, top, tr]
+        for r in range(r1 + 1, r2):
+            out.append(f'\x1b[{r};{c1}H{v}{" " * inner}{v}')
+        out.append(f'\x1b[{r2};{c1}H{bl}{h * inner}{br}')
+        self._w(''.join(out))
+
+    # --- GET / READ ----------------------------------------------------
+    def add_get(self, row, col, var_name, value, picture, valid, numeric):
+        field = Field(row, col, var_name, value, picture, valid, numeric)
+        self.gets.append(field)
+        self._draw_field(field)
+        return field
+
+    def _draw_field(self, field, cursor=None):
+        out = f'\x1b[{field.row};{field.col}H' + self._field_colour() + ''.join(field.buffer)
+        if cursor is not None:
+            out += f'\x1b[{field.row};{field.col + cursor}H'
+        self._w(out + ('' if cursor is not None else self._normal()))
+
+    def read(self, assign, check_valid, current_values):
+        """Edits the pending GET fields. assign(name, value) stores a value and
+        check_valid(field) evaluates its VALID condition. Esc puts back the
+        values the variables had when READ started. Returns the key that ended it."""
+        fields, self.gets = self.gets, []
+        if not fields:
+            return ''
+        saved = current_values([f.var_name for f in fields])
+        index, insert = 0, True
+        pos = fields[0].first_pos()
+        fresh = True        # the first key typed into a numeric field replaces its value
+        self._w('\x1b[?25h')
+        try:
+            while True:
+                field = fields[index]
+                self._draw_field(field, pos)
+                key = self.keys.read_key()
+                if key is None:            # input ended: give up as if Esc was pressed
+                    key = ESC
+                self.last_key = key
+                if key == ESC:
+                    for name, value in saved.items():
+                        assign(name, value)
+                    for f in fields:
+                        f.buffer = f._initial_buffer(saved[f.var_name])
+                        self._draw_field(f)
+                    return key
+                if key in (ENTER, TAB, 'DOWN', 'UP', 'BTAB', 'PGDN', 'PGUP', '\x17'):
+                    try:
+                        assign(field.var_name, field.value())
+                    except ValueError:
+                        bell()
+                        continue
+                    if field.valid is not None and not check_valid(field):
+                        bell()
+                        continue
+                    self._draw_field(field)
+                    if key in ('PGDN', 'PGUP', '\x17') or (key in (ENTER, TAB, 'DOWN') and index == len(fields) - 1):
+                        return key
+                    index = index - 1 if key in ('UP', 'BTAB') else index + 1
+                    index = max(0, index)
+                    pos = fields[index].first_pos()
+                    fresh = True
+                    continue
+                if key == 'INS':
+                    insert = not insert
+                    continue
+                if fresh and field.numeric and len(key) == 1 and key.isprintable():
+                    field.buffer = [' '] * field.width
+                    pos = 0
+                fresh = False
+                pos = field.edit_key(key, pos, insert)
+        finally:
+            self._w(self._normal())
+
+    # --- MENU ----------------------------------------------------------
+    def menu(self, row, col, items):
+        """A boxed light-bar menu. Returns the chosen item number (1-based), or 0 for Esc."""
+        if not items:
+            raise ScreenError("MENU needs at least one item.")
+        items = [str(i) for i in items]
+        width = max(len(i) for i in items) + 2
+        self.box(row, col, row + len(items) + 1, col + width + 1)
+        choice = 0
+        self._w('\x1b[?25l')
+        try:
+            while True:
+                for n, item in enumerate(items):
+                    colour = self._field_colour() if n == choice else self._normal()
+                    self._w(f'\x1b[{row + 1 + n};{col + 1}H{colour} {item.ljust(width - 1)}' + self._normal())
+                key = self.keys.read_key()
+                if key is None:
+                    key = ESC
+                self.last_key = key
+                if key == ESC:
+                    return 0
+                if key == ENTER:
+                    return choice + 1
+                if key in ('DOWN', 'RIGHT', TAB):
+                    choice = (choice + 1) % len(items)
+                elif key in ('UP', 'LEFT', 'BTAB'):
+                    choice = (choice - 1) % len(items)
+                elif key in ('HOME', 'PGUP'):
+                    choice = 0
+                elif key in ('END', 'PGDN'):
+                    choice = len(items) - 1
+                elif len(key) == 1:
+                    hits = [n for n, item in enumerate(items) if item.strip()[:1].upper() == key.upper()]
+                    if hits:
+                        return hits[0] + 1
+        finally:
+            self._w('\x1b[?25h')
+
+    # --- BROWSE --------------------------------------------------------
+    def browse(self, columns, rows, area=None, title=''):
+        """A scrolling, read-only grid. Returns the index of the chosen row, or -1 for Esc."""
+        screen_rows, screen_cols = self.size()
+        r1, c1, r2, c2 = area or (1, 1, screen_rows, screen_cols)
+        if r2 - r1 < 4 or c2 - c1 < 10:
+            raise ScreenError("BROWSE area is too small.")
+        cells = [['' if v is None else (format_number(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v))
+                  for v in row] for row in rows]
+        widths = [min(30, max([len(str(c))] + [len(r[i]) for r in cells])) for i, c in enumerate(columns)]
+        page = r2 - r1 - 4                     # rows between the header line and the status line
+        inner = c2 - c1 - 1
+        top, current, first_col = 0, 0, 0
+        self.box(r1, c1, r2, c2, title)
+        self._w('\x1b[?25l')
+
+        def line(values):
+            text = ' │ '.join(str(v)[:widths[i]].ljust(widths[i]) for i, v in enumerate(values) if i >= first_col)
+            return (' ' + text)[:inner].ljust(inner)
+
+        try:
+            while True:
+                out = [f'\x1b[{r1 + 1};{c1 + 1}H' + self._normal() + line(columns),
+                       f'\x1b[{r1 + 2};{c1 + 1}H' + ('─' * inner)]
+                for n in range(page):
+                    i = top + n
+                    colour = self._field_colour() if i == current else self._normal()
+                    text = line(cells[i]) if i < len(cells) else ' ' * inner
+                    out.append(f'\x1b[{r1 + 3 + n};{c1 + 1}H{colour}{text}{self._normal()}')
+                status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns'
+                out.append(f'\x1b[{r2 - 1};{c1 + 1}H' + status[:inner].ljust(inner))
+                self._w(''.join(out))
+                key = self.keys.read_key()
+                if key is None:
+                    key = ESC
+                self.last_key = key
+                if key == ESC:
+                    return -1
+                if key == ENTER and cells:
+                    return current
+                if key == 'DOWN': current = min(current + 1, len(cells) - 1)
+                elif key == 'UP': current = max(current - 1, 0)
+                elif key == 'PGDN': current = min(current + page, len(cells) - 1)
+                elif key == 'PGUP': current = max(current - page, 0)
+                elif key == 'HOME': current = 0
+                elif key == 'END': current = len(cells) - 1
+                elif key == 'RIGHT': first_col = min(first_col + 1, len(columns) - 1)
+                elif key == 'LEFT': first_col = max(first_col - 1, 0)
+                current = max(current, 0)
+                if current < top: top = current
+                elif current >= top + page: top = current - page + 1
+        finally:
+            self._w('\x1b[?25h')
+
+    # --- INKEY$ --------------------------------------------------------
+    def inkey(self, wait=None):
+        """INKEY$: no argument returns a waiting key or ''. INKEY$(0) waits for a key;
+        INKEY$(n) waits up to n seconds."""
+        if wait is None:
+            timeout = 0
+        elif wait <= 0:
+            timeout = None
+        else:
+            timeout = wait
+        key = self.keys.read_key(timeout)
+        key = key or ''
+        if key:
+            self.last_key = key
+        return key
+
+
+# One screen per process, shared by RUN and CHAIN programs
+SCREEN = Screen()

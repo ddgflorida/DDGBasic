@@ -68,7 +68,18 @@ EXPECTED_EXIT = {
 # Keyboard input fed to scripts that use INPUT.
 STDIN = {
     'examples/errorhandling': 'nope.txt\n\n',   # file-not-found path, then quit
+    'examples/retro_contacts': ('\x1b[B\r'                          # Add a contact
+                                'hooli\t5552223333\tca\t500\r' ' '  # fill in the form; a key for "Saved"
+                                '\x1b[B\x1b[B\r' '\x1b[B\x1b[B\r'     # Edit: pick the 3rd row (HOOLI)
+                                '\t\t\t750\r' ' '                    # change the credit
+                                '\r' '\x1b'                         # Browse, then Esc
+                                'q'),                               # Quit by its first letter
     'tests/file_io_fixes': 'Ann\nabc\n42\n',    # a name, then a bad and a good number
+    'tests/screen': ('ann smith\t5551234567\t-5\r\x1912\r'   # READ, with a VALID failure
+                     'zzz\x1b'                               # READ cancelled with Esc
+                     '\x1b[B\r' 'q'                          # two MENUs
+                     '\x1b[B\x1b[B\r'                         # BROWSE
+                     'k'),                                    # INKEY$
 }
 
 

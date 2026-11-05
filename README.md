@@ -36,6 +36,9 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * **`SORT array WITH fn`:** Sort by a function-computed key — `SORT names WITH UCASE$ ASC` for case-insensitive sort, or use a UDF for composite/numeric/custom keys.
     * **Composition:** Pipelines like `REDUCE(MAP(FILTER(nums, is_even), square), add, 0)` work cleanly.
 
+* ### 1990s-Style Text Screens
+    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)`. No extra packages. See `examples/retro_contacts.bas`.
+
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
     * Full expressions allowed inside `${...}` — including UDF calls, hash lookups, arithmetic.
@@ -150,6 +153,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
+| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field for a variable (`GET`) with an optional `PICTURE` mask and `VALID` check. See `READ`. |
 | ANALYZE CSV             | Provides a detailed statistical report on a CSV file, including delimiter detection, header presence, and column data types. |
 | ANALYZE FIXED           | Analyzes a fixed-width text file, automatically guessing column breaks if not specified, and reports on the layout. |
 | ANALYZE JSON            | Analyzes a JSON file, reporting on its structure, record count, and the consistency of object keys. |
@@ -157,11 +161,15 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | ANALYZE TEXT            | Provides a statistical analysis of a plain text file, including character, word, and line counts, encoding, and newline style. |
 | ANALYZE XML             | Analyzes an XML file to determine its structure, infer the primary record tag, and list its fields. |
 | BELL                    | Emits an audible system beep sound. |
+| BOX                     | Draws a single- or double-line box with an optional title on the text screen. |
+| BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. |
 | BROWSER                 | Opens a specified URL in the system's default web browser. |
 | CHAIN                   | Transfers program execution to a different DbBasic script, optionally preserving variables. |
 | CHDIR                   | Changes the current working directory. |
 | CLEAR                   | Deletes all variables. User-defined functions stay defined. |
 | CLOSE                   | Closes a specific file handle or all open file handles. |
+| CLS                     | Clears the screen in the current colours. |
+| COLOR                   | Sets the text colours (0-15) and the colours of entry fields and menu bars. |
 | COPY ... AS             | Copies a source file to a destination file. |
 | DATABASE                | Manages the database connection, allowing you to open a file-based database or switch the database engine (SQLite/DuckDB). |
 | DESCRIBE                | Lists a table's columns and types. Use `SHOW CREATE TABLE` for the CREATE TABLE statement. |
@@ -188,6 +196,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | LET                     | Assigns a value to a variable (the LET keyword is optional). |
 | LINE INPUT              | Reads a single line of text from an open file into a variable. |
 | LOAD                    | Loads data from a file (CSV, JSON, JSONL, XML, HTML, FIXED, EXCEL, PARQUET, TEXT) into a database table. Supports first-class `TRANSFORM col WITH fn`, `VALIDATE col WITH fn`, `TRANSFORM ROW WITH fn`, `VALIDATE ROW WITH fn` clauses. |
+| LOCATE                  | Moves the cursor to a row and column. |
 | MKDIR                   | Creates a new directory. |
 | NAME ... AS             | Renames a file. |
 | ON ERROR GOTO           | Specifies a label to jump to when a runtime error occurs. |
@@ -195,6 +204,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | POP                     | Removes the last element from an array, optionally storing it in a variable. |
 | PRINT                   | Outputs text, variables, or expressions to the console or an open file. |
 | PUSH                    | Adds a new element to the end of an array. |
+| READ                    | Edits the pending `@ ... GET` fields; Esc restores the original values. |
 | READ FILE               | Reads the entire content of a text file into a single string variable. |
 | REDIM                   | Resizes a previously declared ARRAY. |
 | RESUME                  | Used within an error-handling routine to resume program execution at the statement after the one that caused the error. |
@@ -275,6 +285,7 @@ This document provides a quick reference to all available functions in the DbBas
 | HEX$(number)            | STRING      | Returns the hexadecimal representation of a number as a string. |
 | HTMLDECODE$(string$)    | STRING      | Decodes HTML entities back to characters. |
 | HTMLENCODE$(string$)    | STRING      | Encodes a string for safe inclusion in HTML. |
+| INKEY$ / INKEY$(seconds) | SCREEN     | Returns the key pressed ("" if none). INKEY$(0) waits for a key. Special keys come back as names such as UP or F1. |
 | INSTR([start_pos,] haystack$, needle$) | STRING | Finds the starting position of needle$ within haystack$. Returns 0 if not found. |
 | INSTRREV(haystack$, needle$, [start]) | STRING | Like INSTR but searches from the end. start limits where the search ends. |
 | INT(number)             | MATH        | Returns the integer portion of a number by rounding down (same as FLOOR). |
@@ -287,6 +298,7 @@ This document provides a quick reference to all available functions in the DbBas
 | ISLEAP(year)            | DATE/TIME   | Returns true (-1) if the year is a leap year, otherwise false (0). |
 | ISNUMERIC(string$)      | STRING      | Returns true (-1) if the string parses as a number, otherwise false (0). |
 | JSON_SERIALIZE$(variable, [indent], [options...]) | HASH/ARRAY | Converts a DbBasic HASH or ARRAY into a JSON formatted string. |
+| LASTKEY$                | SCREEN      | The key that ended the last READ, MENU or BROWSE. |
 | LCASE$(string$)         | STRING      | Converts a string to all lowercase characters. |
 | LEFT$(string$, length)  | STRING      | Returns the first length characters from the left of the string. |
 | LEN(value)              | STRING      | Returns the number of characters in the string representation of a value. |
@@ -294,6 +306,7 @@ This document provides a quick reference to all available functions in the DbBas
 | LTRIM$(string$)         | STRING      | Removes whitespace from the beginning (left side) of a string. |
 | MAP(array, fn)          | ARRAY/HOF   | Returns a new array with each element passed through fn (a UDF or built-in name). |
 | MAX(num1, num2, ...)    | MATH        | Returns the largest number from a list of arguments. |
+| MENU(row, col, item$, ...) | SCREEN   | Shows a light-bar menu and returns the chosen item number (0 for Esc). |
 | MID$(string$, start_pos, [length]) | STRING | Returns a substring of a specified length starting from start_pos. |
 | MIN(num1, num2, ...)    | MATH        | Returns the smallest number from a list of arguments. |
 | MOD(number1, number2)   | MATH        | Returns the remainder of number1 divided by number2. |
