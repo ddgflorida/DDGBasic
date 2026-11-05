@@ -904,7 +904,9 @@ For a numeric field, a template only sets the width. The value is typed as a num
 | Ins | Switch between insert mode (the default) and overwrite mode. |
 | Ctrl-Y | Clear the field. |
 
-Each value is stored when you leave its field. The first key you type in a numeric field replaces the old number. Afterwards, `LASTKEY$` holds the key that ended `READ`, so `IF LASTKEY$ = CHR$(27)` tells you the user cancelled.
+Each value is stored when you leave its field. The first key you type in a numeric field replaces the old number.
+
+**Auto-advance.** `SET AUTOADVANCE ON` makes `READ` behave like Clipper with `SET CONFIRM OFF`: typing a character into a field's last position moves on as if Enter had been pressed. A field with a template such as `"99999"` or `"(999) 999-9999"` is then filled without pressing Tab, and filling the last field ends `READ` (`LASTKEY$` is `CHR$(13)`). `VALID` still applies: a refused value keeps the cursor in the field. `SET AUTOADVANCE OFF`, the default, keeps the cursor in a full field until Enter, Tab or an arrow key. The setting also applies to `EDIT RECORD`, but not to a cell being edited in `BROWSE`. Afterwards, `LASTKEY$` holds the key that ended `READ`, so `IF LASTKEY$ = CHR$(27)` tells you the user cancelled.
 
 ### MENU()
 

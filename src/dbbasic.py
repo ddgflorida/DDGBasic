@@ -328,7 +328,7 @@ class HelpRegistry:
         },
         "READ": {
             "syntax": 'READ',
-            "desc": "Edits the GET fields in order. Tab/Enter/Down go to the next field, Shift-Tab/Up to the previous one, PgDn or Ctrl-W finish, Ctrl-Y clears a field, Ins toggles insert mode. Enter on the last field finishes. Esc puts back the values the variables had and ends READ; check LASTKEY$ = CHR$(27).",
+            "desc": "Edits the GET fields in order. Tab/Enter/Down go to the next field, Shift-Tab/Up to the previous one, PgDn or Ctrl-W finish, Ctrl-Y clears a field, Ins toggles insert mode. Enter on the last field finishes. Esc puts back the values the variables had and ends READ; check LASTKEY$ = CHR$(27). With SET AUTOADVANCE ON, filling a field's last position moves to the next field.",
             "examples": ['READ\nIF LASTKEY$ = CHR$(27) THEN GOTO cancelled']
         },
         "MENU": {
@@ -807,9 +807,9 @@ class HelpRegistry:
         
         # --- CONFIGURATION (SET) ---
         "SET": {
-            "syntax": 'SET [OUTPUT|EMAIL|SQL_FATAL_ERRORS|HASH_KEYS] ...',
+            "syntax": 'SET [OUTPUT|EMAIL|NULL_HANDLING|SQL_FATAL_ERRORS|HASH_KEYS|AUTOADVANCE] ...',
             "desc": "Configures system behavior. Type HELP SET OUTPUT or HELP SET EMAIL for details.",
-            "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE']
+            "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE', 'SET AUTOADVANCE ON']
         },
         "SET OUTPUT": {
             "syntax": 'SET OUTPUT [CONSOLE|FILE "path"|OFF] FORMAT fmt [OPTIONS "..."]',
@@ -5717,6 +5717,13 @@ class Interpreter:
                 g_null_handling_default = option
             else:
                 g_null_handling_settings[table_column_str.upper()] = option
+        elif token[0] == 'ID' and token[1].upper() == 'AUTOADVANCE':
+            self._next_token()
+            setting_token = self._current_token()
+            if not setting_token or setting_token[0] != 'ID' or setting_token[1].upper() not in ['ON', 'OFF']:
+                self._error("Expected ON or OFF after SET AUTOADVANCE")
+            SCREEN.auto_advance = (setting_token[1].upper() == 'ON')
+            self._next_token()
         elif token[0] == 'ID' and token[1].upper() == 'SQL_FATAL_ERRORS':
             self._next_token()
             setting_token = self._current_token()
@@ -5801,7 +5808,7 @@ class Interpreter:
         else:
             option = token[1] if token and token[0] not in ('NEWLINE', 'COLON') else '(nothing)'
             self._error(f"Unknown SET option '{option}'. Expected OUTPUT, EMAIL, NULL_HANDLING, "
-                        "SQL_FATAL_ERRORS or HASH_KEYS.")
+                        "SQL_FATAL_ERRORS, HASH_KEYS or AUTOADVANCE.")
 
 
     def _handle_output(self, results, column_names):

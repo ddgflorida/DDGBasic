@@ -230,8 +230,13 @@ class Field:
             i += direction
         return i if 0 <= i < self.width else pos
 
+    def last_pos(self):
+        return next((i for i in range(self.width - 1, -1, -1) if self._editable(i)), self.width - 1)
+
     def edit_key(self, key, pos, insert):
-        """Applies an editing key; returns the new cursor position."""
+        """Applies an editing key; returns the new cursor position. Sets self.filled when
+        a character was typed into the field's last position (for SET AUTOADVANCE)."""
+        self.filled = False
         if key == 'LEFT':
             return self._step(pos, -1)
         if key == 'RIGHT':
@@ -271,6 +276,7 @@ class Field:
                 self.buffer.pop()
             else:
                 self.buffer[pos] = key
+            self.filled = pos == self.last_pos()
             return self._step(pos, 1) if pos < self.width - 1 else pos
         return pos
 
@@ -297,6 +303,7 @@ class Screen:
         self.gets = []
         self.last_key = ''
         self.used = False
+        self.auto_advance = False   # SET AUTOADVANCE ON: filling a field moves to the next one
         # A copy of what is on the screen, one (char, fg, bg) cell per position, so that
         # SAVESCREEN, MENU and BROWSE can put back what they cover (ANSI can't read it back)
         self.rows, self.cols = self.size()
@@ -546,6 +553,9 @@ class Screen:
                     pos = 0
                 fresh = False
                 pos = field.edit_key(key, pos, insert)
+                if self.auto_advance and getattr(field, 'filled', False):
+                    # The field is full: go on as if Enter had been pressed
+                    self.keys.pending.insert(0, ENTER)
         finally:
             self._w(self._normal())
 
