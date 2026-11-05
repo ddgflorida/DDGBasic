@@ -281,6 +281,19 @@ class Field:
         return pos
 
 
+class Button:
+    """A [ label ] button among the GET fields. READ ends when it is pressed."""
+    is_button = True
+
+    def __init__(self, row, col, label, cancel=False):
+        self.row, self.col, self.label, self.cancel = row, col, str(label), cancel
+        self.when = None
+        self.width = len(self.label) + 4
+
+    def first_pos(self):
+        return 0
+
+
 def format_number(value):
     """A number as PRINT shows it, without the leading space."""
     try:
@@ -304,6 +317,7 @@ class Screen:
         self.last_key = ''
         self.used = False
         self.auto_advance = False   # SET AUTOADVANCE ON: filling a field moves to the next one
+        self.last_button = ''       # BUTTON$: the label of the button that ended the last READ
         # A copy of what is on the screen, one (char, fg, bg) cell per position, so that
         # SAVESCREEN, MENU and BROWSE can put back what they cover (ANSI can't read it back)
         self.rows, self.cols = self.size()
@@ -497,6 +511,16 @@ class Screen:
         self._draw_field(field)
         return field
 
+    def add_button(self, row, col, label, cancel=False):
+        button = Button(row, col, label, cancel)
+        self.gets.append(button)
+        self._draw_button(button, False)
+        return button
+
+    def _draw_button(self, button, focused):
+        fg, bg = (self.field_fg, self.field_bg) if focused else (self.fg, self.bg)
+        self._w(self._put(button.row, button.col, f'[ {button.label} ]', fg, bg) + self._normal())
+
     def _draw_field(self, field, cursor=None):
         out = self._put(field.row, field.col, ''.join(field.buffer), self.field_fg, self.field_bg)
         if cursor is not None:
@@ -510,9 +534,18 @@ class Screen:
         (columns, rows) for a field with LOOKUP. Esc puts back the values the fields had
         when READ started. Returns the key that ended it."""
         fields, self.gets = self.gets, []
+        self.last_button = ''
         if not fields:
             return ''
-        saved = current_values(fields)
+        data_fields = [f for f in fields if not getattr(f, 'is_button', False)]
+        saved = current_values(data_fields)
+
+        def put_back():
+            """Esc or a CANCEL button: every field gets the value it had when READ started."""
+            for f, value in zip(data_fields, saved):
+                assign(f, value)
+                f.buffer = f._initial_buffer(value)
+                self._draw_field(f)
 
         def allowed(i):
             f = fields[i]
@@ -539,6 +572,38 @@ class Screen:
         try:
             while True:
                 field = fields[index]
+                if getattr(field, 'is_button', False):
+                    # A button: Enter or Space presses it; Tab, arrows and Shift-Tab move on
+                    self._w('\x1b[?25l')
+                    self._draw_button(field, True)
+                    key = self.keys.read_key()
+                    if key is None:
+                        key = ESC
+                    if message_under:
+                        self.restore_saved(message_under)
+                        message_under = None
+                    self.last_key = key
+                    self._draw_button(field, False)
+                    self._w('\x1b[?25h')
+                    if key == ESC or (key in (ENTER, ' ') and field.cancel):
+                        put_back()
+                        if key != ESC:
+                            self.last_button, self.last_key = field.label, ENTER
+                        return self.last_key
+                    if key in (ENTER, ' '):
+                        self.last_button, self.last_key = field.label, ENTER
+                        return ENTER
+                    if key in (TAB, 'DOWN', 'RIGHT'):
+                        nxt = step(index, 1)
+                        index = nxt if nxt is not None else step(-1, 1)   # wrap round to the first field
+                    elif key in ('BTAB', 'UP', 'LEFT'):
+                        nxt = step(index, -1)
+                        index = nxt if nxt is not None else index
+                    elif len(key) == 1 and key.isprintable():
+                        bell()
+                    pos = fields[index].first_pos()
+                    fresh = True
+                    continue
                 self._draw_field(field, pos)
                 key = self.keys.read_key()
                 if key is None:            # input ended: give up as if Esc was pressed
@@ -548,10 +613,7 @@ class Screen:
                     message_under = None
                 self.last_key = key
                 if key == ESC:
-                    for f, value in zip(fields, saved):
-                        assign(f, value)
-                        f.buffer = f._initial_buffer(value)
-                        self._draw_field(f)
+                    put_back()
                     return key
                 if key == 'F2' and getattr(field, 'lookup', None) is not None and lookup:
                     if self._pick(field, lookup) is not None:

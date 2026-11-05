@@ -154,6 +154,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
 | @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field (`GET`) for a variable, a hash field such as `rec.name`, or an array element, with optional `PICTURE`, `VALID ... MESSAGE`, `WHEN` and `LOOKUP (SELECT ...)` clauses. See `READ`. |
+| @ ... BUTTON            | Adds a `[ label ]` button to a form; pressing it ends `READ`, and `BUTTON$` returns its label (`CANCEL` buttons put the old values back). |
 | ANALYZE CSV             | Provides a detailed statistical report on a CSV file, including delimiter detection, header presence, and column data types. |
 | ANALYZE FIXED           | Analyzes a fixed-width text file, automatically guessing column breaks if not specified, and reports on the layout. |
 | ANALYZE JSON            | Analyzes a JSON file, reporting on its structure, record count, and the consistency of object keys. |
@@ -248,6 +249,7 @@ This document provides a quick reference to all available functions in the DbBas
 | ATN(number)             | MATH        | Returns the arctangent of a number in radians. |
 | ATAN2(y, x)             | MATH        | Returns the arctangent of y/x in radians. |
 | BASENAME$(path$)        | FILE        | Returns the filename portion of a path. |
+| BUTTON$                 | SCREEN      | The label of the button that ended the last `READ` ("" if none). |
 | CARDINAL$(number)       | STRING      | Returns the English cardinal words for a number (e.g. 12 → "twelve", 1234 → "one thousand two hundred thirty-four"). Negative numbers prefix "negative". Decimals are spelled digit-by-digit after "point". |
 | CEIL(number)            | MATH        | Rounds a number up to the nearest integer. |
 | CENTER$(string$, width, [pad_char$]) | STRING | Centers a string within a field of the given width, padded with pad_char$ (default space). |

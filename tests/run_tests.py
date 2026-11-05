@@ -65,7 +65,7 @@ EXPECTED_EXIT = {
 STDIN = {
     'examples/loadjson': '\x1b[C\x1b[C\x1b[B60\r\x1b',   # BROWSE EDIT: Gadget quantity -> 60
     'examples/errorhandling': 'nope.txt\n\n',   # file-not-found path, then quit
-    'examples/retro_contacts': ('ca' 'hooli\t5552223333\tzz\r\r-5\r\x19500\r' '\r'   # Contacts.Add: lookup, a refused credit, ALERT
+    'examples/retro_contacts': ('ca' 'hooli\t5552223333\tzz\r\r-5\r\x19500\r\r' '\r'   # Contacts.Add: lookup, a refused credit, [ Save ], ALERT
                                 'ce' '\x1b[B\x1b[B\r' '\t\t\t750\r'                 # Contacts.Edit: EDIT RECORD on HOOLI
                                 'cn' '\x1b[B\x1b[B\r' 'Met at expo\x17'              # Contacts.Notes: EDIT TEXT
                                 'cb' '\x1b' 'cd' '\x1b[B\r' 'y'                       # Browse; Delete GLOBEX (ALERT)
@@ -78,6 +78,7 @@ STDIN = {
     'tests/edit_record': ('\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'     # SQLite
                           '\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '2\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'),  # DuckDB
     'tests/auto_advance': 'ca01234\x1990210' '5551234567' 'xyz\tq\r',
+    'tests/form_buttons': '\x19new\r5\r\r' '\x19zzz\t\t\t\r' '\x19x\x1b' '\x19\rok\t\t\t\t\t\t ' '\x1b[C\r',
     'tests/form_helpers': ('\x19x\r\x19b\r' 'zz\r\x1b[B\x1b[B\r' '9999\r\x194000\r' '\rAnn\r'
                            '\r\x1bOQ\x1b[B\r\r\r' '\x1b[C\r' '\r' 'c' '\x1b' '\r'),
     'tests/menubar': ('\r\x1b[B\r' '\x1b[C\r\x1b[B\x1b[B\r' '\r\x1b[C\x1b[C\r' 'ca' '\r\x1b[A\r'

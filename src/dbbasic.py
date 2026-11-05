@@ -323,7 +323,7 @@ class HelpRegistry:
             "examples": ['BOX 2, 5, 10, 60, "Customer" DOUBLE']
         },
         "@": {
-            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [WHEN condition] [LOOKUP (SELECT ...)]]',
+            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [WHEN condition] [LOOKUP (SELECT ...)]]\n@ row, col BUTTON label$ [CANCEL]',
             "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left; MESSAGE text is shown on the bottom line when it fails. WHEN skips the field when false. LOOKUP gives a list of allowed values (first column): F2 opens it, and leaving with a value not in the list opens it too.",
             "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Email: " GET rec.email PICTURE "@S40"', '@ 7, 10 SAY "State: " GET state$ PICTURE "!!" LOOKUP (SELECT code, name FROM states)', '@ 8, 10 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000" WHEN type$ = "B"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 20, 1 SAY total PICTURE "$#,###.##"']
         },
@@ -381,6 +381,11 @@ class HelpRegistry:
             "syntax": 'INKEY$ | INKEY$(seconds)',
             "desc": "Returns the key pressed, or \"\" if none is waiting. INKEY$(0) waits for a key; INKEY$(n) waits up to n seconds. Keys come back as characters (Enter is CHR$(13), Esc CHR$(27), Tab CHR$(9)) or names: UP, DOWN, LEFT, RIGHT, HOME, END, PGUP, PGDN, INS, DEL, BTAB, F1-F12.",
             "examples": ['k$ = INKEY$(0)', 'IF INKEY$ = CHR$(27) THEN EXIT DO']
+        },
+        "BUTTON$": {
+            "syntax": 'BUTTON$',
+            "desc": "The label of the @ ... BUTTON that ended the last READ, or \"\" if READ ended another way (Esc, PgDn). A CANCEL button puts the fields' old values back but still returns its label.",
+            "examples": ['@ 10, 5 BUTTON "Save"\n@ 10, 15 BUTTON "Cancel" CANCEL\nREAD\nIF BUTTON$ = "Save" THEN GOSUB save']
         },
         "LASTKEY$": {
             "syntax": 'LASTKEY$',
@@ -2891,7 +2896,7 @@ class Interpreter:
         'HASH_VALUES', 'HEX$', 'HOUR', 'HTMLDECODE$', 'HTMLENCODE$', 'INSTR', 'INSTRREV',
         'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
         'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
-        'ALERT', 'INKEY$', 'LASTKEY$', 'MENU', 'MENUBAR$', 'SAVESCREEN',
+        'ALERT', 'BUTTON$', 'INKEY$', 'LASTKEY$', 'MENU', 'MENUBAR$', 'SAVESCREEN',
         'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
         'OCT$', 'ORDINAL$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
         'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
@@ -4104,6 +4109,14 @@ class Interpreter:
                 return True
             return False
 
+        if keyword('BUTTON'):
+            # @ row, col BUTTON label$ [CANCEL]: READ ends when it is pressed; BUTTON$ gives the label
+            label = self._to_string(self._parse_expression())
+            cancel = keyword('CANCEL')
+            if not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
+                self._error("Unexpected text after @ ... BUTTON; expected the label and optionally CANCEL")
+            SCREEN.add_button(row, col, label, cancel)
+            return
         if keyword('SAY'):
             value = self._parse_expression()
             if keyword('PICTURE'):
@@ -4890,6 +4903,9 @@ class Interpreter:
         if name == 'INKEY$':
             if len(args) > 1: self._error("INKEY$ takes 0 or 1 arguments.")
             return SCREEN.inkey(float(args[0]) if args else None)
+        elif name == 'BUTTON$':
+            if args: self._error("BUTTON$ takes no arguments.")
+            return SCREEN.last_button
         elif name == 'LASTKEY$':
             if args: self._error("LASTKEY$ takes no arguments.")
             return SCREEN.last_key
@@ -5768,7 +5784,7 @@ class Interpreter:
             
             var_name = actual_var_name
             
-            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$', 'SAVESCREEN'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$', 'SAVESCREEN', 'BUTTON$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                 self._next_token(); 
                 return self._call_builtin(var_name, [])
             

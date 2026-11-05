@@ -73,10 +73,12 @@ add_contact:
     @ 9, 15 SAY "Phone  : " GET c.phone PICTURE "(999) 999-9999"
     @ 10, 15 SAY "State  : " GET c.state PICTURE "!!" LOOKUP (SELECT code, name FROM states ORDER BY code)
     @ 11, 15 SAY "Credit : " GET c.credit VALID c.credit >= 0 AND c.credit <= 100000 MESSAGE "Credit must be 0 to 100,000"
-    @ 13, 15 SAY "Tab: next field   F2: list of states   Esc: cancel"
+    @ 13, 15 BUTTON "Save"
+    @ 13, 25 BUTTON "Cancel" CANCEL
+    @ 13, 39 SAY "F2: list of states"
     READ
     RESTSCREEN saved$
-    IF LASTKEY$ = CHR$(27) THEN RETURN
+    IF BUTTON$ <> "Save" THEN RETURN
     INSERT INTO contacts (name, phone, state, credit) VALUES (:c.name, :c.phone, :c.state, :c.credit);
     x = ALERT("Saved " & c.name)
     RETURN

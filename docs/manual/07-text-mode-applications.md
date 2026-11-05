@@ -14,7 +14,7 @@ Related material in other chapters:
 2. [The screen](#72-the-screen)
    * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen)
 3. [Entry fields](#73-entry-fields)
-   * [@ ... SAY ... GET](#--say--get) · [READ](#read)
+   * [@ ... SAY ... GET](#--say--get) · [READ](#read) · [Buttons](#buttons)
 4. [Menus and message boxes](#74-menus-and-message-boxes)
    * [MENUBAR$()](#menubar) · [MENU()](#menu) · [ALERT()](#alert)
 5. [Working with tables](#75-working-with-tables)
@@ -126,33 +126,35 @@ add_contact:
     @ 9, 15 SAY "Phone  : " GET c.phone PICTURE "(999) 999-9999"
     @ 10, 15 SAY "State  : " GET c.state PICTURE "!!" LOOKUP (SELECT code, name FROM states ORDER BY code)
     @ 11, 15 SAY "Credit : " GET c.credit VALID c.credit >= 0 AND c.credit <= 100000 MESSAGE "Credit must be 0 to 100,000"
-    @ 13, 15 SAY "Tab: next field   F2: list of states   Esc: cancel"
+    @ 13, 15 BUTTON "Save"
+    @ 13, 25 BUTTON "Cancel" CANCEL
+    @ 13, 39 SAY "F2: list of states"
     READ
     RESTSCREEN saved$
-    IF LASTKEY$ = CHR$(27) THEN RETURN
+    IF BUTTON$ <> "Save" THEN RETURN
     INSERT INTO contacts (name, phone, state, credit) VALUES (:c.name, :c.phone, :c.state, :c.credit);
     x = ALERT("Saved " & c.name)
     RETURN
 ```
 
 ```
-          ┌───────────────────── New contact ─────────────────────┐
-          │                                                       │
-          │  Name   : HOOLI                                       │
-          │  Phone  : (555) 222-3333                              │
-          │  State  : ZZ                                          │
-          │  Credit : ┌─────── Choose ───────┐                    │
-          │           │ code │ name          │                    │
-          │  Tab: next│──────────────────────│tes   Esc: cancel   │
-          │           │ CA   │ California    │                    │
-          └───────────│ FL   │ Florida       │────────────────────┘
-                      │ NY   │ New York      │
-                      │ TX   │ Texas         │
-                      │ 1 of 4   Enter=select│
-                      └──────────────────────┘
+║ │  ------┌───────────────────── New contact ─────────────────────┐         │ ║
+║ │  ACME C│                                                       │         │ ║
+║ │  GLOBEX│  Name   : HOOLI                                       │         │ ║
+║ │  INITEC│  Phone  : (555) 222-3333                              │         │ ║
+║ │        │  State  : ZZ                                          │         │ ║
+║ │        │  Credit : ┌─────── Choose ───────┐                    │         │ ║
+║ │        │           │ code │ name          │                    │         │ ║
+║ │        │  [ Save ] │──────────────────────│of states           │         │ ║
+║ │        │           │ CA   │ California    │                    │         │ ║
+║ │        └───────────│ FL   │ Florida       │────────────────────┘         │ ║
+║ │                    │ NY   │ New York      │                              │ ║
+║ │                    │ TX   │ Texas         │                              │ ║
+║ │                    │ 1 of 4   Enter=select│                              │ ║
+║ │                    └──────────────────────┘                              │ ║
 ```
 
-`SAVESCREEN` and `RESTSCREEN` put back what the form covered. `ALERT` shows a message box and waits for a key.
+`BUTTON` adds `[ Save ]` and `[ Cancel ]` after the fields: Enter on the last field moves onto them, and `BUTTON$` tells the program which was pressed (`CANCEL` makes a button put the old values back, like Esc). `SAVESCREEN` and `RESTSCREEN` put back what the form covered. `ALERT` shows a message box and waits for a key.
 
 **6. A form in one line.** When the layout doesn't matter, `EDIT RECORD` lays out one labelled field per column and saves the changes with an `UPDATE`:
 
@@ -375,6 +377,41 @@ A condition ends at the end of the statement or at the next clause word (`MESSAG
 Each value is stored when you leave its field. The first key you type in a numeric field replaces the old number.
 
 **Auto-advance.** `SET AUTOADVANCE ON` makes `READ` behave like Clipper with `SET CONFIRM OFF`: typing a character into a field's last position moves on as if Enter had been pressed. A field with a template such as `"99999"` or `"(999) 999-9999"` is then filled without pressing Tab, and filling the last field ends `READ` (`LASTKEY$` is `CHR$(13)`). `VALID` still applies: a refused value keeps the cursor in the field. `SET AUTOADVANCE OFF`, the default, keeps the cursor in a full field until Enter, Tab or an arrow key. Clipper's spelling also works, with the opposite sense: `SET CONFIRM OFF` is `SET AUTOADVANCE ON`, and `SET CONFIRM ON` is `SET AUTOADVANCE OFF`. The setting also applies to `EDIT RECORD`, but not to a cell being edited in `BROWSE`. Afterwards, `LASTKEY$` holds the key that ended `READ`, so `IF LASTKEY$ = CHR$(27)` tells you the user cancelled.
+
+### Buttons
+
+```
+@ row, col BUTTON label$ [CANCEL]
+```
+
+A button is drawn as `[ label ]` and takes its place among the `GET` fields, in the order the statements run. `READ` moves onto it like a field: Enter on the last field before it, Tab, or the arrows.
+
+| Key on a button | Action |
+|---|---|
+| Enter or Space | Press it. `READ` ends, `BUTTON$` returns the label and `LASTKEY$` is `CHR$(13)`. |
+| Tab, Right, Down | The next field or button. After the last one, back to the first field. |
+| Shift-Tab, Left, Up | The previous field or button. |
+| Esc | Cancel, as in a field. |
+
+A button marked `CANCEL` works like Esc: the fields get back the values they had when `READ` started. Its label is still returned by `BUTTON$`. Moving onto a button checks the field being left (its `VALID`), as moving to any field does. `BUTTON$` is `""` when `READ` ends without a button (Esc, PgDn, or Enter on a last field that has no button after it).
+
+```basic
+@ 3, 5 SAY "Name: " GET name$ PICTURE "@S20" VALID name$ <> "" MESSAGE "Name is required"
+@ 4, 5 SAY "Qty : " GET qty
+@ 6, 5 BUTTON "Save"
+@ 6, 15 BUTTON "Cancel" CANCEL
+READ
+IF BUTTON$ = "Save" THEN INSERT INTO items VALUES (:name$, :qty);
+```
+
+```
+    Name: new
+    Qty : 5
+
+    [ Save ]  [ Cancel ]
+```
+
+The button under the cursor is shown in the field colours.
 
 ---
 
