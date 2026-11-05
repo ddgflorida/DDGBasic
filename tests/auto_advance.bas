@@ -1,6 +1,7 @@
 REM SET AUTOADVANCE: filling a field moves to the next one, and filling the last field
 REM ends READ. VALID still applies. Keys come from the test runner. Failed checks raise errors.
-SET AUTOADVANCE ON
+REM SET CONFIRM OFF is the same as SET AUTOADVANCE ON
+SET CONFIRM OFF
 state$ = "" : zip$ = "" : phone$ = ""
 @ 2, 1 SAY "State: " GET state$ PICTURE "!!"
 @ 3, 1 SAY "Zip  : " GET zip$   PICTURE "99999" VALID LEFT$(zip$, 1) <> "0"
@@ -12,7 +13,8 @@ IF zip$ <> "90210" THEN ERROR 1, "zip: " & zip$
 IF phone$ <> "(555) 123-4567" THEN ERROR 1, "phone: " & phone$
 IF LASTKEY$ <> CHR$(13) THEN ERROR 1, "READ should end after the last field fills"
 
-REM With AUTOADVANCE OFF (the default) the cursor stays in a full field until Enter or Tab
+REM With AUTOADVANCE OFF (the default; Clipper's SET CONFIRM ON) the cursor stays in a
+REM full field until Enter or Tab
 SET AUTOADVANCE OFF
 a$ = "" : b$ = ""
 @ 6, 1 SAY "A: " GET a$ PICTURE "!!"
