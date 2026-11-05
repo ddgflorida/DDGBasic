@@ -589,28 +589,89 @@ class Screen:
             self._w('\x1b[?25h')
 
     # --- BROWSE --------------------------------------------------------
-    def browse(self, columns, rows, area=None, title=''):
-        """A scrolling, read-only grid. Returns the index of the chosen row, or -1 for Esc."""
+    def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=()):
+        """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
+
+        With save, the grid is editable: Left/Right move between cells, Enter (or typing)
+        edits the current cell, and save(row_index, col_index, value) stores the new value,
+        returning an error message or None. Columns in hidden are not shown; columns in
+        locked can't be edited. rows is updated in place with the saved values."""
         screen_rows, screen_cols = self.size()
         r1, c1, r2, c2 = area or (1, 1, screen_rows, screen_cols)
         if r2 - r1 < 4 or c2 - c1 < 10:
             raise ScreenError("BROWSE area is too small.")
-        cells = [['' if v is None else (format_number(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v))
-                  for v in row] for row in rows]
+        visible = [i for i in range(len(columns)) if i not in hidden]
+        if not visible:
+            raise ScreenError("BROWSE has no columns to show.")
+
+        def show(v):
+            if v is None:
+                return ''
+            return format_number(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)
+
+        cells = [[show(v) for v in row] for row in rows]
         widths = [min(30, max([len(str(c))] + [len(r[i]) for r in cells])) for i, c in enumerate(columns)]
         page = r2 - r1 - 4                     # rows between the header line and the status line
         inner = c2 - c1 - 1
-        top, current, first_col = 0, 0, 0
+        top, current, first_col, cur_col = 0, 0, 0, 0   # cur_col indexes visible[]
+        message = ''
         underneath = self.save(r1, c1, r2, c2)
         self.box(r1, c1, r2, c2, title)
         self._w('\x1b[?25l')
 
         def line(values):
-            text = ' │ '.join(str(v)[:widths[i]].ljust(widths[i]) for i, v in enumerate(values) if i >= first_col)
+            text = ' │ '.join(str(values[i])[:widths[i]].ljust(widths[i]) for i in visible[first_col:])
             return (' ' + text)[:inner].ljust(inner)
+
+        def cell_offset(n):
+            """Column within the grid where visible column n starts."""
+            return 1 + sum(widths[i] + 3 for i in visible[first_col:n])
+
+        def edit_cell(screen_row, n, first_key):
+            ci = visible[n]
+            raw = rows[current][ci]
+            numeric = isinstance(raw, (int, float)) and not isinstance(raw, bool)
+            offset = cell_offset(n)
+            width = max(1, min(max(widths[ci], len(show(raw)), 10), inner - offset))
+            field = Field(screen_row, c1 + 1 + offset, '', '' if raw is None else raw, f'@S{width}', None, numeric)
+            pos, insert = field.first_pos(), True
+            if first_key:                      # typing starts a new value, as in a spreadsheet
+                field.buffer = [' '] * field.width
+                pos = field.edit_key(first_key, 0, insert)
+            self._w('\x1b[?25h')
+            try:
+                while True:
+                    self._draw_field(field, pos)
+                    key = self.keys.read_key()
+                    if key is None:
+                        key = ESC
+                    if key == ESC:
+                        return None, key
+                    if key in (ENTER, TAB, 'UP', 'DOWN'):
+                        if numeric and not field.text().strip():
+                            return ('', None), key
+                        try:
+                            value = field.value()
+                        except ValueError:
+                            bell()
+                            continue
+                        if numeric and value == int(value):
+                            value = int(value)
+                        return ('', value), key
+                    if key == 'INS':
+                        insert = not insert
+                        continue
+                    pos = field.edit_key(key, pos, insert)
+            finally:
+                self._w('\x1b[?25l')
 
         try:
             while True:
+                # keep the current cell in view
+                if save:
+                    while first_col < cur_col and cell_offset(cur_col) + widths[visible[cur_col]] > inner:
+                        first_col += 1
+                    first_col = min(first_col, cur_col)
                 out = [self._put(r1 + 1, c1 + 1, line(columns), self.fg, self.bg),
                        self._put(r1 + 2, c1 + 1, '─' * inner, self.fg, self.bg)]
                 for n in range(page):
@@ -618,7 +679,18 @@ class Screen:
                     fg, bg = (self.field_fg, self.field_bg) if i == current else (self.fg, self.bg)
                     text = line(cells[i]) if i < len(cells) else ' ' * inner
                     out.append(self._put(r1 + 3 + n, c1 + 1, text, fg, bg))
-                status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns'
+                    if save and i == current:   # the current cell in reverse
+                        off = cell_offset(cur_col)
+                        ci = visible[cur_col]
+                        cell_text = text[off:off + widths[ci]]
+                        out.append(self._put(r1 + 3 + n, c1 + 1 + off, cell_text, self.field_bg, self.field_fg))
+                if message:
+                    status = ' ' + message
+                elif save:
+                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=edit  Esc=done  ←→=cells'
+                else:
+                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns'
+                message = ''
                 out.append(self._put(r2 - 1, c1 + 1, status[:inner].ljust(inner), self.fg, self.bg))
                 self._w(''.join(out) + self._normal())
                 key = self.keys.read_key()
@@ -627,7 +699,27 @@ class Screen:
                 self.last_key = key
                 if key == ESC:
                     return -1
-                if key == ENTER and cells:
+                if save and cells and (key in (ENTER, 'F2') or (len(key) == 1 and key.isprintable())):
+                    ci = visible[cur_col]
+                    if ci in locked:
+                        bell()
+                        message = f'{columns[ci]} is the key and cannot be changed.'
+                        continue
+                    result, end_key = edit_cell(r1 + 3 + current - top, cur_col, None if key in (ENTER, 'F2') else key)
+                    if result is not None:
+                        error = save(current, ci, result[1])
+                        if error:
+                            bell()
+                            message = 'Not saved: ' + error
+                        else:
+                            rows[current][ci] = result[1]
+                            cells[current][ci] = show(result[1])
+                            widths[ci] = min(30, max(widths[ci], len(cells[current][ci])))
+                            if end_key == TAB: key = 'RIGHT'
+                            elif end_key in ('UP', 'DOWN'): key = end_key
+                    if key in (ENTER, 'F2') or (len(key) == 1 and key not in (TAB,)):
+                        continue
+                elif key == ENTER and cells:
                     return current
                 if key == 'DOWN': current = min(current + 1, len(cells) - 1)
                 elif key == 'UP': current = max(current - 1, 0)
@@ -635,7 +727,9 @@ class Screen:
                 elif key == 'PGUP': current = max(current - page, 0)
                 elif key == 'HOME': current = 0
                 elif key == 'END': current = len(cells) - 1
-                elif key == 'RIGHT': first_col = min(first_col + 1, len(columns) - 1)
+                elif save and key in ('RIGHT', TAB): cur_col = min(cur_col + 1, len(visible) - 1)
+                elif save and key in ('LEFT', 'BTAB'): cur_col = max(cur_col - 1, 0)
+                elif key == 'RIGHT': first_col = min(first_col + 1, len(visible) - 1)
                 elif key == 'LEFT': first_col = max(first_col - 1, 0)
                 current = max(current, 0)
                 if current < top: top = current

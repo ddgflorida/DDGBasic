@@ -37,7 +37,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * **Composition:** Pipelines like `REDUCE(MAP(FILTER(nums, is_even), square), add, 0)` work cleanly.
 
 * ### 1990s-Style Text Screens
-    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)`. No extra packages. See `examples/retro_contacts.bas`.
+    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). No extra packages. See `examples/retro_contacts.bas`.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
@@ -162,7 +162,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | ANALYZE XML             | Analyzes an XML file to determine its structure, infer the primary record tag, and list its fields. |
 | BELL                    | Emits an audible system beep sound. |
 | BOX                     | Draws a single- or double-line box with an optional title on the text screen. |
-| BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. |
+| BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. With `EDIT`, cells are edited in place and saved to the table. |
 | BROWSER                 | Opens a specified URL in the system's default web browser. |
 | CHAIN                   | Transfers program execution to a different DbBasic script, optionally preserving variables. |
 | CHDIR                   | Changes the current working directory. |

@@ -36,7 +36,8 @@ draw_frame:
     RETURN
 
 browse_contacts:
-    BROWSE (SELECT id, name, phone, state, credit FROM contacts ORDER BY name) AT 3, 4, 17, 75 TITLE "Contacts" INTO picked
+    REM An editable grid: arrows move between cells, Enter or typing edits a cell, Esc ends
+    BROWSE (SELECT id, name, phone, state, credit FROM contacts ORDER BY name) EDIT KEY "id" AT 3, 4, 17, 75 TITLE "Contacts (Enter edits a cell)"
     RETURN
 
 add_contact:

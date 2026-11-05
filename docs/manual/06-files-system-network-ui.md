@@ -902,12 +902,30 @@ choice = MENU(row, col, items)                 REM an array of items
 ### BROWSE
 
 ```
-BROWSE (SELECT ...) | BROWSE table$  [AT top, left, bottom, right] [TITLE title$] [INTO var]
+BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE title$] [INTO var]
 ```
 
 `BROWSE` runs the query and shows the rows in a box: a header line, the rows, and a status line (`2 of 3   Enter=select  Esc=cancel`). Without `AT`, it fills the terminal. A string that does not start with `SELECT` or `WITH` is taken as a table name. Bind variables (`:id`) work as in any query.
 
-Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns are as wide as their widest value, up to 30 characters. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. When `BROWSE` ends, what the grid covered is put back. The grid is read-only; to change a row, use `GET`/`READ` and an `UPDATE`, as `examples/retro_contacts.bas` does.
+Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns are as wide as their widest value, up to 30 characters. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. When `BROWSE` ends, what the grid covered is put back.
+
+**Editing.** With `EDIT`, the grid is a spreadsheet-like editor and each change is saved to the table at once with an `UPDATE`:
+
+| Key | Action |
+|---|---|
+| Left, Right, Tab, Shift-Tab | Move between cells. The current cell is shown in reverse. |
+| Enter or F2 | Edit the current cell, starting from its value. |
+| Any character | Edit the current cell, starting with that character (the old value is replaced). |
+| Enter, Tab, Up, Down (while editing) | Save the cell. Tab, Up and Down also move. |
+| Esc (while editing) | Cancel the edit. |
+| Esc | End `BROWSE`. `INTO` gets an empty hash. |
+
+- `BROWSE "items" EDIT` edits a table by its `rowid`, which is fetched but not shown.
+- A query needs the column that identifies a row: `BROWSE (SELECT id, name FROM items) EDIT KEY "id"`. The query must read `FROM` one table, and the edited columns must be plain column names of that table. The `KEY` column can't be edited.
+- A cell that held a number is edited as a number. Emptying it stores `NULL`. An emptied text cell follows `SET NULL_HANDLING`: `NULL` by default.
+- If the database refuses a change (a `CHECK` or `NOT NULL` constraint, a wrong type), DbBasic beeps, the status line shows `Not saved: ...` with the database's message, and the cell keeps its old value.
+
+`examples/retro_contacts.bas` uses `BROWSE ... EDIT KEY "id"` for its contact list.
 
 ### SAVESCREEN and RESTSCREEN
 
@@ -1228,6 +1246,6 @@ These were found while checking the source against behaviour. Line numbers refer
     - `SAVESCREEN` and `RESTSCREEN` (added) work from DbBasic's own copy of the screen, which does not include query tables, `SHELL` output or error messages;
     - `GET` edits simple variables only, not array elements or hash fields;
     - a numeric field's `PICTURE` sets only its width;
-    - `BROWSE` reads every row into memory and is read-only;
+    - `BROWSE` reads every row into memory; `BROWSE ... EDIT` (added) updates cells but can't add or delete rows;
     - the Windows key handling has not been tested;
     - some words are already keywords from the forms and output statements and cannot be variable names, for example `choice` and `title`.

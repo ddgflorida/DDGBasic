@@ -341,9 +341,9 @@ class HelpRegistry:
             "examples": ['choice = MENU(5, 10, "Add", "Edit", "Quit")']
         },
         "BROWSE": {
-            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [AT top, left, bottom, right] [TITLE t$] [INTO var]',
-            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends.",
-            "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78']
+            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [INTO var]',
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, and each change is saved with an UPDATE (a table is edited by rowid; a query needs KEY \"column\").",
+            "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"']
         },
         "SAVESCREEN": {
             "syntax": 'saved$ = SAVESCREEN() | SAVESCREEN(top, left, bottom, right)',
@@ -4111,14 +4111,20 @@ class Interpreter:
         SCREEN.read(assign, check_valid, current_values)
 
     def _parse_browse_statement(self):
-        """BROWSE (SELECT ...) | BROWSE table$ [AT r1, c1, r2, c2] [TITLE t$] [INTO var]"""
+        """BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY col$]] [AT r1, c1, r2, c2] [TITLE t$] [INTO var]"""
         tok, nxt = self._current_token(), self._peek_token()
+        table = None
         if tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING':
             sql = self._extract_sql_from_parens()
         else:
             source = self._to_string(self._parse_expression()).strip()
-            sql = source if re.match(r'(?i)(SELECT|WITH)\b', source) else f"SELECT * FROM {self._quote_identifier(source)}"
+            if re.match(r'(?i)(SELECT|WITH)\b', source):
+                sql = source
+            else:
+                table = source
+                sql = f"SELECT * FROM {self._quote_identifier(source)}"
         area, title, into = None, '', None
+        edit, key_column = False, None
         while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
             tok = self._current_token()
             word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
@@ -4128,20 +4134,65 @@ class Interpreter:
             elif word == 'TITLE':
                 self._next_token()
                 title = self._to_string(self._parse_expression())
+            elif word == 'EDIT':
+                self._next_token()
+                edit = True
+            elif word == 'KEY':
+                self._next_token()
+                key_column = self._to_string(self._parse_expression())
             elif tok[0] == 'INTO':
                 self._next_token()
                 into = self._expect('ID')[1]
             else:
                 self._error(f"Unexpected '{tok[1]}' in BROWSE")
-        results = self._execute_sql(sql, is_query=True) or []
+        hidden, locked, save = set(), set(), None
+        if key_column and not edit:
+            self._error("KEY is only used with BROWSE ... EDIT")
+        if edit:
+            if table and not key_column:
+                # A table can be edited by its rowid, which is fetched but not shown
+                sql = f"SELECT rowid AS __dbbasic_rowid, * FROM {self._quote_identifier(table)}"
+            elif not table:
+                table = self._extract_table_from_select(sql)
+                if not table:
+                    self._error("BROWSE ... EDIT needs a query that reads FROM one table.")
+                if not key_column:
+                    self._error("BROWSE (SELECT ...) EDIT needs KEY \"column\" to know which row to update.")
+        results = [list(r) for r in (self._execute_sql(sql, is_query=True) or [])]
         columns = [d[0] for d in self.db_cursor.description] if self.db_cursor.description else []
-        chosen = SCREEN.browse(columns, results, area, title)
+        if edit:
+            if key_column:
+                matches = [i for i, c in enumerate(columns) if c.upper() == key_column.upper()]
+                if not matches:
+                    self._error(f"BROWSE ... EDIT: the KEY column '{key_column}' is not in the query.")
+                key_index, key_sql = matches[0], self._quote_identifier(columns[matches[0]])
+            else:
+                key_index, key_sql = 0, 'rowid'
+                hidden.add(0)
+            locked.add(key_index)
+
+            def save(row_index, col_index, value):
+                column = columns[col_index]
+                value = apply_null_handling(null_handling_rules(table, [column]), [value])[0]
+                try:
+                    self.db_cursor.execute(
+                        f"UPDATE {self._quote_identifier(table)} SET {self._quote_identifier(column)} = ? WHERE {key_sql} = ?",
+                        [value, results[row_index][key_index]])
+                except Exception as e:
+                    return str(e).splitlines()[0]
+                return None
+
+        chosen = SCREEN.browse(columns, results, area, title, save=save, hidden=hidden, locked=locked)
         if into:
             record = {}
             if chosen >= 0:
+                number = 0
                 for i, cell in enumerate(results[chosen]):
+                    if i in hidden:
+                        continue
+                    number += 1
                     value = "" if cell is None else cell
-                    record[str(i + 1)] = value
+                    record[str(number)] = value
                     if i < len(columns):
                         record[columns[i].upper()] = value
             self.variables[into] = record

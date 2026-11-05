@@ -75,6 +75,7 @@ STDIN = {
                                 '\r' '\x1b'                         # Browse, then Esc
                                 'q'),                               # Quit by its first letter
     'tests/file_io_fixes': 'Ann\nabc\n42\n',    # a name, then a bad and a good number
+    'tests/browse_edit': '\x1b[C\r\x19Apricot\r\x1b[C7\r-1\r\x1b[B\x1b[C\r\x19\r\x1b[D\x1b[DBanana2\t\x1b' '\r\x1b[CCherry\r\x1b' * 2,   # SQLite, then DuckDB
     'tests/screen': ('ann smith\t5551234567\t-5\r\x1912\r'   # READ, with a VALID failure
                      'zzz\x1b'                               # READ cancelled with Esc
                      '\x1b[B\r' 'q'                          # two MENUs
