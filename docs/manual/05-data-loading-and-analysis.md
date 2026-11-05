@@ -1486,10 +1486,10 @@ TOTAL_WORDS= 5
 ### 5.16.4 ANALYZE JSON
 
 ```
-ANALYZE JSON filename_expr [INTO hashvar] [SAVE SCHEMA TO schema_file]
+ANALYZE JSON filename_or_pattern [INTO hashvar] [SAVE SCHEMA TO schema_file]
 ```
 
-The `INTO` and `SAVE SCHEMA TO` clauses can appear in either order. The file is treated as a list of records: a top-level object counts as one record. The report shows:
+The `INTO` and `SAVE SCHEMA TO` clauses can appear in either order. If the name contains `*`, `?` or `[`, it is a glob: the records of every matching file are analysed together, the report adds `Files Analyzed`, and `INTO` also stores `FILE_COUNT`. No match gives `No files found matching pattern: ...` with `ERR = 2`. The file is treated as a list of records: a top-level object counts as one record. The report shows:
 
 - the record count;
 - whether all records have the same key set, with the distribution of key sets;
@@ -1541,7 +1541,7 @@ JSON Schema saved to users_schema.json
 }
 ```
 
-`ANALYZE JSON` does not expand wildcards. The help text example `ANALYZE JSON "data/*.json" ...` tries to open a file literally named `data/*.json`.
+With a wildcard, the files are merged into one schema: `ANALYZE JSON "data/*.json" SAVE SCHEMA TO "master.json"`.
 
 ### 5.16.5 ANALYZE JSONL
 
@@ -1836,7 +1836,7 @@ The following points were found while checking the source and running the exampl
 
 31. **`ANALYZE CSV` `HEADERS`** (fixed). It was stored as a Python tuple, which BASIC could not index. Report lists are now arrays. `examples/csv2json.bas` also read a non-existent `SUGGESTED_SQL_TYPE` key; it now reads `SUGGESTED_DATA_TYPE`.
 32. **`ANALYZE CSV` never suggests a date type**, despite counting dates. A logical-only column is suggested as `INTEGER`.
-33. **`ANALYZE JSON` does not glob**, although `HELP ANALYZE JSON` shows a wildcard example.
+33. **`ANALYZE JSON` wildcards** (fixed). It opened the pattern as a literal file name, although `HELP ANALYZE JSON` showed a wildcard example. A pattern now analyses the records of every matching file together.
 34. **Multi-file `ANALYZE XML ... INTO var`** (fixed). The clause was parsed but the report was never assigned. It now stores `FILE_COUNT`, `ROOT_ELEMENT`, `INFERRED_RECORD_TAG` and `TAG_OCCURRENCES`.
 35. **`ANALYZE JSONL` counts** (fixed). Non-object JSON lines were counted as valid records, and `TOTAL_RECORDS` included blank lines. Non-objects are now counted in `NON_OBJECT_RECORDS`, and blank lines are not counted.
 36. **`INTO` handling** (fixed). FIXED, TEXT, JSON, JSONL and XML required the `INTO` hash to be declared first (`DIM ... AS HASH`). Now none do, like `ANALYZE CSV`.

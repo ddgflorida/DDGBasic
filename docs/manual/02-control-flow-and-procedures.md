@@ -1122,7 +1122,7 @@ RUN filename$ [, arg1 [, arg2 ...]]
 Runs another DbBasic script as a sub-program, then returns to the statement after `RUN`.
 
 - `filename$` is a string expression; `~` is expanded. A missing file is a raised error, `RUN setup error: RUN: File not found: ...`, with `ERR = 2`.
-- The arguments are converted to strings and become the child's `COMMAND$(1)`, `COMMAND$(2)`, and so on. Numbers are converted using Python's formatting, so `42` becomes `"42.0"`. Use `STR$()` or a string literal if the exact text matters.
+- The arguments are converted to strings and become the child's `COMMAND$(1)`, `COMMAND$(2)`, and so on. Numbers are converted as `PRINT` shows them, so `42` becomes `"42"`.
 - The child starts with a **copy** of the caller's variables. When it finishes, the caller's variables are restored from that copy, so nothing the child assigns comes back to the caller. Use files or the database to pass results back.
 - The database connection and open file handles are **shared** with the caller.
 - An error inside the child does not stop the caller. The caller continues with `ERR = 1` and `ERRMSG$` set to the child's error. After a successful run, `ERR = 0`.
@@ -1481,13 +1481,8 @@ Each of the following was confirmed by running the interpreter.
 
 **Documentation that does not match the code**
 
-- `HELP IF` gives the example `IF x=1 THEN: PRINT 1: END IF`. It fails with `Unknown statement: COLON`.
-- `HELP EXECUTE` says it "Runs a dynamic string as code" and gives `EXECUTE "PRINT 1 + 2"` and `EXECUTE "GOTO " + label$` as examples. `EXECUTE` runs **SQL** only; those examples fail with a SQL syntax error. The statement that runs DbBasic code is `EVAL`.
-- `HELP RUN` says control "returns to the prompt". It actually returns to the calling program. The help also omits arguments and the fact that variables are restored afterwards.
-- `HELP CHAIN` says "Variables are cleared". This is true only without `PRESERVE`, and the help does not mention `PRESERVE` or arguments.
-- `HELP EXIT` describes only leaving the REPL. It does not mention `EXIT FOR/WHILE/DO/LOOP/FUNCTION`.
-- `HELP RESUME` says `RESUME NEXT` resumes "at the line following the error". It actually resumes at the next *statement*, which can be later on the same line after a colon. A bare `RESUME` is not supported, although classic BASIC allows it.
-- `HELP FOR IN` lists `SQL` as a keyword (`FOR var IN SQL(...)`). The actual SQL form is `FOR var IN (SELECT ...)`. The help omits `FILES`.
+- **Built-in `HELP` texts** (fixed). `HELP IF` gave the failing example `IF x=1 THEN: PRINT 1: END IF`. `HELP EXECUTE` said it ran DbBasic code, with examples that failed; `EXECUTE` runs SQL only, and `EVAL` runs DbBasic code. `HELP RUN` said control returned "to the prompt" and omitted arguments. `HELP CHAIN` omitted `PRESERVE` and arguments. `HELP EXIT` described only leaving the REPL. `HELP RESUME` said "line" for *statement*. `HELP FOR IN` showed a non-existent `SQL(...)` form and omitted `FILES`. All of these now match this manual, and multi-line examples are indented.
+- A bare `RESUME` is not supported, although classic BASIC allows it. Use `RESUME NEXT` or `RESUME label`.
 - `README.md` says `CLEAR` "resets all user variables (and user-defined functions)". `CLEAR` deletes only variables; functions remain callable.
 - `docs/DbBasicCommandRerence.md` describes `EXIT` as applying only to loops. It also applies to `EXIT FUNCTION`.
 - `examples/errorhandling.bas` uses `ERROR Number` followed by `ON ERROR GOTO 0` inside the handler, expecting the error to be re-raised and the handler turned off. Because errors inside a handler are not trapped, `ERROR Number` stops the program immediately and `ON ERROR GOTO 0` never runs.

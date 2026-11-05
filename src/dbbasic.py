@@ -310,9 +310,9 @@ class HelpRegistry:
             "examples": ['BROWSER "https://www.google.com"']
         },
         "CHAIN": {
-            "syntax": 'CHAIN "filename"',
-            "desc": "Transfers control to another script file immediately. Variables are cleared.",
-            "examples": ['CHAIN "menu.bas"']
+            "syntax": 'CHAIN "filename" [, arg1, arg2, ...] [PRESERVE]',
+            "desc": "Transfers control to another script file and does not return. Variables are cleared unless PRESERVE is given. The arguments become its COMMAND$(1), COMMAND$(2), ...",
+            "examples": ['CHAIN "menu.bas"', 'CHAIN "step2.bas", "go" PRESERVE']
         },
         "END": {
             "syntax": 'END',
@@ -321,18 +321,18 @@ class HelpRegistry:
         },
         "EXECUTE": {
             "syntax": 'EXECUTE "command_string"',
-            "desc": "Runs a dynamic string as code. Variables in the string are evaluated in the current context.",
-            "examples": ['EXECUTE "PRINT 1 + 2"', 'EXECUTE "GOTO " + label$']
+            "desc": "Runs one or more SQL statements held in a string, separated by semicolons. Query results are displayed. To run DbBasic code from a string, use EVAL.",
+            "examples": ['EXECUTE "CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);"', 'EXECUTE "SELECT COUNT(*) FROM " & table$']
         },
         "EXIT": {
-            "syntax": 'EXIT',
-            "desc": "Exits the DbBasic interpreter shell and returns to the OS.",
-            "examples": ['EXIT']
+            "syntax": 'EXIT FOR | EXIT WHILE | EXIT DO | EXIT FUNCTION | EXIT',
+            "desc": "EXIT FOR/WHILE/DO leaves the innermost loop of that kind. EXIT FUNCTION returns from a function. In the REPL, a bare EXIT leaves DbBasic.",
+            "examples": ['IF found THEN EXIT FOR', 'IF x < 0 THEN EXIT FUNCTION', 'EXIT']
         },
         "RUN": {
-            "syntax": 'RUN "filename"',
-            "desc": "Loads and executes a script file. When finished, control returns to the prompt (unlike CHAIN).",
-            "examples": ['RUN "setup.bas"']
+            "syntax": 'RUN "filename" [, arg1, arg2, ...]',
+            "desc": "Runs another script file as a child program; the arguments become its COMMAND$(1), COMMAND$(2), ... When it finishes (or reaches END), control returns to the calling program and its variables are restored (unlike CHAIN).",
+            "examples": ['RUN "setup.bas"', 'RUN "report.bas", "2024", region$']
         },
         "PRINT": {
             "syntax": 'PRINT expression [, expression] [;]',
@@ -368,7 +368,7 @@ class HelpRegistry:
         "IF": {
             "syntax": 'IF condition THEN ... [ELSE ...] \nOR\nIF condition THEN\n ... \n[ELSEIF ...]\n ... \nEND IF',
             "desc": "Conditionally executes code.",
-            "examples": ['IF x > 10 THEN PRINT "Big"', 'IF x=1 THEN: PRINT 1: END IF']
+            "examples": ['IF x > 10 THEN PRINT "Big" ELSE PRINT "Small"', 'IF x = 1 THEN\n    PRINT "one"\nELSEIF x = 2 THEN\n    PRINT "two"\nELSE\n    PRINT "other"\nEND IF']
         },
         "FOR": {
             "syntax": 'FOR var = start TO end [STEP step] ... NEXT',
@@ -376,9 +376,9 @@ class HelpRegistry:
             "examples": ['FOR i = 1 TO 10: PRINT i: NEXT']
         },
         "FOR IN": {
-            "syntax": 'FOR var IN [TEXT|CSV|JSON|JSONL|SQL](source) ... NEXT',
-            "desc": "Iterates over files or SQL results.",
-            "examples": ['FOR line$ IN TEXT("file.txt")', 'FOR row IN CSV("data.csv")']
+            "syntax": 'FOR var IN (SELECT ...) | CSV "file" [OPTIONS "..."] | TEXT("file") | JSON("file") | JSONL("file") | FILES("pattern") ... NEXT',
+            "desc": "Iterates over the rows of a query, the lines or records of a file, or the names of matching files.",
+            "examples": ['FOR row IN (SELECT id, name FROM users)', 'FOR line$ IN TEXT("file.txt")', 'FOR row IN CSV "data.csv" OPTIONS "header=true"', 'FOR f$ IN FILES("*.csv")']
         },
         "WHILE": {
             "syntax": 'WHILE condition ... WEND',
@@ -412,8 +412,8 @@ class HelpRegistry:
             "examples": ['ON ERROR GOTO ErrorHandler']
         },
         "RESUME": {
-            "syntax": 'RESUME [NEXT | label]',
-            "desc": "Returns from an error handler. NEXT resumes at the line following the error.",
+            "syntax": 'RESUME NEXT | RESUME label',
+            "desc": "Returns from an error handler. RESUME NEXT continues with the statement after the one that failed; RESUME label continues at the label.",
             "examples": ['RESUME NEXT', 'RESUME Start']
         },
         
@@ -449,9 +449,9 @@ class HelpRegistry:
             "examples": ['SHOW TABLES']
         },
         "SHOW CREATE TABLE": {
-            "syntax": 'SHOW CREATE TABLE',
-            "desc": "Displays the full SQL statement for all tables.",
-            "examples": ['SHOW CREATE TABLE']
+            "syntax": 'SHOW CREATE TABLE [tablename]',
+            "desc": "Displays the CREATE TABLE statement for one table, or for all tables.",
+            "examples": ['SHOW CREATE TABLE', 'SHOW CREATE TABLE orders']
         },
         "SHOW INDEXES": {
             "syntax": 'SHOW INDEXES [ON | FROM tablename]',
@@ -484,7 +484,7 @@ class HelpRegistry:
             "syntax": 'INSERT INTO table (col1, col2) VALUES (val1, val2);',
             "desc": "Adds new records. You can use variables (e.g., :name$) as values.",
             "examples": [
-                'INSERT INTO log (msg) VALUES ("System Start");',
+                "INSERT INTO log (msg) VALUES ('System Start');",
                 'INSERT INTO users (name, age) VALUES (:name$, :age);'
             ]
         },
@@ -492,7 +492,7 @@ class HelpRegistry:
             "syntax": 'UPDATE table_name SET col1 = val1 WHERE condition;',
             "desc": "Modifies existing records. Must end with a semicolon.",
             "examples": [
-                'UPDATE users SET status = "Active" WHERE id = 1;',
+                "UPDATE users SET status = 'Active' WHERE id = 1;",
                 'UPDATE products SET price = price * 1.1;'
             ]
         },
@@ -530,12 +530,12 @@ class HelpRegistry:
             "examples": ['ANALYZE CSV "data.csv" OPTIONS "header=false"']
         },
         "ANALYZE JSON": {
-            "syntax": 'ANALYZE JSON "file" [INTO var]',
-            "desc": "Scans a JSON file to determine key consistency.",
+            "syntax": 'ANALYZE JSON "file_or_pattern" [INTO var] [SAVE SCHEMA TO "schema.json"]',
+            "desc": "Scans a JSON file, or every file matching a wildcard, to determine key consistency. SAVE SCHEMA TO writes the merged structure for UPGRADE JSON.",
             "examples": ['ANALYZE JSON "users.json"', 'ANALYZE JSON "data/*.json" SAVE SCHEMA TO "master.json"']
         },
         "ANALYZE FIXED": {
-            "syntax": 'ANALYZE FIXED "filename" [FIELDS "col:start-end,..."] [INTO var]',
+            "syntax": 'ANALYZE FIXED "filename" [FIELDS "col:start-end|col:start+length,..."] [INTO var]',
             "desc": "Analyzes fixed-width files. If FIELDS is omitted, it attempts to auto-detect columns.",
             "examples": [
                 'ANALYZE FIXED "data.txt"',
@@ -804,9 +804,9 @@ class HelpRegistry:
         
         # --- UTILITIES ---
         "EMAIL": {
-            "syntax": 'EMAIL TO "..." SUBJECT "..." BODY "..." [ATTACH "..."]',
-            "desc": "Sends an email using the configured provider (See: HELP SET EMAIL).",
-            "examples": ['EMAIL TO "bob@ex.com" SUBJECT "Hi" BODY "Hello"']
+            "syntax": 'EMAIL TO "..." [CC "..."] [BCC "..."] SUBJECT "..." [BODY "..."] [HTMLBODY "..."] [ATTACH "file1, file2"]',
+            "desc": "Sends an email using the configured provider (See: HELP SET EMAIL). Addresses and attachments are comma-separated lists. BODY is the plain-text part and HTMLBODY the HTML part; both may be given.",
+            "examples": ['EMAIL TO "bob@ex.com" SUBJECT "Hi" BODY "Hello"', 'EMAIL TO "a@ex.com" CC "mgr@ex.com" SUBJECT "Report" HTMLBODY "<p>Attached.</p>" ATTACH "report.pdf"']
         },
         "FETCH": {
             "syntax": 'FETCH "url" [POST|PUT|PATCH|DELETE body_hash] [USING HEADERS req_h] [USING FILE field=path] INTO var$ | TO FILE "path" [HEADERS INTO resp_h]',
@@ -7555,7 +7555,7 @@ class Interpreter:
             if info['examples']:
                 print("Examples:")
                 for ex in info['examples']:
-                    print(f"  {ex}")
+                    print("  " + ex.replace("\n", "\n  "))
             print("========================\n")
                 
         self._expect('HELP')
@@ -12806,8 +12806,20 @@ class Interpreter:
 
         report = {}
         try:
-            with open(filename, 'r', encoding='utf-8') as infile:
-                data = json.load(infile)
+            if any(c in str(filename) for c in '*?['):
+                # A wildcard: analyze the records of every matching file together
+                file_list = sorted(glob.glob(os.path.expanduser(str(filename))))
+                if not file_list:
+                    raise FileNotFoundError(f"No files found matching pattern: {filename}")
+                data = []
+                for path in file_list:
+                    with open(path, 'r', encoding='utf-8') as infile:
+                        file_data = json.load(infile)
+                    data.extend(file_data if isinstance(file_data, list) else [file_data])
+                report['FILE_COUNT'] = len(file_list)
+            else:
+                with open(os.path.expanduser(str(filename)), 'r', encoding='utf-8') as infile:
+                    data = json.load(infile)
             
             # Normalize to a list of records
             records_to_analyze = data if isinstance(data, list) else [data]
@@ -12840,6 +12852,8 @@ class Interpreter:
                 self.variables[into_hash_name] = self._python_to_basic_data(report)
             else:
                 print(f"--- JSON Analysis Report for: {filename} ---")
+                if 'FILE_COUNT' in report:
+                    print(f"  Files Analyzed          : {report['FILE_COUNT']}")
                 print(f"  --- Consistency Check ---")
                 print(f"  Total Records (Objects) : {report['TOTAL_RECORDS']}")
                 print(f"  Is Consistent           : {'Yes' if report['IS_CONSISTENT'] else 'No'}")
@@ -12853,7 +12867,7 @@ class Interpreter:
 
         except FileNotFoundError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, str(e)
-            self._error(f"File not found: {filename}")
+            self._error(str(e) if str(e).startswith('No files found') else f"File not found: {filename}")
         except json.JSONDecodeError as e:
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"JSON parsing error: {e}")

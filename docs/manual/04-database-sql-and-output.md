@@ -629,7 +629,7 @@ ERR= 1 no such table: missing
 - build table or column names at run time (bind variables can only supply *values*)
 - send SQL text that contains a `;` inside a literal
 
-To run dynamic **BASIC** code, use `EVAL` (Chapter 2). The built-in `HELP EXECUTE` text describes `EXECUTE` as running code. That description does not match the implementation (see 4.14).
+To run dynamic **BASIC** code, use `EVAL` (Chapter 2). `EXECUTE` itself runs only SQL.
 
 ---
 
@@ -1503,11 +1503,11 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 
 **EXECUTE, SHOW and DESCRIBE**
 
-17. **`EXECUTE` on the two engines** (fixed). On DuckDB, `SELECT` results were never displayed; on SQLite, empty results printed nothing and `SUMMARIZE` was not a query. Both engines now split the string and display every query's result (4.6). `HELP EXECUTE` describes it as running BASIC code, but it only runs SQL; dynamic BASIC is `EVAL`.
+17. **`EXECUTE` on the two engines** (fixed). On DuckDB, `SELECT` results were never displayed; on SQLite, empty results printed nothing and `SUMMARIZE` was not a query. Both engines now split the string and display every query's result (4.6). `HELP EXECUTE` described it as running BASIC code (fixed: it now says SQL, and points to `EVAL` for dynamic BASIC).
 18. **`SHOW INDEXES` on DuckDB** (fixed). The DuckDB branch was empty, so it always printed `No indexes found.`. It now lists indexes and primary-key/unique constraints, and `FROM table` is accepted as well as `ON table`.
-19. **`HELP SHOW CREATE TABLE` describes only the all-tables form.** The parser also accepts a single table name.
+19. **`HELP SHOW CREATE TABLE`** (fixed). It described only the all-tables form; it now shows the single-table form too.
 20. **`DESCRIBE` output does not match the older documents.** `docs/DbBasicCommandRerence.md` says `DESCRIBE` shows the `CREATE TABLE` statement. It actually shows `PRAGMA table_info` (SQLite) or `DESCRIBE` (DuckDB) output through the output pipeline. Use `SHOW CREATE TABLE` for the DDL.
-21. **`HELP INSERT`/`HELP UPDATE` examples use double-quoted string literals** (`"System Start"`, `"Active"`). SQLite accepts these only as a fallback, and DuckDB treats them as identifiers.
+21. **`HELP INSERT`/`HELP UPDATE` examples** (fixed). They used double-quoted string literals (`"System Start"`, `"Active"`), which SQLite accepts only as a fallback and DuckDB treats as identifiers. They now use single quotes.
 
 **PRINT and PRINT USING**
 

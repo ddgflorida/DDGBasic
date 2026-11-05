@@ -1051,7 +1051,7 @@ These were found while checking the source against behaviour. Line numbers refer
     * `GET` cannot send a body.
 13. **EMAIL.**
     * Errors raised during sending (missing attachment, SMTP failures) are caught and turned into `ERR` = -1, but configuration errors are fatal.
-    * `HELP EMAIL` lists only TO/SUBJECT/BODY/ATTACH and omits CC, BCC and HTMLBODY.
+    * `HELP EMAIL` (fixed) listed only TO/SUBJECT/BODY/ATTACH; it now shows CC, BCC and HTMLBODY too.
     * `SET EMAIL` settings never reset between providers.
     * For SMTP, a missing `TO` is not checked.
 14. **Forms (`src/tui_runner.py`).**
