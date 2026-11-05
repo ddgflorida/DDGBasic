@@ -53,10 +53,25 @@ A script can also require output: it passes only if its output contains the text
 
 ## Requirements
 
-Python 3.10+ with: `requests`, `duckdb`, `xlrd3`, `openpyxl`, `beautifulsoup4`, `xmltodict`, `pyarrow`.
-Optional:
-- `lxml`, for `STRIPHTML$` and `LOAD HTML`
-- `textual`, for `OPENFORM` and `GRIDEDIT`
+Python 3.10 or newer. Install the dependencies with:
+
+```bash
+pip install -r requirements.txt
+```
+
+[`requirements.txt`](../../requirements.txt) lists each package with the features it is used for:
+
+- `requests`
+- `duckdb`
+- `xlrd3`
+- `openpyxl`
+- `beautifulsoup4`
+- `lxml`
+- `xmltodict`
+- `pyarrow`
+- `textual` (for terminal forms)
+
+To build a standalone executable, install [`requirements-build.txt`](../../requirements-build.txt), which adds Nuitka, and run `compilenuitka.sh` or `compilenuitka.bat`.
 
 The web runner (`src/dbbasicweb.py`) imports `cgi`, so it needs Python 3.12 or earlier.
 

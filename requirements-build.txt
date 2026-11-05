@@ -1,0 +1,8 @@
+# Extra packages for building a standalone executable with compilenuitka.sh
+# (or compilenuitka.bat on Windows).
+#   pip install -r requirements-build.txt
+
+-r requirements.txt
+nuitka            # compiler (tested 4.3)
+ordered-set       # speeds up Nuitka builds
+zstandard         # compresses the onefile executable

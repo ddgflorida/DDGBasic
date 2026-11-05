@@ -58,6 +58,22 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
 
 ---
 
+## 📦 Installation
+
+DbBasic needs Python 3.10 or newer.
+
+```bash
+pip install -r requirements.txt
+python3 src/dbbasic.py examples/hello.bas      # run a script
+python3 src/dbbasic.py                         # interactive REPL
+```
+
+To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux) or `compilenuitka.bat` (Windows).
+
+The full **Programmer's Reference Manual** is in [`docs/manual/`](docs/manual/README.md). Run the test suite with `python3 tests/run_tests.py`.
+
+---
+
 ## 🚀 Quick Start Example
 
 The following DbBasic script demonstrates several key features: it downloads a CSV file, loads it into a DuckDB in-memory table, and queries the result.

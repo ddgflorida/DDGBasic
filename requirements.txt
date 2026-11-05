@@ -1,0 +1,13 @@
+# DbBasic runtime dependencies (Python 3.10 or newer).
+#   pip install -r requirements.txt
+# Tested with Python 3.12 and the versions noted below.
+
+requests          # FETCH (tested 2.34)
+duckdb            # DATABASE ENGINE DUCKDB (tested 1.5)
+xlrd3             # LOAD EXCEL for .xls files (tested 1.1)
+openpyxl          # LOAD EXCEL for .xlsx files, SET OUTPUT FORMAT EXCEL (tested 3.1)
+beautifulsoup4    # LOAD HTML, STRIPHTML$ (tested 4.15)
+lxml              # HTML parser used by LOAD HTML and STRIPHTML$ (tested 6.1)
+xmltodict         # LOAD XML, ANALYZE XML (tested 1.0)
+pyarrow           # LOAD PARQUET (tested 26.0)
+textual           # FORM / OPENFORM / GRIDEDIT terminal forms (tested 8.2)
