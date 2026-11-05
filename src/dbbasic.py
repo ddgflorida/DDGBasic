@@ -32,7 +32,7 @@ import xlrd3
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from bs4 import BeautifulSoup
-from dbscreen import SCREEN, ScreenError
+from dbscreen import SCREEN, ScreenError, bell as dbscreen_bell
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, quote_plus, unquote_plus, urljoin
 import xmltodict
@@ -340,6 +340,11 @@ class HelpRegistry:
             "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [INTO var]',
             "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, and each change is saved with an UPDATE (a table is edited by rowid; a query needs KEY \"column\").",
             "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"']
+        },
+        "EDIT": {
+            "syntax": 'EDIT RECORD (SELECT ... FROM table WHERE ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]',
+            "desc": "A one-line entry form: one labelled field per column of the query's row. Enter on the last field or PgDn saves with an UPDATE of the changed columns; with no matching row the form starts blank and saves with an INSERT. KEY defaults to the table's primary key and can't be edited. A refused change shows the database's message and keeps the form open. INTO gets the saved record (empty after Esc).",
+            "examples": ['EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact"', 'EDIT RECORD (SELECT name, phone FROM customers WHERE code = :code$) KEY "code" INTO rec']
         },
         "SAVESCREEN": {
             "syntax": 'saved$ = SAVESCREEN() | SAVESCREEN(top, left, bottom, right)',
@@ -3948,7 +3953,7 @@ class Interpreter:
             self._error(f"Unknown statement: {token[0]}")
 
     # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see dbscreen.py) ---
-    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN'}
+    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT'}
 
     def _is_screen_statement(self, token):
         """True for CLS, LOCATE, COLOR, BOX, READ or BROWSE used as a statement rather than as
@@ -4007,6 +4012,8 @@ class Interpreter:
                 self._parse_browse_statement()
             elif word == 'RESTSCREEN':
                 SCREEN.restore_saved(self._parse_expression())
+            elif word == 'EDIT':
+                self._parse_edit_record_statement()
         except ScreenError as e:
             self._error(str(e))
 
@@ -4226,6 +4233,173 @@ class Interpreter:
                     if i < len(columns):
                         record[columns[i].upper()] = value
             self.variables[into] = record
+
+    def _table_column_info(self, table):
+        """{lower-case column name: (declared type, is part of the primary key)} for a table."""
+        info = {}
+        if self.db_engine == 'duckdb':
+            rows = self.db_cursor.execute(
+                "SELECT column_name, data_type FROM information_schema.columns WHERE lower(table_name) = lower(?)",
+                [table]).fetchall()
+            pk = self.db_cursor.execute(
+                "SELECT constraint_column_names FROM duckdb_constraints() "
+                "WHERE lower(table_name) = lower(?) AND constraint_type = 'PRIMARY KEY'", [table]).fetchall()
+            pk_cols = {c.lower() for c in (pk[0][0] if pk else [])}
+            for name, dtype in rows:
+                info[name.lower()] = (str(dtype), name.lower() in pk_cols)
+        else:
+            for row in self.db_cursor.execute(f"PRAGMA table_info({self._quote_identifier(table)})").fetchall():
+                info[row[1].lower()] = (str(row[2] or ''), bool(row[5]))
+        return info
+
+    def _parse_edit_record_statement(self):
+        """EDIT RECORD (SELECT ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]
+
+        Shows one labelled field per column of the query's row and saves the changes with
+        an UPDATE (or an INSERT when the query finds no row). KEY defaults to the table's
+        primary key. A refused change keeps the form open with the database's message."""
+        tok = self._current_token()
+        if not (tok and str(tok[1]).upper() == 'RECORD'):
+            self._error("Expected RECORD after EDIT")
+        self._next_token()
+        tok, nxt = self._current_token(), self._peek_token()
+        if not (tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING'):
+            self._error("EDIT RECORD needs a query in parentheses: EDIT RECORD (SELECT ... FROM table WHERE ...)")
+        sql = self._extract_sql_from_parens()
+        key_column, at, title, into = None, None, '', None
+        while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+            tok = self._current_token()
+            word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
+            if word == 'KEY':
+                self._next_token()
+                key_column = self._to_string(self._parse_expression())
+            elif word == 'AT':
+                self._next_token()
+                at = tuple(self._screen_ints(2))
+            elif word == 'TITLE':
+                self._next_token()
+                title = self._to_string(self._parse_expression())
+            elif tok[0] == 'INTO':
+                self._next_token()
+                into = self._expect('ID')[1]
+            else:
+                self._error(f"Unexpected '{tok[1]}' in EDIT RECORD")
+
+        table = self._extract_table_from_select(sql)
+        if not table:
+            self._error("EDIT RECORD needs a query that reads FROM one table.")
+        rows = self._execute_sql(sql, is_query=True) or []
+        columns = [d[0] for d in self.db_cursor.description] if self.db_cursor.description else []
+        if len(rows) > 1:
+            self._error(f"EDIT RECORD: the query returned {len(rows)} rows; it must find one row (or none, to add one).")
+        info = self._table_column_info(table)
+        if not key_column:
+            pk = [c for c, (_, is_pk) in info.items() if is_pk]
+            if len(pk) != 1:
+                self._error(f"EDIT RECORD: table '{table}' has no single-column primary key; name the key with KEY \"column\".")
+            key_column = pk[0]
+        key_index = next((i for i, c in enumerate(columns) if c.lower() == key_column.lower()), None)
+        new_record = not rows
+        if key_index is None and not new_record:
+            self._error(f"EDIT RECORD: the KEY column '{key_column}' must be in the query.")
+        if not new_record and len(columns) == 1:
+            self._error("EDIT RECORD: the query has only the KEY column, so there is nothing to edit.")
+
+        def is_numeric_type(dtype):
+            return re.search(r'INT|REAL|FLOA|DOUB|NUM|DEC', dtype.upper()) is not None
+
+        values = []
+        for i, column in enumerate(columns):
+            value = rows[0][i] if rows else None
+            if isinstance(value, Decimal):
+                value = float(value)
+            if value is None:
+                value = 0 if is_numeric_type(info.get(column.lower(), ('', False))[0]) else ''
+            values.append(value)
+        record = {column.upper(): value for column, value in zip(columns, values)}
+        holder = '__EDIT_RECORD__'
+        self.variables[holder] = record
+
+        # Lay out the box: labels on the left, fields after them
+        labels = [c.replace('_', ' ').title() for c in columns]
+        label_width = max(len(label) for label in labels)
+        screen_rows, screen_cols = SCREEN.size()
+        widths = []
+        for value in values:
+            text = (str(int(value)) if isinstance(value, float) and value == int(value) else str(value))
+            widths.append(min(max(len(text), 12 if isinstance(value, (int, float)) else 20), 50))
+        inner = max(4 + label_width + 2 + max(widths) + 2, len(title) + 6, 44)
+        height = len(columns) + 5           # title line, blank, fields, blank, key hint
+        top, left = at if at else (max(1, (screen_rows - height) // 2 + 1), max(1, (screen_cols - inner) // 2 + 1))
+        bottom, right = top + height - 1, left + inner - 1
+        # Save one line more than the box: refused changes are explained under it
+        underneath = SCREEN.save(top, left, min(bottom + 1, screen_rows), screen_cols)
+        try:
+            while True:
+                SCREEN.box(top, left, bottom, right, title or table.title())
+                for n, (column, label) in enumerate(zip(columns, labels)):
+                    row = top + 2 + n
+                    SCREEN.say(row, left + 2, label.rjust(label_width) + ' : ')
+                    if n == key_index and not new_record:
+                        SCREEN.say(row, left + 2 + label_width + 3, self._to_string(values[n]))
+                        continue
+                    numeric = isinstance(record[column.upper()], (int, float)) and not isinstance(record[column.upper()], bool)
+                    target = (holder, [('dot', column)])
+                    SCREEN.add_get(row, left + 2 + label_width + 3, column, record[column.upper()],
+                                   f'@S{widths[n]}', None, numeric, target)
+                hint = 'Enter=next  PgDn=save  Esc=cancel'
+                SCREEN.say(bottom - 1, left + 2, hint.ljust(inner - 4)[:inner - 4])
+                self._run_read()
+                if SCREEN.last_key == '\x1b':
+                    if into:
+                        self.variables[into] = {}
+                    return
+                error = self._save_edit_record(table, columns, values, record, key_index, new_record)
+                if error is None:
+                    break
+                message = 'Not saved: ' + error + '  (press a key)'
+                SCREEN.say(bottom + 1, left, message[:max(1, screen_cols - left + 1)])
+                dbscreen_bell()
+                SCREEN.keys.read_key()          # show the message until a key is pressed
+                SCREEN.say(bottom + 1, left, ' ' * len(message[:max(1, screen_cols - left + 1)]))
+            if into:
+                self.variables[into] = dict(record)
+        finally:
+            self.variables.pop(holder, None)
+            SCREEN.restore_saved(underneath)
+
+    def _save_edit_record(self, table, columns, old_values, record, key_index, new_record):
+        """Writes an EDIT RECORD form back with UPDATE (changed columns only) or INSERT.
+        Returns None, or the database's error message."""
+        new_values = [record[c.upper()] for c in columns]
+        nulls = null_handling_rules(table, columns)
+        new_values = apply_null_handling(nulls, list(new_values))
+        try:
+            if new_record:
+                pairs = [(c, v) for i, (c, v) in enumerate(zip(columns, new_values))
+                         if not (i == key_index and (v is None or v == '' or v == 0))]
+                if not pairs:
+                    return None
+                self.db_cursor.execute(
+                    f"INSERT INTO {self._quote_identifier(table)} ({', '.join(self._quote_identifier(c) for c, _ in pairs)}) "
+                    f"VALUES ({', '.join('?' * len(pairs))})", [v for _, v in pairs])
+                # Give the record the key the database chose (SQLite reports it)
+                if key_index is not None and len(pairs) < len(columns) and self.db_engine != 'duckdb':
+                    new_id = getattr(self.db_cursor, 'lastrowid', None)
+                    if new_id:
+                        record[columns[key_index].upper()] = new_id
+            else:
+                changed = [(c, v) for i, (c, v, old) in enumerate(zip(columns, new_values, old_values))
+                           if i != key_index and v != old]
+                if not changed:
+                    return None
+                self.db_cursor.execute(
+                    f"UPDATE {self._quote_identifier(table)} SET {', '.join(self._quote_identifier(c) + ' = ?' for c, _ in changed)} "
+                    f"WHERE {self._quote_identifier(columns[key_index])} = ?",
+                    [v for _, v in changed] + [old_values[key_index]])
+        except Exception as e:
+            return str(e).splitlines()[0]
+        return None
 
     def _parse_bell_statement(self):
         """Parses and executes a BELL statement."""

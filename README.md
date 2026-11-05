@@ -176,6 +176,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | DIM                     | Declares a variable (scalar, ARRAY, or HASH). When used inside a FUNCTION body, the declared name is scoped to the function and the outer variable of the same name is preserved across the call. |
 | DO ... LOOP             | Defines a block of code that executes repeatedly, with optional WHILE or UNTIL conditions at the beginning or end. |
 | DUMP                    | A debugging command to print the internal state of the interpreter, such as tokens, variables, or labels. |
+| EDIT RECORD             | A one-line entry form: one labelled field per column of a query's row, saved with UPDATE (or INSERT when there is no row). |
 | EMAIL                   | Sends an email using the configured provider (see `HELP SET EMAIL`), with support for HTML body, CC/BCC, and attachments. |
 | END                     | Terminates the program execution. |
 | ERROR                   | Triggers a user-defined runtime error with a specific error code and optional message. |

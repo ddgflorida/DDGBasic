@@ -68,6 +68,8 @@ STDIN = {
                                 'q'),                               # Quit by its first letter
     'tests/file_io_fixes': 'Ann\nabc\n42\n',    # a name, then a bad and a good number
     'tests/browse_edit': '\x1b[C\r\x19Apricot\r\x1b[C7\r-1\r\x1b[B\x1b[C\r\x19\r\x1b[D\x1b[DBanana2\t\x1b' '\r\x1b[CCherry\r\x1b' * 2,   # SQLite, then DuckDB
+    'tests/edit_record': ('\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'     # SQLite
+                          '\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '2\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'),  # DuckDB
     'tests/get_targets': '\x19jones\t\t900\r\x19250\r' '\x19uno\t\x19Austin\t02116\r' '\x19zzz\t\x19yyy\x1b',
     'tests/screen': ('ann smith\t5551234567\t-5\r\x1912\r'   # READ, with a VALID failure
                      'zzz\x1b'                               # READ cancelled with Esc

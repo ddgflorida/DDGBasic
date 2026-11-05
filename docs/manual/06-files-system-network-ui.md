@@ -24,7 +24,7 @@ Related material in other chapters:
 5. [HTTP: FETCH](#65-http-fetch)
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
 7. [Text screens](#67-text-screens)
-   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [MENU()](#menu) · [BROWSE](#browse) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
+   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
 8. [TUI forms (archived)](#68-tui-forms-archived)
 9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
 
@@ -942,6 +942,40 @@ Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns.
 - If the database refuses a change (a `CHECK` or `NOT NULL` constraint, a wrong type), DbBasic beeps, the status line shows `Not saved: ...` with the database's message, and the cell keeps its old value.
 
 `examples/retro_contacts.bas` uses `BROWSE ... EDIT KEY "id"` for its contact list.
+
+### EDIT RECORD
+
+```
+EDIT RECORD (SELECT ... FROM table WHERE ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]
+```
+
+`EDIT RECORD` is a whole entry form in one line, for when the layout doesn't matter. It runs the query and shows a box, centred unless `AT` is given, with one labelled field per column. The labels come from the column names (`last_name` becomes `Last Name`), and the title defaults to the table name.
+
+```basic
+EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact" INTO rec
+```
+
+```
+┌──────────────── Contact ─────────────────┐
+│                                          │
+│        Id : 1                            │
+│ Last Name : jones                        │
+│     Email : a@x.com                      │
+│    Credit : 50                           │
+│                                          │
+│ Enter=next  PgDn=save  Esc=cancel        │
+└──────────────────────────────────────────┘
+```
+
+- **Keys:** the fields are edited as with `READ`. Enter on the last field, or PgDn, saves; Esc cancels and changes nothing.
+- **Key column:** `KEY` names the column that identifies the row. It defaults to the table's primary key, and it is shown but can't be edited.
+- **Saving an existing row:** an `UPDATE` of the columns that changed.
+- **No matching row:** the form opens blank and saves with an `INSERT`. The key can be typed. Leave it at 0 to let SQLite number the row (`INTEGER PRIMARY KEY`). DuckDB has no automatic numbering unless the column has a `DEFAULT nextval(...)`, so type the key there.
+- **Refused changes:** if the database refuses the change (a `CHECK` or `NOT NULL` constraint, a wrong type), DbBasic beeps and shows `Not saved: ...` under the box. After a key press, the form is shown again with what you typed, starting at the first field.
+- **`INTO var`:** receives the saved record as a hash, keyed by upper-case column name, or an empty hash after Esc. After an `INSERT` on SQLite, it holds the new row's key.
+- **Rules:** the query must read `FROM` one table and find at most one row, and its columns must be plain column names of that table. Numbers are edited as numbers, and an emptied text field follows `SET NULL_HANDLING`. What the form covered is put back when it closes.
+
+Use `@ ... SAY ... GET` and `READ` when you want your own layout, pictures or `VALID` checks.
 
 ### SAVESCREEN and RESTSCREEN
 
