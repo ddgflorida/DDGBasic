@@ -1095,12 +1095,39 @@ class Screen:
                 return ''
             return format_number(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)
 
+        # Rows are formatted only when they are shown, so rows can be a lazy, paged list
+        # (the interpreter passes one for large queries). Column widths start from the
+        # first rows and grow when a wider value scrolls into view.
+        class Cells:
+            def __init__(self):
+                self.cache = {}
+
+            def __len__(self):
+                return len(rows)
+
+            def __bool__(self):
+                return len(rows) > 0
+
+            def __getitem__(self, i):
+                if i not in self.cache:
+                    self.cache[i] = [show(v) for v in rows[i]]
+                return self.cache[i]
+
+            def pop(self, i):
+                self.cache.clear()
+
+        def widen(i):
+            for k, text in enumerate(cells[i][:len(widths)]):
+                widths[k] = min(30, max(widths[k], len(text)))
+
         def layout():
-            cells = [[show(v) for v in row] for row in rows]
-            widths = [min(30, max([len(str(c))] + [len(r[i]) for r in cells])) for i, c in enumerate(columns)]
+            cells = Cells()
+            widths = [min(30, len(str(c))) for c in columns]
             return cells, widths
 
         cells, widths = layout()
+        for i in range(min(len(rows), 200)):
+            widen(i)
         page = r2 - r1 - 4                     # rows between the header line and the status line
         inner = c2 - c1 - 1
         top, current, first_col, cur_col = 0, 0, 0, 0   # cur_col indexes visible[]
@@ -1168,6 +1195,9 @@ class Screen:
                 out = [self._put(r1 + 1, c1 + 1, line(columns), self.fg, self.bg),
                        self._put(r1 + 2, c1 + 1, '─' * inner, self.fg, self.bg)]
                 for n in range(page):
+                    if top + n < len(cells):
+                        widen(top + n)
+                for n in range(page):
                     i = top + n
                     fg, bg = (self.field_fg, self.field_bg) if i == current else (self.fg, self.bg)
                     text = line(cells[i]) if i < len(cells) else ' ' * inner
@@ -1197,6 +1227,8 @@ class Screen:
                     new_index = add()
                     if new_index is not False:
                         cells, widths = layout()
+                        for i in range(min(len(rows), 200)):
+                            widen(i)
                         if new_index is not None:
                             current = new_index
                         current = min(current, len(cells) - 1)

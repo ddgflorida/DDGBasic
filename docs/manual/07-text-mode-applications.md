@@ -430,7 +430,9 @@ BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$]] [AT top, left, bottom, ri
 
 `BROWSE` runs the query and shows the rows in a box: a header line, the rows, and a status line (`2 of 3   Enter=select  Esc=cancel`). Without `AT`, it fills the terminal. A string that does not start with `SELECT` or `WITH` is taken as a table name. Bind variables (`:id`) work as in any query.
 
-Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns are as wide as their widest value, up to 30 characters. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. When `BROWSE` ends, what the grid covered is put back.
+Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns start as wide as their widest value in the first 200 rows, up to 30 characters, and widen when a wider value scrolls into view. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. When `BROWSE` ends, what the grid covered is put back.
+
+**Large tables.** `BROWSE` does not read the whole result. It fetches 500 rows at a time as you scroll, by adding `LIMIT`/`OFFSET` to the query (so its `ORDER BY` is kept exactly), and counts the rows once with `COUNT(*)` for the status line. A million-row table opens as fast as a small one. A query that already ends in its own `LIMIT` (or `OFFSET`, `FETCH FIRST`) is read whole. After a row is added with Ins, the grid fetches again; finding the new row then reads through the result, which takes a moment on a very large table.
 
 **Editing.** With `EDIT`, the grid is a spreadsheet-like editor for the table. Each change is saved at once: cell edits with an `UPDATE`, new rows with an `INSERT`, deleted rows with a `DELETE`:
 
@@ -613,7 +615,7 @@ The declarative forms (`FORM ... ENDFORM`, `OPENFORM`, `GRIDEDIT`), built on the
     - `SAVESCREEN` and `RESTSCREEN` (added) work from DbBasic's own copy of the screen, which does not include query tables, `SHELL` output or error messages;
     - (added) `GET` edits hash fields and array elements as well as variables;
     - a numeric field's `PICTURE` sets only its width;
-    - `BROWSE` reads every row into memory (and again after a row is added);
+    - (changed) `BROWSE` fetches 500 rows at a time instead of the whole result;
     - the Windows key handling has not been tested;
     - (fixed) words such as `choice` and `title`, once reserved by the FORM statements, are ordinary variable names again.
 2. **The old forms** (archived). `FORM`, `OPENFORM` and `GRIDEDIT` have been moved to the `archive/forms` branch (see 7.8). Their open issues there were: `PLACEHOLDER` not displayed, debug output on every button press, field `TYPE NUMBER` doing no conversion, `MATCHES` not working with a `CHOICE`, non-numeric primary keys failing in `FORM_SELECTED_ID`, unescaped `WHERE`/`ORDER BY` text and no delete confirmation in `GRIDEDIT`.

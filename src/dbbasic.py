@@ -1691,6 +1691,56 @@ class Formatter:
 # =================================================================
 # NEW: Ported Normalizer from json2dbcmd.py
 # =================================================================
+class PagedRows:
+    """A read-mostly list of query rows for BROWSE that fetches PAGE rows at a time by adding
+    LIMIT/OFFSET to the query (which keeps its ORDER BY), and counts the rows with COUNT(*).
+    Rows are lists, so BROWSE ... EDIT can update a cached row in place."""
+    PAGE = 500
+
+    def __init__(self, interpreter, sql):
+        self.interpreter, self.sql = interpreter, sql
+        self.columns = []
+        self.reload()
+        self._page(0)                        # runs the query once, which also gives the columns
+
+    def reload(self):
+        self.pages, self.count = {}, None
+
+    def _page(self, number):
+        if number not in self.pages:
+            rows = self.interpreter._execute_sql(
+                f"{self.sql} LIMIT {self.PAGE} OFFSET {number * self.PAGE}", is_query=True) or []
+            cursor = self.interpreter.db_cursor
+            if not self.columns and cursor.description:
+                self.columns = [d[0] for d in cursor.description]
+            self.pages[number] = [list(r) for r in rows]
+        return self.pages[number]
+
+    def __len__(self):
+        if self.count is None:
+            first = self._page(0)
+            if len(first) < self.PAGE:
+                self.count = len(first)
+            else:
+                self.count = int(self.interpreter._execute_sql(
+                    f"SELECT COUNT(*) FROM ({self.sql}) AS __browse_count", is_query=True)[0][0])
+        return self.count
+
+    def __getitem__(self, index):
+        if index < 0:
+            index += len(self)
+        if not 0 <= index < len(self):
+            raise IndexError(index)
+        return self._page(index // self.PAGE)[index % self.PAGE]
+
+    def __iter__(self):
+        for i in range(len(self)):
+            yield self[i]
+
+    def pop(self, index):
+        self.reload()                        # the row was deleted in the database; fetch again
+
+
 class LegacyJsonNormalizer:
     """
     Encapsulates the proven normalization logic ported from the json2dbcmd.py script.
@@ -4206,6 +4256,14 @@ class Interpreter:
 
         SCREEN.read(assign, check_valid, current_values, check_when=check_when, lookup=lookup)
 
+    def _browse_rows(self, sql):
+        """The rows for BROWSE: a PagedRows that fetches 500 rows at a time with LIMIT/OFFSET,
+        or, for a query that ends in its own LIMIT, a plain list of every row."""
+        sql = sql.strip().rstrip(';').strip()
+        if re.search(r'(?is)\b(LIMIT|OFFSET|FETCH\s+(FIRST|NEXT))\b[^()]*$', sql):
+            return [list(r) for r in (self._execute_sql(sql, is_query=True) or [])]
+        return PagedRows(self, sql)
+
     def _parse_browse_statement(self):
         """BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY col$]] [AT r1, c1, r2, c2] [TITLE t$] [INTO var]"""
         tok, nxt = self._current_token(), self._peek_token()
@@ -4254,8 +4312,9 @@ class Interpreter:
                     self._error("BROWSE ... EDIT needs a query that reads FROM one table.")
                 if not key_column:
                     self._error("BROWSE (SELECT ...) EDIT needs KEY \"column\" to know which row to update.")
-        results = [list(r) for r in (self._execute_sql(sql, is_query=True) or [])]
-        columns = [d[0] for d in self.db_cursor.description] if self.db_cursor.description else []
+        results = self._browse_rows(sql)
+        columns = results.columns if isinstance(results, PagedRows) else \
+            ([d[0] for d in self.db_cursor.description] if self.db_cursor.description else [])
         if edit:
             if key_column:
                 matches = [i for i, c in enumerate(columns) if c.upper() == key_column.upper()]
@@ -4279,7 +4338,10 @@ class Interpreter:
                 if record is None:
                     return False
                 new_rowid = getattr(self.db_cursor, 'lastrowid', None) if self.db_engine != 'duckdb' else None
-                results[:] = [list(r) for r in (self._execute_sql(sql, is_query=True) or [])]
+                if isinstance(results, PagedRows):
+                    results.reload()
+                else:
+                    results[:] = [list(r) for r in (self._execute_sql(sql, is_query=True) or [])]
                 if hidden and new_rowid:          # table mode: find the new rowid
                     return next((i for i, r in enumerate(results) if r[0] == new_rowid), None)
                 if form_key_index is not None:
