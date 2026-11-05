@@ -24,7 +24,7 @@ Related material in other chapters:
 5. [HTTP: FETCH](#65-http-fetch)
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
 7. [Text screens](#67-text-screens)
-   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [ALERT()](#alert) · [MENUBAR$()](#menubar) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [EDIT TEXT](#edit-text) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
+   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [ALERT()](#alert) · [MENUBAR$()](#menubar) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [EDIT TEXT](#edit-text) · [VIEW](#view) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
 8. [TUI forms (archived)](#68-tui-forms-archived)
 9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
 
@@ -1108,6 +1108,41 @@ IF LASTKEY$ <> CHR$(27) THEN UPDATE customers SET notes = :rec.notes WHERE id = 
 | Esc | Cancel. If anything was changed, `ALERT` asks `Discard your changes?` first. The target keeps its old value, and `LASTKEY$` is `CHR$(27)`. |
 
 Lines are not wrapped: a line longer than the box scrolls sideways while you edit it, so the saved text has exactly the lines you typed. The line and column are shown in the bottom border, and the screen under the box is put back afterwards.
+
+### VIEW
+
+```
+VIEW FILE path$      [AT top, left, bottom, right] [TITLE title$]
+VIEW (SELECT ...)    [AT ...] [TITLE title$]
+VIEW text$           [AT ...] [TITLE title$]
+```
+
+`VIEW` shows text in a read-only, scrolling box: a file, the result of a query (laid out as the text table a `SELECT` prints, with box-drawing lines), or any string. Without `AT`, it fills the screen. A file's name is the default title; tabs are expanded to 8 columns.
+
+```basic
+VIEW FILE "report.txt" AT 2, 2, 12, 60
+VIEW (SELECT region, SUM(amount) AS total FROM sales GROUP BY region) TITLE "Sales"
+```
+
+```
+┌───────────────────────── report.txt ────────────────────┐
+│Line 057 of the report  TOTAL                            │
+│Line 058 of the report                                   │
+│...                                                      │
+└─ 57-65 of 100  /=find  n=next  Esc=close ───────────────┘
+```
+
+| Key | Action |
+|---|---|
+| Up, Down, Enter | Scroll a line. |
+| PgUp, PgDn, Space | Scroll a page. |
+| Home, End | Go to the start or the end. |
+| Left, Right | Scroll sideways, 8 columns at a time. |
+| `/` or Ctrl-F | Search: type the text on the status line and press Enter. The search ignores case and starts at the top line shown; the line found is highlighted. |
+| `n` or F3 | Find the next match, wrapping round to the start. `Not found: ...` is shown when there is none. |
+| Esc or `q` | Close the viewer. `LASTKEY$` holds the key. |
+
+A missing file is an error with `ERR = 2`. What the box covered is put back when it closes. A variable called `file` can still be viewed: `VIEW file` and `VIEW file AT ...` show its value.
 
 ### SAVESCREEN and RESTSCREEN
 

@@ -356,6 +356,11 @@ class HelpRegistry:
             "desc": "EDIT TEXT is a boxed memo editor for a multi-line string (lines separated by CHR$(10)); Enter splits lines, Ctrl-Y deletes one, Ctrl-W or F10 saves, Esc cancels (asking first if changed). EDIT RECORD is a one-line entry form: one labelled field per column of the query's row. Enter on the last field or PgDn saves with an UPDATE of the changed columns; with no matching row the form starts blank and saves with an INSERT. KEY defaults to the table's primary key and can't be edited. A refused change shows the database's message and keeps the form open. INTO gets the saved record (empty after Esc).",
             "examples": ['EDIT TEXT rec.notes AT 3, 5, 12, 50 TITLE "Notes"', 'EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact"', 'EDIT RECORD (SELECT name, phone FROM customers WHERE code = :code$) KEY "code" INTO rec']
         },
+        "VIEW": {
+            "syntax": 'VIEW FILE path$ | VIEW (SELECT ...) | VIEW text$  [AT top, left, bottom, right] [TITLE title$]',
+            "desc": "Shows a file, a query result (as a text table) or a string in a read-only, scrolling box. Arrows, PgUp/PgDn, Home/End and Left/Right move; / (or Ctrl-F) searches, ignoring case; n or F3 finds the next match; Esc or q closes. The screen is put back afterwards.",
+            "examples": ['VIEW FILE "report.txt"', 'VIEW (SELECT * FROM orders ORDER BY id) TITLE "Orders"', 'VIEW log$ AT 2, 2, 20, 78']
+        },
         "SAVESCREEN": {
             "syntax": 'saved$ = SAVESCREEN() | SAVESCREEN(top, left, bottom, right)',
             "desc": "Copies the screen, or an area of it, with its colours and the cursor position into a string for RESTSCREEN. It covers what screen statements, PRINT and INPUT drew; query tables and SHELL output are not included.",
@@ -3958,7 +3963,7 @@ class Interpreter:
             self._error(f"Unknown statement: {token[0]}")
 
     # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see dbscreen.py) ---
-    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT'}
+    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT', 'VIEW'}
 
     def _is_screen_statement(self, token):
         """True for CLS, LOCATE, COLOR, BOX, READ or BROWSE used as a statement rather than as
@@ -4017,6 +4022,8 @@ class Interpreter:
                 self._parse_browse_statement()
             elif word == 'RESTSCREEN':
                 SCREEN.restore_saved(self._parse_expression())
+            elif word == 'VIEW':
+                self._parse_view_statement()
             elif word == 'EDIT':
                 tok = self._current_token()
                 if tok and str(tok[1]).upper() == 'TEXT' and tok[0] == 'ID':
@@ -4315,6 +4322,45 @@ class Interpreter:
                     if i < len(columns):
                         record[columns[i].upper()] = value
             self.variables[into] = record
+
+    def _parse_view_statement(self):
+        """VIEW FILE path$ | VIEW (SELECT ...) | VIEW text$  [AT top, left, bottom, right] [TITLE t$]
+        A read-only, scrolling text viewer with search."""
+        tok, nxt = self._current_token(), self._peek_token()
+        title = ''
+        if tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING':
+            sql = self._extract_sql_from_parens()
+            results = self._execute_sql(sql, is_query=True) or []
+            columns = [d[0] for d in self.db_cursor.description] if self.db_cursor.description else []
+            buffer = io.StringIO()
+            self._write_as_text(list(results), columns, buffer, {'box_style': 'BOX'})
+            text = buffer.getvalue()
+        elif tok and tok[0] not in ('STRING', 'NUMBER') and str(tok[1]).upper() == 'FILE' and nxt and nxt[0] not in ('ASSIGN', 'NEWLINE', 'COLON') \
+                and str(nxt[1]).upper() not in ('AT', 'TITLE'):   # else 'file' is a variable
+            self._next_token()
+            path = os.path.expanduser(self._to_string(self._parse_expression()))
+            try:
+                with open(path, 'r', encoding='utf-8', errors='replace') as f:
+                    text = f.read()
+            except FileNotFoundError:
+                self.variables['ERR'], self.variables['ERRMSG$'] = 2.0, f"File not found: {path}"
+                self._error(f"File not found: {path}")
+            title = os.path.basename(path)
+        else:
+            text = self._to_string(self._parse_expression())
+        area = None
+        while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+            tok = self._current_token()
+            word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
+            if word == 'AT':
+                self._next_token()
+                area = tuple(self._screen_ints(4))
+            elif word == 'TITLE':
+                self._next_token()
+                title = self._to_string(self._parse_expression())
+            else:
+                self._error(f"Unexpected '{tok[1]}' in VIEW")
+        SCREEN.view(text, area, title)
 
     def _parse_edit_text_statement(self):
         """EDIT TEXT target [AT top, left, bottom, right] [TITLE title$]: a boxed memo editor

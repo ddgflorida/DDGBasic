@@ -754,6 +754,105 @@ class Screen:
             self.restore_saved(underneath)
             self._w('\x1b[?25h')
 
+    # --- VIEW (text viewer) --------------------------------------------
+    def view(self, text, area=None, title=''):
+        """A read-only, scrolling box for text. Arrows, PgUp/PgDn and Home/End move; '/' or
+        Ctrl-F searches (ignoring case) and 'n' or F3 finds the next match; Esc or 'q' closes."""
+        r1, c1, r2, c2 = area or (1, 1, self.rows, self.cols)
+        if r2 - r1 < 3 or c2 - c1 < 12:
+            raise ScreenError("VIEW area is too small.")
+        lines = str(text).replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        if len(lines) > 1 and lines[-1] == '':
+            lines.pop()                       # a final newline doesn't make an extra line
+        lines = [line.expandtabs(8) for line in lines]
+        height, width = r2 - r1 - 1, c2 - c1 - 1
+        widest = max((len(line) for line in lines), default=0)
+        top = left = 0
+        found, search = None, ''
+        message = ''
+        underneath = self.save(r1, c1, r2, c2)
+        self.box(r1, c1, r2, c2, title)
+        self._w('\x1b[?25l')
+
+        def find(start):
+            needle = search.lower()
+            for k in range(len(lines)):
+                i = (start + k) % len(lines)
+                if needle in lines[i].lower():
+                    return i
+            return None
+
+        def prompt(label):
+            """Reads a line of text on the status line; returns it, or None for Esc."""
+            typed = ''
+            while True:
+                status = f' {label}{typed}_'
+                self._w(self._put(r2, c1 + 1, status[:width].ljust(width, '─'), self.field_fg, self.field_bg) + self._normal())
+                key = self.keys.read_key()
+                if key is None or key == ESC:
+                    return None
+                if key == ENTER:
+                    return typed
+                if key == BACKSPACE:
+                    typed = typed[:-1]
+                elif len(key) == 1 and key.isprintable():
+                    typed += key
+
+        try:
+            while True:
+                top = max(0, min(top, len(lines) - height))
+                left = max(0, min(left, max(0, widest - width)))
+                out = []
+                for n in range(height):
+                    i = top + n
+                    piece = lines[i][left:left + width] if i < len(lines) else ''
+                    fg, bg = (self.field_fg, self.field_bg) if i == found else (self.fg, self.bg)
+                    out.append(self._put(r1 + 1 + n, c1 + 1, piece.ljust(width), fg, bg))
+                last = min(len(lines), top + height)
+                status = message or f' {top + 1}-{last} of {len(lines)}  /=find  n=next  Esc=close '
+                message = ''
+                border = '─' * width
+                status = status[:width - 2]
+                border = border[:1] + status + border[1 + len(status):]
+                out.append(self._put(r2, c1 + 1, border, self.fg, self.bg))
+                self._w(''.join(out) + self._normal())
+                key = self.keys.read_key()
+                if key is None:
+                    key = ESC
+                self.last_key = key
+                if key in (ESC, 'q', 'Q'):
+                    return
+                if key in ('DOWN', ENTER): top += 1
+                elif key == 'UP': top -= 1
+                elif key in ('PGDN', ' '): top += height
+                elif key == 'PGUP': top -= height
+                elif key == 'HOME': top, left = 0, 0
+                elif key == 'END': top = len(lines)
+                elif key == 'RIGHT': left += 8
+                elif key == 'LEFT': left -= 8
+                elif key in ('/', '\x06'):            # '/' or Ctrl-F: search
+                    typed = prompt('Find: ')
+                    if typed:
+                        search = typed
+                        found = find(top)
+                        if found is None:
+                            bell()
+                            message = f' Not found: {search} '
+                        else:
+                            top = found if not (top <= found < top + height) else top
+                elif key in ('n', 'N', 'F3') and search:
+                    nxt = find((found if found is not None else top) + 1)
+                    if nxt is None:
+                        bell()
+                        message = f' Not found: {search} '
+                    else:
+                        found = nxt
+                        if not (top <= found < top + height):
+                            top = found
+        finally:
+            self.restore_saved(underneath)
+            self._w('\x1b[?25h')
+
     # --- MENUBAR -------------------------------------------------------
     def menubar(self, menus, row=1):
         """A menu bar across the screen with pull-down menus. menus is a list of

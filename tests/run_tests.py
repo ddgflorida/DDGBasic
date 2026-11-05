@@ -79,6 +79,7 @@ STDIN = {
                       '\x1b[C\r' '\r\x1b\x1b' '\r\r'),
     'tests/edit_text': ('\x1b[F ok\rthird\x1b[B\x1b[A\x1b[H\x1b[3~\x1b[3~\x17' 'zz\x1b\r\x19\x1b\x1b[C\r'
                         '\x19\x1b[21~' '\x1b[F\ty\x17' + 'abcdefghij' * 6 + '\x1b[H<\x17'),
+    'tests/view': '\x1b[6~/total\rn\x1b[F\x1b' 'q' '\x1b' '\x1b',
     'tests/get_targets': '\x19jones\t\t900\r\x19250\r' '\x19uno\t\x19Austin\t02116\r' '\x19zzz\t\x19yyy\x1b',
     'tests/screen': ('ann smith\t5551234567\t-5\r\x1912\r'   # READ, with a VALID failure
                      'zzz\x1b'                               # READ cancelled with Esc

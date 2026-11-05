@@ -225,6 +225,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | TRON                    | Turns on (Trace On) a line-by-line execution trace for debugging. |
 | UNSHIFT                 | Adds a new element to the beginning of an array. |
 | UNZIP                   | Extracts files from a zip archive into a specified directory. |
+| VIEW                    | Shows a file (`VIEW FILE`), a query or a string in a read-only, scrolling box with search (`/`, `n`). |
 | WHILE ... WEND          | Executes a block of code as long as a specified condition is true. |
 | WRITE                   | Writes a comma-separated list of expressions to the console or a file, automatically quoting strings. |
 | ZIP                     | Creates a zip archive from a list of specified files. |
