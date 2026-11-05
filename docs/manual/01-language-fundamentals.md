@@ -370,29 +370,26 @@ operators such as `||` and `~` work (see 4.2.1).
 
 Keywords are not case-sensitive (`print`, `Print` and `PRINT` are the same).
 A keyword is matched only as a whole word. It is also not matched if a `$`
-follows it, so `TEXT$`, `TITLE$` and `SIZE$` are ordinary variable names.
+follows it, so `TEXT$` and `USER$` are ordinary variable names.
 
 These words are keyword tokens and **cannot be used as plain (non-`$`)
 variable names**:
 
 ```
-ACTION ALTER AND APIKEY APPEND ARRAY AS ATTACH BCC BEGIN BELL BODY BROWSER
-BUTTON CC CHAIN CHDIR CHOICE CLEAR CLOSE COMMIT COPY CREATE CSV DATABASE
-DELETE DESCRIBE DETAILS DIM DISPLAY DO DOMAIN DROP DUMP ECHO ELSE ELSEIF
-EMAIL END ERROR EVAL EXCEL EXECUTE EXISTS EXIT FETCH FIELD FILES FIXED FOR
-FORM FUNCTION GOSUB GOTO GRIDEDIT HASH HEADING HELP HOST HTML HTMLBODY IF
-IGNORE IN INPUT INSERT INTO JSON JSONL KILL LABEL LET LOAD LOOKUP LOOP MATCHES
-MAXLENGTH MERGE MESSAGE MINLENGTH MINVALUE MKDIR NEXT NOT OPEN OPTIONS OR
-OUTPUT PARQUET PASSWORD PATTERN PLACEHOLDER PLAIN POP PORT POST PRAGMA
-PRINT PROVIDER PUSH READONLY REDIM REM REPLACE REQUIRED RESUME RETURN
-RETURNS REVERSE RMDIR ROLLBACK RUN SEARCH SECURITY SELECT SENDER SEPARATOR SET
-SHELL SHIFT SHOW SIZE SORT SOURCE SPLICE STEP SUBJECT SUMMARIZE TABLE TEXT
-TEXTBLOCK THEN TITLE TO TROFF TRON TRUNCATE TYPE UNPACK UNSHIFT UNTIL UNZIP
-UPDATE UPGRADE UPSERT USER USING WEND WHILE WITH WRITE XML ZIP
+ALTER AND APIKEY APPEND ARRAY AS ATTACH BCC BEGIN BELL BODY BROWSER CC CHAIN
+CHDIR CLEAR CLOSE COMMIT COPY CREATE CSV DATABASE DELETE DESCRIBE DETAILS DIM
+DO DOMAIN DROP DUMP ECHO ELSE ELSEIF EMAIL END ERROR EVAL EXCEL EXECUTE EXISTS
+EXIT FETCH FILES FIXED FOR FUNCTION GOSUB GOTO HASH HELP HOST HTML HTMLBODY IF
+IGNORE IN INPUT INSERT INTO JSON JSONL KILL LET LOAD LOOP MERGE MKDIR NEXT NOT
+OPEN OPTIONS OR OUTPUT PARQUET PASSWORD PLAIN POP PORT POST PRAGMA PRINT
+PROVIDER PUSH REDIM REM REPLACE RESUME RETURN REVERSE RMDIR ROLLBACK RUN
+SECURITY SELECT SENDER SET SHELL SHIFT SHOW SORT SPLICE STEP SUBJECT SUMMARIZE
+TABLE TEXT THEN TO TROFF TRON TRUNCATE UNPACK UNSHIFT UNTIL UNZIP UPDATE
+UPGRADE UPSERT USER USING WEND WHILE WITH WRITE XML ZIP
 ```
 
-Many ordinary words are on this list (`user`, `size`, `type`, `title`, `label`,
-`message`, `source`, `body`, `host`, `port`, `text`), so this is easy to hit:
+A few ordinary words are on this list (`user`, `body`, `host`, `port`, `text`),
+so this is easy to hit:
 
 ```basic
 user = 1
@@ -1409,10 +1406,12 @@ the existing documentation:
    case-insensitive everywhere (`VariableTable`).
 5. **Reserved words.** `USER` is a reserved keyword token (added for
    `SET EMAIL`), so `DIM user AS HASH` fails. `tests/hashtest.bas` has been
-   updated to use `person` instead. Several other
-   common words (`size`, `type`, `title`, `label`, `message`, `source`, `text`,
+   updated to use `person` instead. A few other common words (`text`,
    `body`, `host`, `port`) are also reserved and cannot be used as plain
-   variable names.
+   variable names. About 30 more (`size`, `type`, `title`, `label`,
+   `message`, `source`, `choice`, `display`, `search` and others) were
+   reserved by the old FORM statements; they became ordinary names again
+   when those statements were archived (see 6.8).
 6. **`SHIFT`/`UNSHIFT`** (changed to 0-based). They used to work on index 1,
    treating element 0 as reserved, so on arrays from `ARRAY()`, `PUSH` or
    `SPLIT` they skipped the real first element, and `SHIFT` refused a

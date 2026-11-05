@@ -40,16 +40,7 @@ NEEDS_FILE = {
 # Scripts that can't run unattended.
 SKIP = {
     'examples/utils':           'subroutine library for INCLUDE, not a program',
-    'examples/loadjson':        'interactive (GRIDEDIT)',
     'examples/browser':         'opens a web browser',
-    'examples/dbform':          'interactive (TUI form)',
-    'examples/formex':          'interactive (TUI form)',
-    'examples/form2ex':         'interactive (TUI form)',
-    'examples/formlookup':      'interactive (TUI form)',
-    'examples/formsignup':      'interactive (TUI form)',
-    'examples/product_form':    'interactive (TUI form)',
-    'examples/registration':    'interactive (TUI form)',
-    'examples/gridlookup':      'interactive (GRIDEDIT)',
 }
 
 # Scripts that download from the internet (skipped with --offline).
@@ -67,6 +58,7 @@ EXPECTED_EXIT = {
 
 # Keyboard input fed to scripts that use INPUT.
 STDIN = {
+    'examples/loadjson': '\x1b[C\x1b[C\x1b[B60\r\x1b',   # BROWSE EDIT: Gadget quantity -> 60
     'examples/errorhandling': 'nope.txt\n\n',   # file-not-found path, then quit
     'examples/retro_contacts': ('\x1b[B\r'                          # Add a contact
                                 'hooli\t5552223333\tca\t500\r' ' '  # fill in the form; a key for "Saved"

@@ -32,7 +32,10 @@ REM --- Cleanup ---
 PRINT "Remove file and close database"
 KILL "inventory.json"
 
-INPUT "Press a key to edit data: "; s$
-GRIDEDIT "inventory"
+REM Edit the table in place: arrows move, Enter or typing edits a cell, Esc ends
+BROWSE "inventory" EDIT TITLE "Inventory (Esc when done)"
+COLOR 7, 0
+CLS
+SELECT id, product, quantity, notes FROM inventory;
 DATABASE CLOSE
 END

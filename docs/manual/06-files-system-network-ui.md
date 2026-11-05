@@ -1,8 +1,8 @@
 # Chapter 6: Files, System, Network & User Interface
 
-This chapter covers the statements DbBasic uses to work with things outside the interpreter: text files, directories, archives, the operating-system shell, the console, HTTP services, e-mail and terminal (TUI) forms.
+This chapter covers the statements DbBasic uses to work with things outside the interpreter: text files, directories, archives, the operating-system shell, the console, HTTP services, e-mail and full-screen text applications.
 
-Everything here is taken from the interpreter source (`src/dbbasic.py`, `src/tui_runner.py`). Where an example shows output, the script was run against the current interpreter. Statements that need a terminal UI, a GUI browser or a live mail server (`BROWSER`, `BELL`, `OPENFORM`, `GRIDEDIT`, sending with `EMAIL`) are described from the source only.
+Everything here is taken from the interpreter source (`src/dbbasic.py`, `src/dbscreen.py`). Where an example shows output, the script was run against the current interpreter. Statements that need a terminal UI, a GUI browser or a live mail server (`BROWSER`, `BELL`, sending with `EMAIL`) are described from the source only.
 
 Related material in other chapters:
 
@@ -25,8 +25,7 @@ Related material in other chapters:
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
 7. [Text screens](#67-text-screens)
    * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [MENU()](#menu) · [BROWSE](#browse) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
-8. [TUI forms](#68-tui-forms)
-   * [Requirements](#requirements) · [FORM ... ENDFORM](#form--endform) · [Form elements](#form-elements) · [FIELD attributes and validation](#field-attributes-and-validation) · [BUTTON and actions](#button-and-actions) · [OPENFORM](#openform) · [Returned values](#values-returned-by-openform) · [GRIDEDIT](#gridedit)
+8. [TUI forms (archived)](#68-tui-forms-archived)
 9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
 
 ---
@@ -524,7 +523,7 @@ Turns each key of a hash into a stand-alone variable:
 * Keys that are not valid identifiers, such as `"bad key"`, are skipped.
 * The argument must evaluate to a hash. Otherwise the error is `UNPACK statement requires a HASH variable.`
 
-UNPACK is handy after `OPENFORM` (`UNPACK FORM_DATA`) or after parsing JSON.
+UNPACK is handy after `BROWSE ... INTO row` (`UNPACK row`) or after parsing JSON.
 
 ```basic
 DIM h AS HASH
@@ -977,227 +976,18 @@ When standard input is not a terminal, keys are read from it as a stream, with a
 
 ---
 
-## 6.8 TUI forms
+## 6.8 TUI forms (archived)
 
-DbBasic can define data-entry forms and data grids declaratively and display them as full-screen terminal applications. The terminal UI lives in `src/tui_runner.py` and is built on the **Textual** library.
+The declarative forms (`FORM ... ENDFORM`, `OPENFORM`, `GRIDEDIT`), built on the Textual library in `src/tui_runner.py`, have been removed from `main`. The text-screen statements in [6.7](#67-text-screens) replace them with less code:
 
-### Requirements
-
-`dbbasic.py` imports `FormRunner` from `tui_runner` inside a `try` block. If the `textual` package is not installed, the import fails silently and `FormRunner` becomes `None`. You can still *define* forms, but `OPENFORM` and `GRIDEDIT` then fail with `Runtime Error: 'NoneType' object is not callable`. Install the package (`pip install textual`) and run the script in a real terminal.
-
-Each form is shown as a separate Textual application. When the user presses a button, the application exits, control returns to the BASIC program, and the program inspects the result.
-
-### FORM ... ENDFORM
-
-```
-FORM name [TITLE title$] [DISPLAY n] [SOURCE (select-statement)]
-    element
-    element
-    ...
-ENDFORM          ' or END FORM
-```
-
-The form-level attributes can appear on the `FORM` line or on the lines that follow it, before the first element.
-
-| Attribute | Meaning |
+| Old | New |
 |---|---|
-| `TITLE expr` | Window title. It defaults to the form name and is shown as `Entry View: <title>` in single-record view. |
-| `DISPLAY n` | `n > 1` makes a data-bound form open in **grid** (list) view. `1`, the default, opens in single-record view. A form without `SOURCE` cannot use `DISPLAY > 1`. |
-| `SOURCE (SELECT ...)` | Binds the form to a query. The primary key is detected from the first table after `FROM`, and `id` is used if no table can be detected. |
+| `GRIDEDIT "orders"` | `BROWSE "orders" EDIT` |
+| A list `FORM` with `OPENFORM` and `FORM_SELECTED_ID` | `BROWSE (SELECT ...) INTO row` |
+| An entry `FORM`, `FORM_RESULT$`, `FORM_DATA` and an `UPDATE` | `@ ... SAY ... GET`, `READ`, `LASTKEY$` and an `UPDATE` |
+| `BUTTON` actions | `MENU(...)` |
 
-Defining two forms with the same name is an error (`Duplicate FORM definition`). Definitions are kept for the rest of the run and are not shared with scripts started by `RUN`/`CHAIN`.
-
-### Form elements
-
-| Element | Syntax | Rendering |
-|---|---|---|
-| Heading | `HEADING "text"` | Bold, centred label. In grid view, the first HEADING becomes the window title (`List View: <heading> (N records)`). |
-| Text block | `TEXTBLOCK "text"` | Muted, italic paragraph. |
-| Separator | `SEPARATOR` | Horizontal rule. |
-| Field | `FIELD name TYPE type [attributes...]` | Labelled input. See below. |
-| Button | `BUTTON name ACTION action` | Button in the button bar. See below. |
-
-`HEADING`, `TEXTBLOCK` and `LABEL` text must be string literals.
-
-**Field types.** `TYPE` accepts any word. The word is upper-cased, but only three types change the widget:
-
-| TYPE | Widget |
-|---|---|
-| `PASSWORD` | Masked single-line input. |
-| `MEMO` | Multi-line text area (6 rows). |
-| `CHOICE` | Drop-down list (Select). The options come from the array named by `SOURCE arrayname`. The array is read each time `OPENFORM` runs. |
-| anything else (`TEXT`, `NUMBER`, `EMAIL`, `DATE`, ...) | Ordinary single-line input. The type has no effect on validation or conversion. |
-
-A field that has a `LOOKUP` is drawn instead as a read-only display box with a `[...]` button beside it (see `LOOKUP` below).
-
-### FIELD attributes and validation
-
-The attributes follow the `TYPE` on the same logical line. Use the `_` line continuation to split long definitions.
-
-| Attribute | Meaning |
-|---|---|
-| `LABEL "text"` | Label shown before the field. It defaults to the field name. |
-| `PLACEHOLDER "text"` | Stored in the definition. **The TUI does not currently display it.** |
-| `READONLY` | The widget is disabled. |
-| `SOURCE arrayname` | Choices for a `CHOICE` field. |
-| `LOOKUP (SELECT ...) RETURNS col [DISPLAY col]` | Pick-list from a query. The `[...]` button opens a grid of the query results. Choosing a row stores that row's `RETURNS` column in the field and shows its `DISPLAY` column. `RETURNS`/`DISPLAY` are expressions, usually string literals, and must match the query's column names. |
-| `REQUIRED MESSAGE "msg"` | The value must not be blank. |
-| `MINLENGTH n MESSAGE "msg"` | Minimum length (in characters). |
-| `MAXLENGTH n MESSAGE "msg"` | Maximum length. |
-| `MINVALUE n MESSAGE "msg"` | The value must be a number and at least `n`. A non-numeric value shows `<label> must be a number.` |
-| `PATTERN "regex" MESSAGE "msg"` | Python `re.match` must succeed. It is anchored at the start only, so add `$` to anchor the end. |
-| `MATCHES "otherfield" MESSAGE "msg"` | The value must equal another field's value (for example to confirm a password). |
-
-Any other word is an error (`Unexpected attribute ... for FIELD`). There is no `MAXVALUE`.
-
-Validation runs only when a button with action `SUBMIT`, `INSERT` or `UPDATE` is pressed. Fields are checked in order and the first failure's message is shown in a red banner. An empty, non-required field skips the remaining checks.
-
-### BUTTON and actions
-
-```
-BUTTON name ACTION action
-```
-
-`name` and `action` can each be a bare word or a string. The action is upper-cased.
-
-Buttons are shown **only if their action belongs to the current view**:
-
-| View | Actions that are displayed |
-|---|---|
-| Both | `CLOSE`, `EXIT`, `HELP` |
-| Single-record | `INSERT`, `UPDATE`, `SAVE`, `SUBMIT`, `CANCEL`, `DELETE`, `VIEW_GRID`, `BACK_TO_GRID` |
-| Grid | `VIEW_SINGLE`, `EDIT`, `NEW`, `DELETE`, `REFRESH`, `EDIT_DETAILS`, `SELECT` |
-
-A button with any other action (for example `ACTION OK`) is silently **not drawn**.
-
-Actions handled inside `OPENFORM` for data-bound forms:
-
-| Action | Effect |
-|---|---|
-| `VIEW_GRID` | Switch to grid view. |
-| `VIEW_SINGLE` | Switch to single-record view at the selected grid row. |
-| First/Prev/Next/Last | Move between records. These buttons are added automatically in single-record view when other records exist. |
-
-All other actions close the form and return to the program.
-
-### OPENFORM
-
-```
-OPENFORM name [USING record_id]       ' or OPEN FORM name ...
-```
-
-The form must already be defined (`FORM 'x' is not defined` otherwise).
-
-**Transient form (no SOURCE).** The form opens empty in single-record view. `USING` is not allowed. When the form closes, `FORM_RESULT$`, `FORM_DATA` and `FORM_SELECTED_ID` = 0 are set, **and every field also becomes a top-level variable**: `name$` for string values, `name` otherwise. Text inputs always return strings, so a field `age` comes back as `age$`.
-
-**Data-bound form (SOURCE).**
-
-1. The interpreter runs `SELECT pk FROM (source) AS t` to build the list of record IDs.
-2. With `USING id`, it opens that record in single-record view. If the ID is not found it falls back to the `DISPLAY` setting.
-3. It then loops: it shows the grid or the current record, handles navigation, view-switching and lookup actions itself, and exits on any other action.
-
-In grid view, the columns are the `FIELD`s whose names exist in the query, or all columns except `rowid` if no fields are defined. `OPENFORM` **never writes to the database**: the program performs any `UPDATE` itself, using `FORM_DATA` (see `examples/formex.bas`).
-
-### Values returned by OPENFORM
-
-| Variable | Contents |
-|---|---|
-| `FORM_RESULT$` | The action of the button pressed, upper-cased, such as `"SUBMIT"`, `"UPDATE"`, `"CANCEL"` or `"CLOSE"`. It is `""` if the window was closed without pressing a button. |
-| `FORM_DATA` | Hash of the field values. For data-bound forms it holds the record's columns merged with the edited values. Keys follow the `SET HASH_KEYS` mode. |
-| `FORM_SELECTED_ID` | The primary key of the current or selected record, as a number. It is 0 for transient forms. |
-| `FORM_PK_ID` | Internal variable used for the single-record query. Its value is the current record ID. |
-
-The `FORM_DATA` values come from the widgets: input values are strings, and a `CHOICE` field returns the selected item.
-
-```basic
-FORM SignupForm
-  HEADING "Create Your Account"
-  TEXTBLOCK "Please choose a secure username and password."
-  FIELD username TYPE TEXT LABEL "Username" _
-    REQUIRED MESSAGE "You must enter a username." _
-    MINLENGTH 5 MESSAGE "Username must be at least 5 characters."
-  FIELD age TYPE NUMBER LABEL "Age" _
-    REQUIRED MESSAGE "Please enter your age." _
-    MINVALUE 18 MESSAGE "You must be at least 18 years old to sign up."
-  FIELD pwd TYPE PASSWORD LABEL "Password" REQUIRED MESSAGE "Password cannot be empty."
-  FIELD pwdConfirm TYPE PASSWORD LABEL "Confirm Password" _
-    MATCHES "pwd" MESSAGE "The passwords do not match."
-  BUTTON "Create Account" ACTION SUBMIT
-  BUTTON Cancel ACTION CANCEL
-END FORM
-
-OPEN FORM SignupForm
-IF FORM_RESULT$ = "SUBMIT" THEN PRINT "Welcome "; username$; " (age "; age$; ")"
-```
-
-A data-bound form with grid and record views (adapted from `examples/product_form.bas`):
-
-```basic
-FORM ProductManager DISPLAY 10
-  SOURCE (SELECT id, sku, productName, stockQty, notes FROM Products ORDER BY sku)
-  HEADING "Product Record"
-  FIELD id TYPE NUMBER LABEL "ID" READONLY
-  FIELD sku TYPE TEXT LABEL "SKU" PATTERN "^[A-Z]-\d{4}$" MESSAGE "SKU must be A-1234."
-  FIELD notes TYPE MEMO LABEL "Notes"
-  BUTTON "Edit Details" ACTION VIEW_SINGLE
-  BUTTON "Back to Grid" ACTION VIEW_GRID
-  BUTTON "Save" ACTION UPDATE
-  BUTTON "Close" ACTION CLOSE
-END FORM
-OPEN FORM ProductManager
-IF FORM_RESULT$ = "UPDATE" THEN
-   sku$ = FORM_DATA("sku") : id = FORM_SELECTED_ID
-   UPDATE Products SET sku = :sku$ WHERE id = :id;
-END IF
-```
-
-### GRIDEDIT
-
-```
-GRIDEDIT table
-    [FIELDS col [, col ...]]          ' or FIELDS "col1, col2, ..."
-    [WHERE condition$]
-    [ORDER BY expr$]
-    [SEARCH [ON col [, col ...]]]
-    [LOOKUP col (SELECT ...) RETURNS col [DISPLAY col]] ...
-    [USING KEY pk_col$]
-    [READONLY]
-```
-
-`GRIDEDIT` is a complete create/read/update/delete editor for one table, with no form definition needed.
-
-**Table name.** `table` can be a string literal, a string variable, or a bare identifier. A bare identifier that is not an existing variable is taken literally.
-
-**Clauses.** All the clauses go on one logical line (use `_` to continue it).
-
-| Clause | Meaning |
-|---|---|
-| `FIELDS` | Columns to show in the grid. A single comma-separated string is split into names. The edit and new forms always show **all** of the table's columns. |
-| `WHERE` | The expression's value is inserted **verbatim** after `WHERE`, for example `WHERE "CustomerID LIKE 'A%'"`. |
-| `ORDER BY` | Inserted verbatim after `ORDER BY`. |
-| `SEARCH` | Adds a search box. Pressing Enter re-queries with a case-insensitive `LIKE '%term%'` over the `SEARCH ON` columns, or over the displayed columns if `ON` is omitted. Lookup columns are searched by their display value. |
-| `LOOKUP` | The grid shows the lookup's `DISPLAY` column through a sub-select. The edit and new forms get a `[...]` picker, as for `FORM` lookups. |
-| `USING KEY` | Overrides primary-key detection. |
-| `READONLY` | Grid buttons become View/Close, and every field in the record view is read-only with only an OK button. |
-
-**Behaviour.**
-
-* The grid has the buttons **Edit**, **New**, **Delete** and **Close** (or **View** and **Close** when `READONLY`).
-* *Edit* opens the selected row. *Save* runs `UPDATE ... WHERE pk = ?` with **only the columns that changed**. An empty string in a numeric column is stored as NULL.
-* *New* opens a blank form. The primary key is read-only when it is auto-generated, meaning SQLite `INTEGER` keys or `rowid`. *Create* inserts the non-empty fields.
-* *Delete* deletes the selected row immediately, **with no confirmation**.
-* Changes are committed straight away on SQLite.
-* *Close* ends the statement. The variable `GRIDEDIT_ID` holds the last record opened for editing.
-
-```basic
-GRIDEDIT "Orders" _
-    FIELDS "OrderID, CustomerID, EmployeeID, OrderDate, ShipCity" _
-    WHERE "CustomerID LIKE 'A%'" _
-    SEARCH _
-    LOOKUP CustomerID (SELECT CustomerID, CompanyName, Country FROM Customers) RETURNS "CustomerID" DISPLAY "CompanyName" _
-    LOOKUP EmployeeID (SELECT EmployeeID, LastName, FirstName FROM Employees)  RETURNS "EmployeeID" DISPLAY "LastName"
-```
-(from `examples/gridlookup.bas`; `examples/form2ex.bas` combines a `CHOICE` form with `GRIDEDIT table_to_edit$`.)
+`textual` is no longer a dependency. The last version with forms, including the form examples, is kept on the `archive/forms` branch.
 
 ---
 
@@ -1228,18 +1018,9 @@ These were found while checking the source against behaviour. Line numbers refer
     * `HELP EMAIL` (fixed) listed only TO/SUBJECT/BODY/ATTACH; it now shows CC, BCC and HTMLBODY too.
     * `SET EMAIL` settings never reset between providers.
     * For SMTP, a missing `TO` is not checked.
-14. **Forms (`src/tui_runner.py`).**
-    * `PLACEHOLDER` is parsed but not displayed.
-    * Buttons whose action is not in the per-view lists are hidden.
-    * `_EntryScreen.on_button_pressed` prints `--- TUI DEBUG ---` matching diagnostics to the console on every button press.
-    * Field `TYPE` values other than PASSWORD/MEMO/CHOICE are ignored, so `NUMBER` does no conversion.
-    * `MATCHES` reads `.value` or `.text` of the other widget, which does not work with a `CHOICE` (Select) widget.
-    * `FORM_SELECTED_ID` is produced with `float(...)`, so a data-bound form with a non-numeric primary key (for example Northwind `CustomerID`) would raise an error when the form closes.
-15. **GRIDEDIT.**
-    * `WHERE` and `ORDER BY` text is concatenated into the SQL unescaped.
-    * *Delete* has no confirmation.
-    * The grid-level `UPDATE`/`INSERT` branch calls `list_runner.get_initial_display_data()`, which `FormRunner` does not define. The branch is unreachable with the built-in grid buttons, so it is dead code.
-16. **Optional dependencies** (fixed). `textual` is required for `OPENFORM`/`GRIDEDIT`; it is now listed in `requirements.txt`. Without it, forms fail with the unhelpful error `'NoneType' object is not callable`.
+14. **Forms** (archived). `FORM`, `OPENFORM` and `GRIDEDIT` have been moved to the `archive/forms` branch (see 6.8). Their open issues there were: `PLACEHOLDER` not displayed, debug output on every button press, field `TYPE NUMBER` doing no conversion, `MATCHES` not working with a `CHOICE`, non-numeric primary keys failing in `FORM_SELECTED_ID`, unescaped `WHERE`/`ORDER BY` text and no delete confirmation in `GRIDEDIT`.
+15. *(merged into item 14)*
+16. *(merged into item 14)*
 17. **Web runner** (removed). The experimental web runner (`src/dbbasicweb.py`, `.htb` templates, the `REDIRECT` statement, `Interpreter.execute()` and the unused `WebFormRunner` import) has been removed from `main`. Its known problems were the `cgi` dependency (removed in Python 3.13), one interpreter shared by all requests, an unsanitised request path, and no static files. The last working version is kept on the `experiment/web-runner` branch.
 18. **`SHELL` without `INTO`** writes directly to the process's stdout, bypassing `SET OUTPUT`.
 19. **Text screens are a prototype** (6.7, new). Known limits:
@@ -1248,4 +1029,4 @@ These were found while checking the source against behaviour. Line numbers refer
     - a numeric field's `PICTURE` sets only its width;
     - `BROWSE` reads every row into memory; `BROWSE ... EDIT` (added) updates cells but can't add or delete rows;
     - the Windows key handling has not been tested;
-    - some words are already keywords from the forms and output statements and cannot be variable names, for example `choice` and `title`.
+    - (fixed) words such as `choice` and `title`, once reserved by the FORM statements, are ordinary variable names again.

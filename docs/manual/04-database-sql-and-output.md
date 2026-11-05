@@ -207,9 +207,8 @@ Before tokenising, the lexer joins certain multi-word keywords into single token
 | `TO FILE` / `INTO FILE` | `TOFILE` / `INTOFILE` |
 | `ANALYZE CSV` / `FIXED` / `JSONL` / `JSON` / `XML` / `TEXT` | `ANALYZECSV` etc. |
 | `ON ERROR GOTO` | `ONERRORGOTO` |
-| `END FORM` / `OPEN FORM` / `END FUNCTION` | `ENDFORM` / `OPENFORM` / `ENDFUNCTION` |
+| `END FUNCTION` | `ENDFUNCTION` |
 | `WITH DETAILS` / `WITH FULLPATH` / `WITH FOLDERSONLY` / `WITH FILESONLY` | joined |
-| `LIST FIELDS` | `LISTFIELDS` |
 
 These rewrites apply only to code. Text inside `"..."`, `'...'` and backtick strings, and inside `REM` and `--` comments, is left as written, so SQL string literals reach the engine unchanged:
 
