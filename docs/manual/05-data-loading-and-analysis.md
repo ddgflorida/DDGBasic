@@ -160,7 +160,7 @@ Runtime Error: An error occurred during the LOAD operation: UNIQUE constraint fa
 
 ### 5.4.1 How the string is parsed
 
-`OPTIONS` takes any string expression. The parser finds every `word=` in the string. A value runs from just after its `=` to the start of the next `word=`. Whitespace and commas at either end of a value are removed, and a value wrapped in `"..."` or `'...'` is unquoted. Keys are case-insensitive. All of these are equivalent:
+`OPTIONS` takes any string expression of `key=value` pairs. A key must come at the start or after a comma, semicolon or space. An unquoted value runs from just after its `=` to the next such key, and whitespace and commas at either end of it are removed. A value in `"..."` or `'...'` is taken exactly as written, so it can contain commas, semicolons and `word=` text; inside it, a doubled quote stands for one (`constraints="[x]:REGEX(a=b)"`, `sheetname='O''Brien'`). Keys are case-insensitive. All of these are equivalent:
 
 ```
 "header=true, skip=2, delimiter=;"
@@ -1799,7 +1799,7 @@ The following points were found while checking the source and running the exampl
 3. **The README ETL example** (fixed). It wrote `LOAD ... CREATE TABLE leads` and `OPTIONS ...` / `TRANSFORM ...` on separate lines **without** `_` continuation, so it failed with `Unknown statement: OPTIONS`. The lines now end in `_`.
 4. **Examples updated to current syntax** (fixed). `examples/loadfixed.bas`, `loadinto.bas`, `loadexcelex.bas`, `analyzecsv.bas`, `loadhtmllink.bas`, `loadhtmlimage.bas` and `npilinks.bas` used `LOAD FIXED ... FIELDS`, `fields=[col] as new`, comma-separated transform rules, or `LOAD HTML LINKS/IMAGES`. They now use the syntax described in this chapter. `examples/loadinto.bas` also gained the `example.csv` file it reads. A commented-out line in `loadcsvnohead.bas` still shows the old `fields=` form.
 5. **`ANALYZE FIXED` example command** (fixed). It printed `FIELDS "..."`, which `LOAD FIXED` does not accept; it now prints `OPTIONS "fields=..."`.
-6. **Option parsing breaks on values that contain `word=`.** The `\b(\w+)=` scan cannot tell them apart from keys. Values cannot be escaped.
+6. **Option values that contain `word=`** (fixed). Any `word=` anywhere in the string was taken as a new key, so a value such as `REGEX(a=b)` was cut in two, and quotes didn't protect it. A key now has to follow a comma, semicolon or space, and a quoted value is taken exactly as written. `LOAD`, `FOR ... IN CSV`, `ANALYZE CSV` and `SET OUTPUT ... OPTIONS` all use the same parser now.
 7. **The option `transform` rule split** (fixed). It split on every `:`, so `date()` and `format()` masks containing `:` silently did nothing. It now splits at the first `:`. The rule names `upper`, `lower`, `trim` and `proper` are also accepted in any case now.
 8. **Option `validate` column names** (fixed). They were case-sensitive, unlike `transform`, `fields` and `WITH`-clause names. They are case-insensitive now, in the normalizer too.
 9. **The `HELP LOAD JSON` / `LOAD FIXED` / `LOAD EXCEL` syntax lines** (fixed). They showed only `INTO TABLE "tbl"`; they now show `CREATE TABLE` and the modes, like `HELP LOAD CSV`.

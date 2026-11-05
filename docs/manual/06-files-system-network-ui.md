@@ -226,7 +226,7 @@ Lists directory entries. The result is printed to the console, or stored in an a
 |---|---|
 | `pattern` | String expression. If it names a directory, every entry in it is listed (`dir/*`). Otherwise it is a glob pattern (`*`, `?`, `[...]`). If omitted, the default is `"."`. |
 | `INTO array` | Store the results instead of printing them. The array must already exist (`DIM arr AS ARRAY`), or the error is `'arr' is not a dimensioned array.` The array is **replaced** by a plain list that starts at index 0. |
-| `RECURSIVE` | Walk subdirectories (`os.walk`). The file-name part of the pattern is matched against file names in every directory. |
+| `RECURSIVE` | Walk subdirectories (`os.walk`). The file-name part of the pattern is matched against the file and folder names in every directory, as with `FOR ... IN FILES(... RECURSIVE)`; a folder name alone (`FILES "ft" RECURSIVE`) lists everything. |
 | `WITH DETAILS` | Printed form: name, size (or `<DIR>`) and modification time, separated by TABs. The name is padded to 25 characters, or to 70 with `WITH FULLPATH` or `RECURSIVE`. With `INTO`: each element is a hash with keys `name`, `size`, `date` (`YYYY-MM-DD HH:MM:SS`) and `isdir` (-1/0). |
 | `WITH FULLPATH` | Report absolute paths instead of base names. |
 | `WITH FILESONLY` / `WITH FOLDERSONLY` | Filter to files only or directories only. |
@@ -261,9 +261,7 @@ sub
 a.txt                    	           2	2026-01-01 12:00:00
 b.csv                    	           3	2026-01-01 12:00:00
 sub                      	       <DIR>	2026-01-01 12:00:00
-sub
 a.txt
-deep
 c.txt
 d.txt
 File not found
@@ -284,7 +282,7 @@ NEXT [var]
 Runs the loop body once for each matching path. All modifiers go **inside** the parentheses. Any other token there is an error (`Unexpected token ... inside FILES().`).
 
 * `pattern` must be a string. A directory name means "everything in it". With `RECURSIVE`, a directory becomes `dir/**/*`, and a pattern such as `ft/*.txt` becomes `ft/**/*.txt` (Python `glob` with `recursive=True`).
-* Unlike `FILES RECURSIVE`, directories are filtered by the pattern here.
+* Directories are filtered by the pattern, as with `FILES ... RECURSIVE`.
 * Hidden (dot) files are skipped, as with any glob.
 * The loop variable receives the base name, or the absolute path with `WITH FULLPATH`.
 * Results are sorted by full path.
@@ -813,7 +811,7 @@ These were found while checking the source against behaviour. Line numbers refer
 7. **`INPUT`** (fixed). `HELP INPUT` showed a comma after the prompt but only `;` was accepted, and non-numeric input to a numeric variable was a fatal error. Both separators work now, and bad numeric input asks again. Only a literal prompt and a single variable are supported.
 8. **`LINE INPUT #` and `PRINT #` on a closed handle** (fixed). They raised a bare `KeyError` (`Runtime Error: 5`); the error is now `File #5 is not open.`. `LINE INPUT` past EOF still returns `""`; test `EOF(n)` first.
 9. **`~` in file names** (fixed). `NAME`, `OPEN`, `READ FILE` and `UNZIP` now expand `~`, like `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES` and `COPY`.
-10. **`FILES RECURSIVE`** includes every directory whatever the pattern (unless `WITH FILESONLY`), while `FOR ... IN FILES(... RECURSIVE)` filters directories by the pattern. Arrays filled by `FILES ... INTO` start at index 0, like every other array.
+10. **`FILES RECURSIVE`** (fixed) listed every directory whatever the pattern, while `FOR ... IN FILES(... RECURSIVE)` filtered directories by it. Both filter by the pattern now. Arrays filled by `FILES ... INTO` start at index 0, like every other array.
 11. **Multi-word keywords inside strings** (fixed). The lexer used to collapse `WITH DETAILS`, `TO FILE`, `READ FILE` and similar pairs even inside string literals, so `PRINT "TO FILE"` printed `TOFILE`. Strings and comments are now left unchanged.
 12. **FETCH.**
     * `ERR` is the HTTP status on success (200, 201, ...), not 0. This is deliberate: the status is more useful than 0.

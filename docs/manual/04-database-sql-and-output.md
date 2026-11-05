@@ -831,7 +831,7 @@ The following errors are **not** governed by `SQL_FATAL_ERRORS`. They always sto
 
 | Option | Syntax |
 |---|---|
-| `OUTPUT` | `SET OUTPUT [CONSOLE \| FILE expr \| OFF] [FORMAT fmt [sql_mode] [OPTIONS "k=v, ..."]]` |
+| `OUTPUT` | `SET OUTPUT [CONSOLE \| FILE expr [APPEND] \| OFF] [FORMAT fmt [sql_mode] [OPTIONS "k=v, ..."]]` |
 | `SQL_FATAL_ERRORS` | `SET SQL_FATAL_ERRORS ON \| OFF` |
 | `HASH_KEYS` | `SET HASH_KEYS PRESERVE_CASE \| IGNORE_CASE` |
 | `NULL_HANDLING` | `SET NULL_HANDLING [FOR expr] TO NULL \| CONVERT_EMPTY_TO_NULL \| PRESERVE_EMPTY_STRINGS \| EMPTY` |
@@ -940,8 +940,8 @@ This configuration controls only **result sets**: line SQL queries, queries insi
 | Clause | Effect |
 |---|---|
 | `CONSOLE` | mode = `CONSOLE` **and format reset to `TEXT`** (before any `FORMAT` clause on the same statement is applied) |
-| `FILE expr` | mode = `FILE`, `file_path` = value of `expr`. The format is unchanged unless `FORMAT` follows. |
-| `OFF` | mode = `OFF`. Line-level `SELECT`/`WITH`/`SUMMARIZE`/`PRAGMA` statements are **skipped entirely, not executed**. `EXECUTE` and `DESCRIBE` still run, but their output is discarded. |
+| `FILE expr [APPEND]` | mode = `FILE`, `file_path` = value of `expr` (`~` is expanded). The format is unchanged unless `FORMAT` follows. Each query **replaces** the file, unless `APPEND` is given: then each query's rows are added to the end, and a CSV header is written only when the file is new or empty (`1 rows added to out.csv`). `APPEND` can't be used with `JSON`, `XML`, `HTML` or `PARQUET`, whose files hold one document; `EXCEL` always adds a sheet. |
+| `OFF` | mode = `OFF`. Queries still run, so `ERR`, `ERRMSG$` and `PRAGMA` settings behave as usual, but their rows are not shown. `EXECUTE` and `DESCRIBE` also run with their output discarded. |
 | *(omitted, i.e. `SET OUTPUT FORMAT ...`)* | mode is set to `CONSOLE`. This turns off `FILE` or `OFF` mode. |
 
 Any other word raises `Unknown output mode: X`.
@@ -1542,11 +1542,11 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 8. **`SET NULL_HANDLING`** (fixed). It had no effect: the settings were stored but never read, and the global form was not parsed. It now controls `LOAD`, with empty fields stored as `NULL` by default (4.9.3).
 9. **`SET OUTPUT FORMAT TABLE`** (fixed). It was rejected; `TABLE` is now another name for the default `TEXT` format. The `HELP SET OUTPUT` text now lists every format.
 10. **`SET OUTPUT FORMAT ...` without a mode forces `CONSOLE`**, which silently cancels an earlier `FILE` or `OFF`. `SET OUTPUT CONSOLE` resets the format to `TEXT`, and `FILE` without `FORMAT` keeps the old format.
-11. **`SET OUTPUT OFF` does more than suppress output.** It prevents line-level `SELECT`/`WITH`/`SUMMARIZE`/`PRAGMA` statements from running at all. Side effects such as a `PRAGMA` setting, or `ERR` being reset, do not happen.
+11. **`SET OUTPUT OFF`** (fixed). It stopped line-level `SELECT`/`WITH`/`SUMMARIZE`/`PRAGMA` statements from running at all, so a `PRAGMA` setting or an error in the query was silently skipped. The query now runs and only its rows are dropped.
 
 **Output writers**
 
-12. **FILE mode overwrites the file on every query.** Only `EXCEL` appends, by adding a sheet.
+12. **FILE mode and several queries** (fixed). Each query overwrote the file, so only the last result was kept. `SET OUTPUT FILE "x" APPEND` now adds every result to the file; without `APPEND`, each query still replaces it.
 13. **HTML `full=false`** (fixed). Any non-empty value, including `false`, turned `full` on. Only `true`, `1`, `y` and `yes` do now.
 14. **Excel `title`/`subtitle`/`footer`** (fixed). The column-width pass read `column_letter` from a merged cell and crashed with `'MergedCell' object has no attribute 'column_letter'`, so the workbook was not saved.
 15. **JSON and JSONL output of DuckDB values** (fixed). `DATE`/`TIMESTAMP`/`DECIMAL` values failed with "not JSON serializable". They are now written as ISO text and numbers.

@@ -833,8 +833,8 @@ class HelpRegistry:
             "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE', 'SET AUTOADVANCE ON']
         },
         "SET OUTPUT": {
-            "syntax": 'SET OUTPUT [CONSOLE|FILE "path"|OFF] FORMAT fmt [OPTIONS "..."]',
-            "desc": "Redirects query output. Formats: TEXT (or TABLE), CSV, JSON, JSONL, XML, HTML, FIXED, PLAIN, SQL, EXCEL, PARQUET.",
+            "syntax": 'SET OUTPUT [CONSOLE|FILE "path" [APPEND]|OFF] FORMAT fmt [OPTIONS "..."]',
+            "desc": "Redirects query output. Formats: TEXT (or TABLE), CSV, JSON, JSONL, XML, HTML, FIXED, PLAIN, SQL, EXCEL, PARQUET. FILE replaces the file on each query; FILE ... APPEND adds each result (one CSV header). OFF still runs queries but shows no rows.",
             "examples": [
                 'SET OUTPUT FILE "report.csv" FORMAT CSV',
                 'SET OUTPUT CONSOLE FORMAT TABLE OPTIONS "box_style=ASCII"',
@@ -949,6 +949,7 @@ class OutputConfig:
         self.mode = "CONSOLE"
         self.format = "TEXT"
         self.file_path = ""
+        self.append = False        # SET OUTPUT FILE ... APPEND
         self.sql_options = {} 
 
 g_output_config = OutputConfig()
@@ -3818,7 +3819,7 @@ class Interpreter:
             self._next_token()
             is_select = sql_text.upper().startswith(('SELECT', 'WITH', 'SUMMARIZE', 'PRAGMA'))
             if is_select:
-                if g_output_config.mode == "OFF": return
+                # With SET OUTPUT OFF the query still runs (ERR, PRAGMA settings); only its rows are dropped
                 results = self._execute_sql(sql_text, is_query=True)
                 column_names = [desc[0] for desc in self.db_cursor.description] if self.db_cursor.description else []
                 self._handle_output(results, column_names)
@@ -6122,7 +6123,11 @@ class Interpreter:
                 elif mode_value == 'FILE':
                     self._next_token()
                     filename = self._parse_expression()
-                    g_output_config.mode, g_output_config.file_path = "FILE", str(filename)
+                    g_output_config.mode, g_output_config.file_path = "FILE", os.path.expanduser(str(filename))
+                    g_output_config.append = False
+                    if self._current_token() and self._current_token()[0] == 'APPEND':
+                        self._next_token()
+                        g_output_config.append = True
                 elif mode_value == 'OFF': 
                     self._next_token()
                     g_output_config.mode = "OFF"
@@ -6158,19 +6163,18 @@ class Interpreter:
                             # Start with any already parsed options (like SQL mode)
                             temp_options = g_output_config.sql_options 
                             
-                            key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-                            for i, match in enumerate(key_matches):
-                                key = match.group(1).lower()
-                                start_pos = match.end()
-                                end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                                value = options_str[start_pos:end_pos].strip().strip(',').strip("'\"")
-                                temp_options[key] = value
+                            temp_options.update(self._options_from_string(options_str))
                             
                             g_output_config.sql_options = temp_options
                     else: 
                         self._error(f"Unknown format type '{output_format}'")
                 else: 
                     self._error("Missing or invalid format type after FORMAT")
+            if g_output_config.mode == "FILE" and g_output_config.append and \
+                    g_output_config.format in ("JSON", "XML", "HTML", "PARQUET"):
+                g_output_config.append = False
+                self._error(f"APPEND can't be used with FORMAT {g_output_config.format}: the file would hold several "
+                            "documents. Use TEXT, CSV, JSONL, FIXED, SQL or PLAIN (EXCEL adds a sheet anyway).")
         else:
             option = token[1] if token and token[0] not in ('NEWLINE', 'COLON') else '(nothing)'
             self._error(f"Unknown SET option '{option}'. Expected OUTPUT, EMAIL, NULL_HANDLING, "
@@ -6193,10 +6197,18 @@ class Interpreter:
             else:
                 # Standard text/csv/json formats need a text stream
                 try:
-                    with open(g_output_config.file_path, "w", encoding="utf-8", newline='') as f:
+                    options = g_output_config.sql_options
+                    mode = "w"
+                    if g_output_config.append:
+                        mode = "a"
+                        # One CSV header for the whole file: only when the file is new or empty
+                        if g_output_config.format == "CSV" and os.path.exists(g_output_config.file_path) \
+                                and os.path.getsize(g_output_config.file_path) > 0:
+                            options = dict(options, header='false')
+                    with open(g_output_config.file_path, mode, encoding="utf-8", newline='') as f:
                         writer_function = getattr(self, f"_write_as_{g_output_config.format.lower()}")
-                        writer_function(results, column_names, f, g_output_config.sql_options)
-                    print(f"{len(results)} rows written to {g_output_config.file_path}")
+                        writer_function(results, column_names, f, options)
+                    print(f"{len(results)} rows {'added' if g_output_config.append else 'written'} to {g_output_config.file_path}")
                 except IOError as e: self._error(f"Error writing to file: {e}")
             
     def _write_as_text(self, results, headers, stream, options={}):
@@ -7555,7 +7567,8 @@ class Interpreter:
                 for dirpath, dirnames, filenames in os.walk(start_dir):
                     # Process directories if they are not being filtered out
                     if filter_mode != 'files':
-                        for dirname in sorted(dirnames):
+                        # Folders are filtered by the pattern too, as FOR ... IN FILES(... RECURSIVE) does
+                        for dirname in sorted(d for d in dirnames if fnmatch.fnmatch(d, pattern)):
                             full_path = os.path.join(dirpath, dirname)
                             if into_array_name is None:
                                 name_to_print = os.path.abspath(full_path) if with_fullpath else os.path.basename(full_path)
@@ -8882,27 +8895,49 @@ class Interpreter:
             self._error("Argument for OPTIONS must be a string.")
         return self._options_from_string(options_str)
 
-    def _options_from_string(self, options_str):
-        """Parses "key=value, key2=value2" into a dictionary with lowercase keys."""
-        parsed_options = {}
-        # Use regex to find all "key=" patterns to correctly split values
-        key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-        for i, match in enumerate(key_matches):
-            key = match.group(1).lower()
-            start_pos = match.end()
-            
-            # The value is everything from the end of the current match to the start of the next one
-            end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-            
-            # Clean up the extracted value
-            value = options_str[start_pos:end_pos].strip().strip(',')
-            if value.startswith('"') and value.endswith('"'):
-                value = value[1:-1].replace('""', '"')
-            elif value.startswith("'") and value.endswith("'"):
-                value = value[1:-1].replace("''", "'")
-                
-            parsed_options[key] = value
+    _OPTION_KEY_RE = re.compile(r'(\w+)\s*=')
+    _NEXT_OPTION_RE = re.compile(r'[,;\s]\s*(\w+)\s*=')
 
+    def _options_from_string(self, options_str):
+        """Parses "key=value, key2=value2" into a dictionary with lowercase keys.
+
+        A value in double or single quotes is taken as it is (a doubled quote stands for one),
+        so it can contain commas, semicolons and 'word=' text: constraints="[x]:REGEX(a=b)".
+        An unquoted value runs to the next key, which must follow a comma, semicolon or space."""
+        parsed_options = {}
+        s, i, n = str(options_str), 0, len(str(options_str))
+        while i < n:
+            while i < n and s[i] in ' \t\r\n,;':
+                i += 1
+            m = self._OPTION_KEY_RE.match(s, i)
+            if not m:
+                nxt = self._NEXT_OPTION_RE.search(s, i)
+                if not nxt:
+                    break
+                i = nxt.start(1)
+                continue
+            key = m.group(1).lower()
+            i = m.end()
+            while i < n and s[i] in ' \t':
+                i += 1
+            if i < n and s[i] in '"\'':
+                quote, j, chars = s[i], i + 1, []
+                while j < n:
+                    if s[j] == quote:
+                        if j + 1 < n and s[j + 1] == quote:
+                            chars.append(quote)
+                            j += 2
+                            continue
+                        break
+                    chars.append(s[j])
+                    j += 1
+                parsed_options[key] = ''.join(chars)
+                i = j + 1
+            else:
+                nxt = self._NEXT_OPTION_RE.search(s, i)
+                end = nxt.start() if nxt else n
+                parsed_options[key] = s[i:end].strip().strip(',')
+                i = end
         return parsed_options
      
     def _csv_extractor(self, filename, options):
@@ -11499,14 +11534,7 @@ class Interpreter:
             elif token[0] == 'OPTIONS':
                 self._next_token()
                 options_str = self._parse_expression()
-                temp_options = {}
-                key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-                for i, match in enumerate(key_matches):
-                    key = match.group(1).lower()
-                    start_pos = match.end()
-                    end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                    value = options_str[start_pos:end_pos].strip().strip(',').strip("'\"")
-                    temp_options[key] = value
+                temp_options = self._options_from_string(options_str)
                 
                 options.update(temp_options)
                 if 'limit' in options and options['limit']: options['limit'] = int(options['limit'])
@@ -11737,15 +11765,7 @@ class Interpreter:
             elif self._current_token()[0] == 'OPTIONS':
                 self._next_token()
                 options_str = self._parse_expression()
-                temp_options = {}
-                key_matches = list(re.finditer(r'\b(\w+)=', options_str))
-                for i, match in enumerate(key_matches):
-                    key = match.group(1).lower()
-                    start_pos = match.end()
-                    end_pos = key_matches[i+1].start() if i + 1 < len(key_matches) else len(options_str)
-                    value = options_str[start_pos:end_pos].strip().strip(',').strip()
-                    if value.startswith('"') and value.endswith('"'): value = value[1:-1]
-                    temp_options[key] = value
+                temp_options = self._options_from_string(options_str)
 
                 for key, value in temp_options.items():
                     if key == 'header':
