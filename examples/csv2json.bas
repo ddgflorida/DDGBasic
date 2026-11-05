@@ -74,7 +74,7 @@ FOR i = 0 TO UBOUND(headers)
     
     REM Get the analysis stats for this column
     column_stats = stats_hash(header_name$)
-    suggested_type$ = column_stats("SUGGESTED_SQL_TYPE")
+    suggested_type$ = column_stats("SUGGESTED_DATA_TYPE")
 
     REM Convert the value based on the suggested type
     IF cell_value$ = "" THEN

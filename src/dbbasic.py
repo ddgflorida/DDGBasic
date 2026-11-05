@@ -5939,7 +5939,7 @@ class Interpreter:
                 return {str(k).upper(): self._python_to_basic_data(v) for k, v in data.items()}
             else:  # PRESERVE_CASE
                  return {str(k): self._python_to_basic_data(v) for k, v in data.items()}
-        if isinstance(data, list): 
+        if isinstance(data, (list, tuple)): 
             return [self._python_to_basic_data(item) for item in data]
         if data is None: return ""
         if isinstance(data, bool): return -1.0 if data else 0.0
@@ -11064,8 +11064,6 @@ class Interpreter:
                     self._error("INTO clause specified more than once.")
                 self._next_token()
                 into_hash_name = self._expect('ID')[1]
-                if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                    self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
             
             elif self._current_token()[0] == 'OPTIONS':
                 self._next_token()
@@ -11544,8 +11542,6 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] == 'INTO':
             self._next_token()
             into_hash_name = self._expect('ID')[1]
-            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                self._error(f"'{into_hash_name}' is not a dimensioned hash.")
 
         # --- Step 2: Perform full analysis by streaming the entire file ---
         report = {}
@@ -11662,7 +11658,7 @@ class Interpreter:
                         fields_spec_parts.append(f"{name}:{start_display}-{end_display}")
                     
                     fields_spec_string = ",".join(fields_spec_parts)
-                    example_command = f'LOAD FIXED "{filename}" CREATE TABLE MyTable FIELDS "{fields_spec_string}"'
+                    example_command = f'LOAD FIXED "{filename}" CREATE TABLE MyTable OPTIONS "fields={fields_spec_string}"'
                     
                     print("\n  Example LOAD Command:")
                     print(f"    {example_command}")
@@ -12491,8 +12487,6 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] == 'INTO':
             self._next_token()
             into_hash_name = self._expect('ID')[1]
-            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
 
         try:
             report = {}
@@ -12775,8 +12769,6 @@ class Interpreter:
             if token[0] == 'INTO':
                 self._next_token()
                 into_hash_name = self._expect('ID')[1]
-                if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                     self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
             
             elif token[0] == 'ID' and token[1].upper() == 'SAVE':
                 self._next_token() # Consume SAVE
@@ -12857,36 +12849,38 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] == 'INTO':
             self._next_token()
             into_hash_name = self._expect('ID')[1]
-            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                 self._error(f"'{into_hash_name}' is not a dimensioned hash for use with ANALYZE INTO.")
 
         report = {}
         key_distribution = {}
-        total_lines, valid_records, invalid_records = 0, 0, 0
+        total_lines, valid_records, invalid_records, non_object_records = 0, 0, 0, 0
         all_records = []
         
         try:
             with open(filename, 'r', encoding='utf-8', errors='replace') as infile:
                 for line in infile:
-                    total_lines += 1
                     line = line.strip()
                     if not line:
-                        continue # Skip empty lines but count them
-
+                        continue # Blank lines are not records
+                    total_lines += 1
                     try:
                         record = json.loads(line)
-                        all_records.append(record) # Store valid records for structure analysis
-                        valid_records += 1
-                        if isinstance(record, dict):
-                            key_set = tuple(sorted(record.keys()))
-                            key_distribution[key_set] = key_distribution.get(key_set, 0) + 1
                     except json.JSONDecodeError:
                         invalid_records += 1
+                        continue
+                    if isinstance(record, dict):
+                        all_records.append(record) # Store records for structure analysis
+                        valid_records += 1
+                        key_set = ", ".join(sorted(str(k) for k in record.keys()))
+                        key_distribution[key_set] = key_distribution.get(key_set, 0) + 1
+                    else:
+                        non_object_records += 1     # valid JSON, but not an object (a record)
+
 
             # Build the final report
             report['TOTAL_RECORDS'] = total_lines
             report['VALID_JSON_RECORDS'] = valid_records
             report['INVALID_JSON_RECORDS'] = invalid_records
+            report['NON_OBJECT_RECORDS'] = non_object_records
             report['IS_CONSISTENT'] = -1.0 if len(key_distribution) <= 1 and valid_records > 0 else 0.0
             
             # Store key distribution for both INTO and print modes
@@ -12900,14 +12894,14 @@ class Interpreter:
                 print(f"  Total Lines Read        : {report['TOTAL_RECORDS']}")
                 print(f"  Valid JSON Objects      : {report['VALID_JSON_RECORDS']}")
                 print(f"  Invalid JSON Lines      : {report['INVALID_JSON_RECORDS']}")
+                print(f"  Non-object JSON Lines   : {report['NON_OBJECT_RECORDS']}")
                 print(f"  Consistent Structure    : {'Yes' if report['IS_CONSISTENT'] else 'No'}")
                 
                 # Use the unconverted key_distribution for printing
                 if key_distribution:
                     print("  Key Set Distribution:")
                     for key_set, count in key_distribution.items():
-                        key_str = ", ".join(f"'{k}'" for k in key_set)
-                        print(f"    - {int(count)} record(s) with keys: ({key_str})")
+                        print(f"    - {int(count)} record(s) with keys: ({key_set})")
                 
                 # --- NEW: Automatically print the structure map ---
                 if all_records:
@@ -13039,16 +13033,16 @@ class Interpreter:
 
         # Parse optional clauses first
         save_schema_path = None
-        if self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'SAVE':
-            self._next_token(); self._expect('ID'); self._expect('TO')
-            save_schema_path = self._parse_expression()
-
         into_hash_name = None
-        if self._current_token() and self._current_token()[0] == 'INTO':
-            self._next_token()
-            into_hash_name = self._expect('ID')[1]
-            if into_hash_name not in self.variables or not isinstance(self.variables.get(into_hash_name), dict):
-                self._error(f"'{into_hash_name}' is not a dimensioned hash.")
+        while self._current_token():        # SAVE SCHEMA TO and INTO, in either order
+            if self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'SAVE':
+                self._next_token(); self._expect('ID'); self._expect('TO')
+                save_schema_path = self._parse_expression()
+            elif self._current_token()[0] == 'INTO':
+                self._next_token()
+                into_hash_name = self._expect('ID')[1]
+            else:
+                break
 
         # Now, expand the file pattern
         file_list = glob.glob(file_pattern)
@@ -13220,7 +13214,10 @@ class Interpreter:
                     print(f"Superset schema saved to {save_schema_path}")
                 except Exception as e: self._error(f"Could not save schema file: {e}")
 
-            if not into_hash_name:
+            if into_hash_name:
+                report["TAG_OCCURRENCES"] = dict(tag_occurrences)
+                self.variables[into_hash_name] = self._python_to_basic_data(report)
+            else:
                 print(f"--- XML Analysis Report for: {file_pattern} ---")
                 print(f"  Files Analyzed          : {file_count}")
                 print(f"  Root Element            : <{report['ROOT_ELEMENT']}>")

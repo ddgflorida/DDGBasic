@@ -1195,7 +1195,7 @@ Runtime Error: Invalid JSON in line of file 'events.jsonl': Expecting value: lin
 
 `ANALYZE` reads a file and either prints a report or stores it in a hash. Every `ANALYZE` statement first resets `ERR = 0` and `ERRMSG$ = ""`. A file that cannot be found sets `ERR = 2` (TEXT, JSON, JSONL) or raises an error.
 
-For FIXED, TEXT, JSON, JSONL and XML, the `INTO` variable **must already be declared as a hash** (`DIM r AS HASH`), or you get `'r' is not a dimensioned hash`. `ANALYZE CSV INTO` does not check this.
+The `INTO` variable does not need to be declared first; it is set to a hash holding the report. Lists in a report, such as `ANALYZE CSV`'s `HEADERS`, are ordinary arrays.
 
 ### 5.16.1 ANALYZE CSV
 
@@ -1414,14 +1414,10 @@ Position Reference:
       Sample Values: "75000", "65000", "55000"
 
   Example LOAD Command:
-    LOAD FIXED "emp.fix" CREATE TABLE MyTable FIELDS "Field_1:1-5,Field_2:7-17,Field_3:20-30,Field_4:32-36"
+    LOAD FIXED "emp.fix" CREATE TABLE MyTable OPTIONS "fields=Field_1:1-5,Field_2:7-17,Field_3:20-30,Field_4:32-36"
 ```
 
-The suggested command is **not valid as printed**, because `LOAD FIXED` needs `OPTIONS "fields=..."`. Rewrite it as:
-
-```basic
-LOAD FIXED "emp.fix" CREATE TABLE MyTable OPTIONS "fields=Field_1:1-5,Field_2:7-17,Field_3:20-30,Field_4:32-36"
-```
+The suggested command can be copied and run as it is.
 
 The `INTO` hash has the keys:
 
@@ -1553,7 +1549,7 @@ JSON Schema saved to users_schema.json
 ANALYZE JSONL filename_expr [INTO hashvar]
 ```
 
-The file is streamed line by line. The report shows the total lines (counting blank lines), the valid and invalid JSON line counts, structural consistency, the key-set distribution, and a structure tree built from all valid records. A line that is valid JSON but not an object, such as `"str"`, is counted as valid. `INTO` stores `TOTAL_RECORDS` (the number of lines), `VALID_JSON_RECORDS`, `INVALID_JSON_RECORDS`, `IS_CONSISTENT` and `KEY_SET_DISTRIBUTION`.
+The file is streamed line by line. Blank lines are skipped and not counted. The report shows the number of non-blank lines, how many are JSON objects (records), how many are invalid JSON, and how many are valid JSON but not an object (such as `"str"` or `[1, 2]`). It then shows structural consistency, the key-set distribution, and a structure tree built from the records. `INTO` stores `TOTAL_RECORDS` (non-blank lines), `VALID_JSON_RECORDS` (objects), `INVALID_JSON_RECORDS`, `NON_OBJECT_RECORDS`, `IS_CONSISTENT` and `KEY_SET_DISTRIBUTION` (keyed by the comma-separated key names).
 
 ```basic
 ANALYZE JSONL "mixed.jsonl"
@@ -1564,13 +1560,14 @@ The file has 5 lines: `{"a":1,"b":2}`, `{"a":3}`, a blank line, `bad line`, and 
 ```
 --- JSONL Analysis Report for: mixed.jsonl ---
   --- Consistency Check ---
-  Total Lines Read        : 5
-  Valid JSON Objects      : 3
+  Total Lines Read        : 4
+  Valid JSON Objects      : 2
   Invalid JSON Lines      : 1
+  Non-object JSON Lines   : 1
   Consistent Structure    : No
   Key Set Distribution:
-    - 1 record(s) with keys: ('a', 'b')
-    - 1 record(s) with keys: ('a')
+    - 1 record(s) with keys: (a, b)
+    - 1 record(s) with keys: (a)
 
   --- Simplified Structure ---
 (Array)
@@ -1585,7 +1582,7 @@ The file has 5 lines: `{"a":1,"b":2}`, `{"a":3}`, a blank line, `bad line`, and 
 ANALYZE XML pattern_expr [SAVE SCHEMA TO schema_file] [INTO hashvar]
 ```
 
-The clauses must appear in this order. `pattern_expr` is a glob.
+The two clauses can appear in either order. `pattern_expr` is a glob.
 
 **Single file.** The report shows:
 
@@ -1624,7 +1621,7 @@ catalog book  2
 - Files whose roots differ but share the same repeating child are merged under the first root.
 - Files with genuinely different structures are placed under a synthetic `virtual_root`.
 
-The report shows each path with the number of files it occurs in. `SAVE SCHEMA TO` writes `{root: {...}}`, where every leaf is `""`. `INTO` is accepted but **stores nothing** for multiple files (see [5.18](#518-implementation-notes--discrepancies)).
+The report shows each path with the number of files it occurs in. `SAVE SCHEMA TO` writes `{root: {...}}`, where every leaf is `""`. For multiple files, `INTO` stores `FILE_COUNT`, `ROOT_ELEMENT`, `INFERRED_RECORD_TAG` and `TAG_OCCURRENCES` (a hash from each path, such as `/orders/order`, to the number of files it occurs in).
 
 ```basic
 ANALYZE XML "xml/*.xml" SAVE SCHEMA TO "orders_schema.json"
@@ -1799,7 +1796,7 @@ The following points were found while checking the source and running the exampl
 2. **The `INTO TABLE` mode is mandatory.** There is no default `APPEND`, as the in-code comment admits.
 3. **The README ETL example** writes `LOAD ... CREATE TABLE leads` and `OPTIONS ...` / `TRANSFORM ...` on separate lines **without** `_` continuation. As written, it fails with `Unknown statement: OPTIONS`.
 4. **Examples updated to current syntax** (fixed). `examples/loadfixed.bas`, `loadinto.bas`, `loadexcelex.bas`, `analyzecsv.bas`, `loadhtmllink.bas`, `loadhtmlimage.bas` and `npilinks.bas` used `LOAD FIXED ... FIELDS`, `fields=[col] as new`, comma-separated transform rules, or `LOAD HTML LINKS/IMAGES`. They now use the syntax described in this chapter. `examples/loadinto.bas` also gained the `example.csv` file it reads. A commented-out line in `loadcsvnohead.bas` still shows the old `fields=` form.
-5. **`ANALYZE FIXED` prints an invalid example command** (`FIELDS "..."` instead of `OPTIONS "fields=..."`).
+5. **`ANALYZE FIXED` example command** (fixed). It printed `FIELDS "..."`, which `LOAD FIXED` does not accept; it now prints `OPTIONS "fields=..."`.
 6. **Option parsing breaks on values that contain `word=`.** The `\b(\w+)=` scan cannot tell them apart from keys. Values cannot be escaped.
 7. **The option `transform` rule split** uses `split(':')` and requires exactly two parts. So `date()` masks containing `:` silently do nothing, and a `format()` mask containing `:` also fails.
 8. **Option `validate` column names are case-sensitive**, while `transform` names, `fields` names and `WITH`-clause names are case-insensitive.
@@ -1837,13 +1834,13 @@ The following points were found while checking the source and running the exampl
 
 **ANALYZE**
 
-31. **`ANALYZE CSV` stores `HEADERS` as a tuple**, which BASIC cannot index. `examples/csv2json.bas` relies on `headers(i)` / `UBOUND(headers)`, and also reads a non-existent `SUGGESTED_SQL_TYPE` key (the real key is `SUGGESTED_DATA_TYPE`).
+31. **`ANALYZE CSV` `HEADERS`** (fixed). It was stored as a Python tuple, which BASIC could not index. Report lists are now arrays. `examples/csv2json.bas` also read a non-existent `SUGGESTED_SQL_TYPE` key; it now reads `SUGGESTED_DATA_TYPE`.
 32. **`ANALYZE CSV` never suggests a date type**, despite counting dates. A logical-only column is suggested as `INTEGER`.
 33. **`ANALYZE JSON` does not glob**, although `HELP ANALYZE JSON` shows a wildcard example.
-34. **Multi-file `ANALYZE XML ... INTO var`** parses the clause but never assigns the report.
-35. **`ANALYZE JSONL` counts non-object JSON lines as valid.** `TOTAL_RECORDS` is really a line count.
-36. **Inconsistent `INTO` handling.** FIXED, TEXT, JSON, JSONL and XML require the `INTO` hash to be declared first (`DIM ... AS HASH`); `ANALYZE CSV` does not.
-37. **Fixed clause order for `ANALYZE XML`.** It requires `SAVE SCHEMA TO` before `INTO`. `ANALYZE CSV` and `ANALYZE JSON` accept any order.
+34. **Multi-file `ANALYZE XML ... INTO var`** (fixed). The clause was parsed but the report was never assigned. It now stores `FILE_COUNT`, `ROOT_ELEMENT`, `INFERRED_RECORD_TAG` and `TAG_OCCURRENCES`.
+35. **`ANALYZE JSONL` counts** (fixed). Non-object JSON lines were counted as valid records, and `TOTAL_RECORDS` included blank lines. Non-objects are now counted in `NON_OBJECT_RECORDS`, and blank lines are not counted.
+36. **`INTO` handling** (fixed). FIXED, TEXT, JSON, JSONL and XML required the `INTO` hash to be declared first (`DIM ... AS HASH`). Now none do, like `ANALYZE CSV`.
+37. **`ANALYZE XML` clause order** (fixed). It required `SAVE SCHEMA TO` before `INTO`; either order works now.
 
 **Loops and PARSEJSON**
 
