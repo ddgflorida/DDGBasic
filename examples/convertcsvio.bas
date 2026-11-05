@@ -1,6 +1,13 @@
 REM --- Convert CSV to JSON with Additional Form Fields ---
 URL$ = "https://www.convertcsv.io/api/v1/csv2json"
-TOKEN$ = "YOUR_CONVERTCSV_TOKEN"
+REM The API token comes from the environment, so it never sits in the source:
+REM   set CONVERTCSV_TOKEN=your-token        (Windows)
+REM   export CONVERTCSV_TOKEN=your-token     (macOS/Linux)
+TOKEN$ = ENVIRON$("CONVERTCSV_TOKEN")
+IF TOKEN$ = "" THEN
+    PRINT "Set the CONVERTCSV_TOKEN environment variable to your convertcsv.io API token."
+    END
+END IF
 INPUT_FILENAME$ = "INVENTORY.csv"
 OUTPUT_FILENAME$ = "INVENTORY.json"
 RESPONSE$ = ""

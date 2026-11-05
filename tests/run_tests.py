@@ -42,6 +42,12 @@ NEEDS_FILE = {
     'examples/npimonthly':      r'C:\DDG\NPI',
 }
 
+# Scripts that need an environment variable (an API token); skipped when it isn't set.
+NEEDS_ENV = {
+    'examples/convertcsvio':            'CONVERTCSV_TOKEN',
+    'examples/convertcsv.io.fetch':     'CONVERTCSV_TOKEN',
+}
+
 # Scripts that can't run unattended.
 SKIP = {
     'examples/utils':           'subroutine library for INCLUDE, not a program',
@@ -164,6 +170,10 @@ def main():
             if script in NEEDS_FILE and not os.path.exists(NEEDS_FILE[script]):
                 skipped.append(script)
                 print(f"SKIP  {script:36} needs {NEEDS_FILE[script]}")
+                continue
+            if script in NEEDS_ENV and not os.environ.get(NEEDS_ENV[script]):
+                skipped.append(script)
+                print(f"SKIP  {script:36} needs {NEEDS_ENV[script]}")
                 continue
             if args.offline and script in NETWORK:
                 skipped.append(script)
