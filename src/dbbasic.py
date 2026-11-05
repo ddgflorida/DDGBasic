@@ -352,9 +352,9 @@ class HelpRegistry:
             "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"']
         },
         "EDIT": {
-            "syntax": 'EDIT RECORD (SELECT ... FROM table WHERE ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]',
-            "desc": "A one-line entry form: one labelled field per column of the query's row. Enter on the last field or PgDn saves with an UPDATE of the changed columns; with no matching row the form starts blank and saves with an INSERT. KEY defaults to the table's primary key and can't be edited. A refused change shows the database's message and keeps the form open. INTO gets the saved record (empty after Esc).",
-            "examples": ['EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact"', 'EDIT RECORD (SELECT name, phone FROM customers WHERE code = :code$) KEY "code" INTO rec']
+            "syntax": 'EDIT RECORD (SELECT ... FROM table WHERE ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]\nEDIT TEXT target [AT top, left, bottom, right] [TITLE title$]',
+            "desc": "EDIT TEXT is a boxed memo editor for a multi-line string (lines separated by CHR$(10)); Enter splits lines, Ctrl-Y deletes one, Ctrl-W or F10 saves, Esc cancels (asking first if changed). EDIT RECORD is a one-line entry form: one labelled field per column of the query's row. Enter on the last field or PgDn saves with an UPDATE of the changed columns; with no matching row the form starts blank and saves with an INSERT. KEY defaults to the table's primary key and can't be edited. A refused change shows the database's message and keeps the form open. INTO gets the saved record (empty after Esc).",
+            "examples": ['EDIT TEXT rec.notes AT 3, 5, 12, 50 TITLE "Notes"', 'EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact"', 'EDIT RECORD (SELECT name, phone FROM customers WHERE code = :code$) KEY "code" INTO rec']
         },
         "SAVESCREEN": {
             "syntax": 'saved$ = SAVESCREEN() | SAVESCREEN(top, left, bottom, right)',
@@ -4018,7 +4018,11 @@ class Interpreter:
             elif word == 'RESTSCREEN':
                 SCREEN.restore_saved(self._parse_expression())
             elif word == 'EDIT':
-                self._parse_edit_record_statement()
+                tok = self._current_token()
+                if tok and str(tok[1]).upper() == 'TEXT' and tok[0] == 'ID':
+                    self._parse_edit_text_statement()
+                else:
+                    self._parse_edit_record_statement()
         except ScreenError as e:
             self._error(str(e))
 
@@ -4311,6 +4315,32 @@ class Interpreter:
                     if i < len(columns):
                         record[columns[i].upper()] = value
             self.variables[into] = record
+
+    def _parse_edit_text_statement(self):
+        """EDIT TEXT target [AT top, left, bottom, right] [TITLE title$]: a boxed memo editor
+        for a string variable, hash field or array element. Ctrl-W saves; Esc cancels."""
+        self._next_token()   # TEXT
+        target = self._parse_get_target()
+        area, title = None, ''
+        while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+            tok = self._current_token()
+            word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
+            if word == 'AT':
+                self._next_token()
+                area = tuple(self._screen_ints(4))
+            elif word == 'TITLE':
+                self._next_token()
+                title = self._to_string(self._parse_expression())
+            else:
+                self._error(f"Unexpected '{tok[1]}' in EDIT TEXT")
+        value = self._get_target_value(target)
+        if isinstance(value, (list, dict)):
+            self._error("EDIT TEXT edits a string, not a whole array or hash.")
+        # A variable that didn't exist yet is 0; start the editor empty rather than with "0"
+        text = '' if isinstance(value, (int, float)) and not isinstance(value, bool) and value == 0 else self._to_string(value)
+        result = SCREEN.edit_text(text, area, title)
+        if result is not None:
+            self._set_target_value(target, result)
 
     def _table_column_info(self, table):
         """{lower-case column name: (declared type, is part of the primary key)} for a table."""

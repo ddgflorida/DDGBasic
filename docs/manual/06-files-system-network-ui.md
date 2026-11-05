@@ -24,7 +24,7 @@ Related material in other chapters:
 5. [HTTP: FETCH](#65-http-fetch)
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
 7. [Text screens](#67-text-screens)
-   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [ALERT()](#alert) · [MENUBAR$()](#menubar) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
+   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [ALERT()](#alert) · [MENUBAR$()](#menubar) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [EDIT TEXT](#edit-text) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
 8. [TUI forms (archived)](#68-tui-forms-archived)
 9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
 
@@ -1073,6 +1073,41 @@ EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact" INTO rec
 - **Rules:** the query must read `FROM` one table and find at most one row, and its columns must be plain column names of that table. Numbers are edited as numbers, and an emptied text field follows `SET NULL_HANDLING`. What the form covered is put back when it closes.
 
 Use `@ ... SAY ... GET` and `READ` when you want your own layout, pictures or `VALID` checks.
+
+### EDIT TEXT
+
+```
+EDIT TEXT target [AT top, left, bottom, right] [TITLE title$]
+```
+
+`EDIT TEXT` is a memo editor: a box in which a multi-line string can be edited, like Clipper's MEMOEDIT. The target can be anything `GET` accepts: a variable (`notes$`), a hash field (`rec.notes`) or an array element. Lines are separated by `CHR$(10)`. Without `AT`, the box fills the screen with a small margin.
+
+```basic
+EDIT TEXT rec.notes AT 3, 5, 12, 50 TITLE "Notes"
+IF LASTKEY$ <> CHR$(27) THEN UPDATE customers SET notes = :rec.notes WHERE id = :rec.id;
+```
+
+```
+┌────────────────── Notes ───────────────────┐
+│first line ok                               │
+│third                                       │
+│second line                                 │
+│                                            │
+└─ Ln 2, Col 6  Ctrl-W=save  Esc=cancel ─────┘
+```
+
+| Key | Action |
+|---|---|
+| Arrows, Home, End, PgUp, PgDn | Move. Left and Right wrap to the previous or next line. |
+| Enter | Split the line at the cursor. |
+| Backspace, Del | Delete a character; at the start or end of a line, join it to the line before or after. |
+| Tab | Insert spaces up to the next multiple of 4. |
+| Ctrl-Y | Delete the current line. |
+| Ins | Switch between insert mode (the default) and overwrite mode. |
+| Ctrl-W or F10 | Save: the target gets the text, and `LASTKEY$` is `CHR$(23)` or `F10`. |
+| Esc | Cancel. If anything was changed, `ALERT` asks `Discard your changes?` first. The target keeps its old value, and `LASTKEY$` is `CHR$(27)`. |
+
+Lines are not wrapped: a line longer than the box scrolls sideways while you edit it, so the saved text has exactly the lines you typed. The line and column are shown in the bottom border, and the screen under the box is put back afterwards.
 
 ### SAVESCREEN and RESTSCREEN
 

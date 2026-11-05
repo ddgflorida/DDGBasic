@@ -177,6 +177,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | DO ... LOOP             | Defines a block of code that executes repeatedly, with optional WHILE or UNTIL conditions at the beginning or end. |
 | DUMP                    | A debugging command to print the internal state of the interpreter, such as tokens, variables, or labels. |
 | EDIT RECORD             | A one-line entry form: one labelled field per column of a query's row, saved with UPDATE (or INSERT when there is no row). |
+| EDIT TEXT               | A boxed memo editor for a multi-line string (a variable or a field such as `rec.notes`); Ctrl-W saves, Esc cancels. |
 | EMAIL                   | Sends an email using the configured provider (see `HELP SET EMAIL`), with support for HTML body, CC/BCC, and attachments. |
 | END                     | Terminates the program execution. |
 | ERROR                   | Triggers a user-defined runtime error with a specific error code and optional message. |

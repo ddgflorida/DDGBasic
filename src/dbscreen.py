@@ -646,6 +646,114 @@ class Screen:
         self._draw_field(field)
         return value
 
+    # --- EDIT TEXT (memo editor) ----------------------------------------
+    def edit_text(self, text, area=None, title=''):
+        """A boxed multi-line editor. Returns the edited text (lines joined with CHR$(10)),
+        or None when the user cancels. Ctrl-W or F10 saves; Esc cancels, asking first if
+        anything was changed. Long lines scroll sideways."""
+        r1, c1, r2, c2 = area or (3, 5, max(8, self.rows - 2), max(30, self.cols - 4))
+        if r2 - r1 < 3 or c2 - c1 < 12:
+            raise ScreenError("EDIT TEXT area is too small.")
+        lines = str(text).replace('\r\n', '\n').replace('\r', '\n').split('\n')
+        original = list(lines)
+        height, width = r2 - r1 - 1, c2 - c1 - 1
+        row = col = top = left = 0
+        insert = True
+        underneath = self.save(r1, c1, r2, c2)
+        self.box(r1, c1, r2, c2, title)
+        self._w('\x1b[?25h')
+
+        def draw():
+            out = []
+            for n in range(height):
+                i = top + n
+                piece = lines[i][left:left + width] if i < len(lines) else ''
+                out.append(self._put(r1 + 1 + n, c1 + 1, piece.ljust(width), self.fg, self.bg))
+            status = f' Ln {row + 1}, Col {col + 1}  Ctrl-W=save  Esc=cancel '
+            border = '─' * (c2 - c1 - 1)
+            if len(status) <= len(border) - 2:
+                border = border[:1] + status + border[1 + len(status):]
+            out.append(self._put(r2, c1 + 1, border, self.fg, self.bg))
+            out.append(self._normal() + f'\x1b[{r1 + 1 + row - top};{c1 + 1 + col - left}H')
+            self._w(''.join(out))
+
+        try:
+            while True:
+                # keep the cursor in view
+                top = min(max(top, row - height + 1), row)
+                left = min(max(left, col - width + 1), col)
+                draw()
+                key = self.keys.read_key()
+                if key is None:
+                    key = ESC
+                self.last_key = key
+                line = lines[row]
+                if key in ('\x17', 'F10'):                     # Ctrl-W / F10: save
+                    return '\n'.join(lines)
+                if key == ESC:
+                    if lines == original or self.alert("Discard your changes?", ["No", "Yes"]) == 2:
+                        self.last_key = ESC
+                        return None
+                    self._w('\x1b[?25h')
+                    continue
+                if key == ENTER:
+                    lines[row:row + 1] = [line[:col], line[col:]]
+                    row, col = row + 1, 0
+                elif key == BACKSPACE:
+                    if col > 0:
+                        lines[row] = line[:col - 1] + line[col:]
+                        col -= 1
+                    elif row > 0:
+                        col = len(lines[row - 1])
+                        lines[row - 1:row + 1] = [lines[row - 1] + line]
+                        row -= 1
+                elif key == 'DEL':
+                    if col < len(line):
+                        lines[row] = line[:col] + line[col + 1:]
+                    elif row < len(lines) - 1:
+                        lines[row:row + 2] = [line + lines[row + 1]]
+                elif key == '\x19':                            # Ctrl-Y: delete the line
+                    if len(lines) > 1:
+                        del lines[row]
+                        row = min(row, len(lines) - 1)
+                    else:
+                        lines[0] = ''
+                    col = min(col, len(lines[row]))
+                elif key == TAB:
+                    spaces = 4 - col % 4
+                    lines[row] = line[:col] + ' ' * spaces + line[col:]
+                    col += spaces
+                elif key == 'INS':
+                    insert = not insert
+                elif key == 'LEFT':
+                    if col > 0:
+                        col -= 1
+                    elif row > 0:
+                        row -= 1
+                        col = len(lines[row])
+                elif key == 'RIGHT':
+                    if col < len(line):
+                        col += 1
+                    elif row < len(lines) - 1:
+                        row, col = row + 1, 0
+                elif key in ('UP', 'DOWN', 'PGUP', 'PGDN'):
+                    step = {'UP': -1, 'DOWN': 1, 'PGUP': -height, 'PGDN': height}[key]
+                    row = max(0, min(len(lines) - 1, row + step))
+                    col = min(col, len(lines[row]))
+                elif key == 'HOME':
+                    col = 0
+                elif key == 'END':
+                    col = len(line)
+                elif len(key) == 1 and key.isprintable():
+                    if insert or col >= len(line):
+                        lines[row] = line[:col] + key + line[col:]
+                    else:
+                        lines[row] = line[:col] + key + line[col + 1:]
+                    col += 1
+        finally:
+            self.restore_saved(underneath)
+            self._w('\x1b[?25h')
+
     # --- MENUBAR -------------------------------------------------------
     def menubar(self, menus, row=1):
         """A menu bar across the screen with pull-down menus. menus is a list of
