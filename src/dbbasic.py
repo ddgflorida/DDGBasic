@@ -41,11 +41,6 @@ import xmltodict
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-try:
-    from web_form_runner import WebFormRunner
-except ImportError:
-    WebFormRunner = None
-
 csv.field_size_limit(1024 * 1024)
 
 
@@ -926,10 +921,6 @@ class ProgramEnd(BaseException):
     'except Exception' handlers don't treat it as an error."""
     pass
 
-class RedirectSignal(Exception):
-    """Exception raised to signal an HTTP redirect."""
-    pass
-
 class FunctionReturn(Exception):
     """Exception raised by EXIT FUNCTION to return early from a user-defined function."""
     pass
@@ -1186,7 +1177,7 @@ class Lexer:
             ('MKDIR', r'\bMKDIR\b(?!\$)'), ('RMDIR', r'\bRMDIR\b(?!\$)'), ('KILL', r'\bKILL\b(?!\$)'),
             ('ONERRORGOTO', r'\bONERRORGOTO\b'), ('RESUME', r'\bRESUME\b(?!\$)'),
             ('TRON', r'\bTRON\b(?!\$)'), ('TROFF', r'\bTROFF\b(?!\$)'),('GOTO', r'\bGOTO\b(?!\$)'), 
-            ('DETAILS', r'\bDETAILS\b(?!\$)'), ('REDIRECT', r'\bREDIRECT\b(?!\$)'),
+            ('DETAILS', r'\bDETAILS\b(?!\$)'),
             ('PUSH', r'\bPUSH\b(?!\$)'), ('POP', r'\bPOP\b(?!\$)'),
             ('SHIFT', r'\bSHIFT\b(?!\$)'), ('UNSHIFT', r'\bUNSHIFT\b(?!\$)'),
             ('SPLICE', r'\bSPLICE\b(?!\$)'), ('REVERSE', r'\bREVERSE\b(?!\$)'),
@@ -3795,10 +3786,6 @@ class Interpreter:
                 self._parse_upgrade_csv_statement()
             else:
                 self._error("UPGRADE must be followed by XML, 'JSON', or CSV.")
-        elif token[0] == 'REDIRECT':
-            self._next_token() # Consume REDIRECT
-            destination_url = self._parse_expression()
-            raise RedirectSignal(destination_url)
         elif token[0] == 'UNPACK':
             self._parse_unpack_statement()
         elif token[0] == 'FORM':                                   
@@ -3834,52 +3821,6 @@ class Interpreter:
             return next((group for group in match.groups() if group is not None), None)
         return None
 
-    def execute(self, code_string):
-        """
-        Executes a string of DbBasic code using the interpreter's current state.
-        This allows the interpreter to be re-used for multiple scripts.
-        Currently used by dbbasicweb.py to implement scripting
-        """
-        self.program_terminated = False
-
-        base_path = '.'
-
-        processed_includes = preprocess_includes(code_string, base_path=base_path)
-        processed_code = preprocess_continuations(processed_includes)
-        lexer = Lexer(processed_code)
-
-        self.tokens = lexer.tokens
-        self.token_index = 0
-
-        self.labels = {}
-        self.jump_map = {}
-        self._pre_scan_for_jumps()
-        self._scan_for_labels()
-        self._scan_for_functions()
-
-        output_html = io.StringIO()
-        old_stdout = sys.stdout
-
-        try:
-            sys.stdout = output_html
-
-            # --- MODIFIED: Catch the RedirectSignal ---
-            try:
-                while self._current_token():
-                    if not self._parse_top_line() or self.program_terminated:
-                        break
-            except RedirectSignal as e:
-                # Restore stdout before returning the signal
-                sys.stdout = old_stdout
-                return ('redirect', e.args[0])
-
-            return output_html.getvalue()
-
-        except ProgramEnd:
-            return output_html.getvalue()
-        finally:
-            sys.stdout = old_stdout
-            
     def run(self):
         try:
             while self._current_token() and self._current_token()[0] != 'END':

@@ -1099,7 +1099,6 @@ Stops the running program, wherever it appears: at the top level, in an `IF`, a 
 | `RUN` child | The child only; control returns to the statement after `RUN` |
 | `EVAL` string | The whole program, as if the code were written in place |
 | REPL | The current input line; the REPL keeps running |
-| Web runner script | The script; its output so far is returned |
 
 ```basic
 FOR i = 1 TO 5

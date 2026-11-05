@@ -1,8 +1,8 @@
 # Chapter 6: Files, System, Network & User Interface
 
-This chapter covers the statements DbBasic uses to work with things outside the interpreter: text files, directories, archives, the operating-system shell, the console, HTTP services, e-mail, terminal (TUI) forms, and the built-in web runner.
+This chapter covers the statements DbBasic uses to work with things outside the interpreter: text files, directories, archives, the operating-system shell, the console, HTTP services, e-mail and terminal (TUI) forms.
 
-Everything here is taken from the interpreter source (`src/dbbasic.py`, `src/tui_runner.py`, `src/dbbasicweb.py`). Where an example shows output, the script was run against the current interpreter. Statements that need a terminal UI, a GUI browser or a live mail server (`BROWSER`, `BELL`, `OPENFORM`, `GRIDEDIT`, sending with `EMAIL`) are described from the source only.
+Everything here is taken from the interpreter source (`src/dbbasic.py`, `src/tui_runner.py`). Where an example shows output, the script was run against the current interpreter. Statements that need a terminal UI, a GUI browser or a live mail server (`BROWSER`, `BELL`, `OPENFORM`, `GRIDEDIT`, sending with `EMAIL`) are described from the source only.
 
 Related material in other chapters:
 
@@ -25,8 +25,7 @@ Related material in other chapters:
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
 7. [TUI forms](#67-tui-forms)
    * [Requirements](#requirements) · [FORM ... ENDFORM](#form--endform) · [Form elements](#form-elements) · [FIELD attributes and validation](#field-attributes-and-validation) · [BUTTON and actions](#button-and-actions) · [OPENFORM](#openform) · [Returned values](#values-returned-by-openform) · [GRIDEDIT](#gridedit)
-8. [The web runner (dbbasicweb.py)](#68-the-web-runner-dbbasicwebpy)
-9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
+8. [Implementation notes / discrepancies](#68-implementation-notes--discrepancies)
 
 ---
 
@@ -1029,117 +1028,7 @@ GRIDEDIT "Orders" _
 
 ---
 
-## 6.8 The web runner (dbbasicweb.py)
-
-`src/dbbasicweb.py` is a small development web server. It serves DbBasic scripts (`.bas`) and HTML templates with embedded DbBasic (`.htb`, similar to classic ASP). It uses Python's standard `http.server` and the `cgi` module. `cgi` was removed in Python 3.13, so use Python 3.12 or earlier.
-
-### Running it
-
-```
-cd /path/to/your/web/scripts
-python /path/to/DbBasic-git/src/dbbasicweb.py
-```
-
-* The server listens on `http://localhost:8000`. `HOST_NAME`, `PORT_NUMBER` and `SCRIPT_DIR` (default `.`, the current directory) are constants at the top of the file, and there are no command-line options.
-* About one second after it starts, it opens the default browser at the root URL.
-* Stop it with Ctrl+C.
-* The server is **single-threaded** and uses **one persistent `Interpreter` instance** for every request. Variables, open databases and form definitions therefore carry over between requests. Use the `CLEAR` statement if a script needs a clean state.
-* Only files ending in `.bas` and `.htb` are served. Other files, including CSS and images, get 404 responses.
-* A request for a directory serves `index.htb`, or `index.bas` if there is no `index.htb`.
-* The requested path is joined to `SCRIPT_DIR` without checking it, so this is a local development tool and should not be exposed to a network.
-
-### The REQUEST hash
-
-Before each script runs, the variable `REQUEST` is set to a hash with these entries:
-
-| Key | Contents |
-|---|---|
-| `METHOD` | `"GET"` or `"POST"` |
-| `PATH` | URL path |
-| `QUERY_STRING` | Raw query string |
-| `QUERY` | Hash of query parameters (first value of each) |
-| `FORM` | Hash of POSTed form fields (`application/x-www-form-urlencoded` or multipart). It is empty for GET. |
-
-### .bas scripts
-
-Everything the script prints is captured. If the output contains a blank line, the text before the first blank line is parsed as `Name: value` HTTP headers and the rest is the body. Without a blank line, the whole output is sent as `text/plain`. Errors produce an HTTP 500 response.
-
-```basic
-PRINT "Content-Type: text/plain"
-PRINT
-PRINT "Method: "; REQUEST.METHOD
-PRINT "Form a: "; REQUEST.FORM.a
-```
-A POST of `a=xyz` returns `200 text/plain` with the body:
-```
-Method: POST
-Form a: xyz
-```
-
-### .htb templates
-
-An `.htb` file is HTML with embedded DbBasic. The server converts it to a DbBasic program and runs it, and the output is returned as `text/html; charset=utf-8`.
-
-| Markup | Converted to |
-|---|---|
-| Plain line with no `<%` | `ECHO <line>`, printed verbatim |
-| `<% code %>` | The code, inserted as-is. It may span several lines, and a line consisting only of the block is removed from the output. |
-| `<%= expr %>` | `PRINT expr;` |
-| Text before or after a tag on the same line | `PRINT "text";` |
-| `<% INCLUDE "file.htb" %>` | Replaced by that file's contents before conversion. The path is relative to the including file, includes can be nested, cycles are ignored, and a missing file inserts nothing. |
-| `REDIRECT url$` (statement) | Sends a `303 See Other` with `Location: url$` instead of the page. This also works in `.bas` scripts. |
-
-```html
-<html><body>
-<h1>Hello</h1>
-<% name$ = REQUEST.QUERY.name %>
-<p>Hi <%= name$ %>!</p>
-<% FOR i = 1 TO 2 %>
-<li>Item <%= i %></li>
-<% NEXT %>
-<% INCLUDE "footer.htb" %>
-</body></html>
-```
-`GET /hello.htb?name=Ann` returns:
-```html
-<html><body>
-<h1>Hello</h1>
-<p>Hi Ann!</p>
-<li>Item  1</li>
-<li>Item  2</li>
-<footer>(c) demo</footer>
-
-</body></html>
-```
-(The double space in `Item  1` is DbBasic's leading space for positive numbers. Use `STR$`/`FORMAT$` or `TRIM$` to control it.)
-
-The generated DbBasic for the template above, before the include is expanded, is:
-
-```
-ECHO <html><body>
-ECHO <h1>Hello</h1>
-name$ = REQUEST.QUERY.name
-PRINT "<p>Hi ";
-PRINT name$;
-PRINT "!</p>"
-FOR i = 1 TO 2
-PRINT "<li>Item ";
-PRINT i;
-PRINT "</li>"
-NEXT
-INCLUDE "footer.htb"
-ECHO </body></html>
-```
-
-### Interpreter.execute and WebFormRunner
-
-The web runner drives the interpreter through `Interpreter.execute(code)`. This method preprocesses `INCLUDE` statements and line continuations, tokenizes the code, and runs it on the existing interpreter state with `sys.stdout` captured. It returns the output text, or `('redirect', url)` when the script runs `REDIRECT`.
-
-`dbbasic.py` also tries to import `WebFormRunner` from a module named `web_form_runner`, falling back to `None`. **That module is not in the repository and `WebFormRunner` is never used.** There is no web rendering of `FORM`/`OPENFORM`: forms always use the Textual TUI, and `SET UI WEB` (used in `examples/dbform.bas`) is not a recognised statement (`Invalid assignment statement for 'UI'`).
-
----
-
-## 6.9 Implementation notes / discrepancies
+## 6.8 Implementation notes / discrepancies
 
 These were found while checking the source against behaviour. Line numbers refer to `src/dbbasic.py` unless stated otherwise.
 
@@ -1177,11 +1066,6 @@ These were found while checking the source against behaviour. Line numbers refer
     * `WHERE` and `ORDER BY` text is concatenated into the SQL unescaped.
     * *Delete* has no confirmation.
     * The grid-level `UPDATE`/`INSERT` branch calls `list_runner.get_initial_display_data()`, which `FormRunner` does not define. The branch is unreachable with the built-in grid buttons, so it is dead code.
-16. **Optional dependencies.** `textual` is required for `OPENFORM`/`GRIDEDIT`, but there is no requirements file and a missing install produces the unhelpful error `'NoneType' object is not callable`. `web_form_runner` / `WebFormRunner` is imported but does not exist and is never used. `examples/dbform.bas` uses a nonexistent `SET UI WEB`.
-17. **Web runner.**
-    * It depends on the `cgi` module (removed in Python 3.13).
-    * It uses a single shared interpreter for every request.
-    * It does not sanitise the request path.
-    * It cannot serve static assets.
-    * `process_htb_file()` exists but is not called by `run_script()`.
-18. **`SHELL` without `INTO`** writes directly to the process's stdout, bypassing `SET OUTPUT` and the web runner's output capture. In `.bas` web scripts, the command's output therefore goes to the server console, not to the HTTP response.
+16. **Optional dependencies** (fixed). `textual` is required for `OPENFORM`/`GRIDEDIT`; it is now listed in `requirements.txt`. Without it, forms fail with the unhelpful error `'NoneType' object is not callable`.
+17. **Web runner** (removed). The experimental web runner (`src/dbbasicweb.py`, `.htb` templates, the `REDIRECT` statement, `Interpreter.execute()` and the unused `WebFormRunner` import) has been removed from `main`. Its known problems were the `cgi` dependency (removed in Python 3.13), one interpreter shared by all requests, an unsanitised request path, and no static files. The last working version is kept on the `experiment/web-runner` branch.
+18. **`SHELL` without `INTO`** writes directly to the process's stdout, bypassing `SET OUTPUT`.
