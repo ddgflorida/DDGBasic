@@ -544,7 +544,7 @@ SHELL command$ [INTO out$]
 
 Runs `command$` through the operating-system shell (`subprocess.run(..., shell=True)`).
 
-* **Without `INTO`**, the command's standard output and standard error go straight to the terminal. They are not captured, and `SET OUTPUT` does not redirect them.
+* **Without `INTO`**, the command's standard output and standard error go straight to the terminal. They are not captured, and `SET OUTPUT` does not redirect them, just as it doesn't redirect `PRINT`; it applies to query results only.
 * **With `INTO out$`**, standard output is captured as text (UTF-8, with invalid bytes replaced) into `out$`. If the command wrote anything to standard error, that text goes into `ERRMSG$`. The destination must be a string variable.
 * `ERR` is set to the command's exit code. If the process could not be started, `ERR` = -1 and an error is raised.
 * Commands are OS-specific. `dir` and `type`, as used in some of the examples, exist only on Windows.
@@ -829,4 +829,4 @@ These were found while checking the source against behaviour. Line numbers refer
 15. *(merged into item 14)*
 16. *(merged into item 14)*
 17. **Web runner** (removed). The experimental web runner (`src/dbbasicweb.py`, `.htb` templates, the `REDIRECT` statement, `Interpreter.execute()` and the unused `WebFormRunner` import) has been removed from `main`. Its known problems were the `cgi` dependency (removed in Python 3.13), one interpreter shared by all requests, an unsanitised request path, and no static files. The last working version is kept on the `experiment/web-runner` branch.
-18. **`SHELL` without `INTO`** writes directly to the process's stdout, bypassing `SET OUTPUT`.
+18. **`SHELL` and `SET OUTPUT`** (by design). `SET OUTPUT` redirects query results only (`SELECT`, `EXECUTE`, `DESCRIBE`). `SHELL` without `INTO` writes to the screen, exactly as `PRINT` does. To keep a command's output, use `SHELL "cmd" INTO out$`, then write it to a file with `PRINT #n` if needed.
