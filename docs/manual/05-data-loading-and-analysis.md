@@ -517,7 +517,24 @@ SELECT * FROM im;
 (2 rows returned)
 ```
 
-The `<a>` without an `href` was ignored. Loading a table with `header=false` produces only the `source` column, and the cell data is dropped (see [5.18](#518-implementation-notes--discrepancies)).
+The `<a>` without an `href` was ignored.
+
+With `header=false`, the first row is data and the columns are named `C1..Cn` after the widest row. Shorter rows are padded with empty values, which become `NULL` by default:
+
+```basic
+LOAD HTML "page.html" CREATE TABLE ht2 OPTIONS "table_index=1, header=false"
+SELECT * FROM ht2;
+```
+
+```
+1 records loaded into table ht2
++-----------+--------+
+|  source   |   C1   |
++-----------+--------+
+| page.html | second |
++-----------+--------+
+(1 rows returned)
+```
 
 ### 5.5.8 LOAD EXCEL
 
@@ -553,7 +570,23 @@ The sheet `Sales` has the headers `Product ID | Region | " Sales Amount "`. The 
 (3 rows returned)
 ```
 
-For `.xlsx` files, `header=false` currently fails with `Could not determine any columns from the source file ...`. For `.xls` files, `header=false` produces `C1..Cn` columns as expected.
+With `header=false`, both `.xlsx` and `.xls` files produce `C1..Cn` columns, named after the first data row:
+
+```basic
+LOAD EXCEL "sales.xlsx" CREATE TABLE s2 OPTIONS "sheetindex=1, header=false, skip=1, limit=2"
+SELECT * FROM s2;
+```
+
+```
+2 records loaded into table s2
++----+--------+--------+
+| C1 |   C2   |   C3   |
++----+--------+--------+
+| 1  |  east  | 100    |
+| 2  | west   | 250.75 |
++----+--------+--------+
+(2 rows returned)
+```
 
 ### 5.5.9 LOAD PARQUET
 
@@ -572,17 +605,17 @@ The file has the columns `id`, `name`, `tags` (list of strings) and `price`.
 
 ```
 3 records loaded into table items
-+----+------+---------+-------+
-| id | name | element | price |
-+----+------+---------+-------+
-| 1  | a    | NULL    | 1.5   |
-| 2  | b    | NULL    | 2.0   |
-| 3  | NULL | NULL    | NULL  |
-+----+------+---------+-------+
++----+------+------------+-------+
+| id | name |    tags    | price |
++----+------+------------+-------+
+| 1  | a    | ["x"]      | 1.5   |
+| 2  | b    | []         | 2.0   |
+| 3  | NULL | ["y", "z"] | NULL  |
++----+------+------------+-------+
 (3 rows returned)
 ```
 
-The list column came through as a column called `element` with empty values. The cause is described in [5.18](#518-implementation-notes--discrepancies). Flat columns load correctly.
+The list column `tags` is stored as JSON text.
 
 ---
 
@@ -822,7 +855,7 @@ Jane was dropped by `VALIDATE email` because her email is empty. Al was dropped 
    4. Run the `process_by` script. `rec.is_valid = 0` drops the row silently.
    5. Apply `TRANSFORM col WITH fn`, then `VALIDATE col WITH fn`. A falsy result drops the row silently.
    6. Apply `TRANSFORM ROW WITH fn` in order, then `VALIDATE ROW WITH fn`. A falsy result drops the row silently.
-   7. Apply `SET NULL_HANDLING`: in each column set to convert (the default), an empty or all-space text value becomes `NULL` ([4.9.3](04-database-sql-and-output.md#493-set-null_handling)). The `normalize` and `USING SCHEMA` paths do not apply this step.
+   7. Apply `SET NULL_HANDLING`: in each column set to convert (the default), an empty or all-space text value becomes `NULL` ([4.9.3](04-database-sql-and-output.md#493-set-null_handling)). The `USING SCHEMA` and `normalize` paths apply it too.
 6. **Insert** the rows in batches of `batchsize` inside one transaction, or upsert them through a staging table.
 
 **Rejected rows** are never written to a side table or file. They are only left out of the count printed in `N records loaded`. To keep the rejects, write them somewhere yourself from a `process_by` script or a `VALIDATE` function. For example, `PRINT #n` to a reject file before returning false.
@@ -879,8 +912,8 @@ Loading 'batch/a.csv' into table 't' using schema...
 +-------------+----------+--------+--------+--------+-------+
 | customer_id | customer | amount | region | status | label |
 +-------------+----------+--------+--------+--------+-------+
-| 1           | Ann      | 10.50  |        | active | ann-1 |
-| 2           | Bob      | 20.00  |        | active | bob-2 |
+| 1           | Ann      | 10.50  | NULL   | active | ann-1 |
+| 2           | Bob      | 20.00  | NULL   | active | bob-2 |
 +-------------+----------+--------+--------+--------+-------+
 (2 rows returned)
 ```
@@ -1777,10 +1810,10 @@ The following points were found while checking the source and running the exampl
 11. **JSON values are inserted with their native types.** `NULL` is used for missing keys and booleans become 1/0. All other formats insert strings. Empty fields are stored as `NULL` unless `SET NULL_HANDLING` says otherwise (4.9.3).
 12. **XML record attributes are dropped** by the flat `LOAD XML`. Only child elements become columns.
 13. **The XML `limit` option** stops emitting rows but keeps scanning to the end of the file.
-14. **HTML `header=false` loses all data.** The header list stays `['source']`, so the column map keeps only the first value of each row.
+14. **HTML `header=false`** (fixed). The header list stayed `['source']`, so every cell was dropped. Columns are now named `C1..Cn` after the widest row.
 15. **HTML `LINKS` resolves `href` against the filename**, not `source_url` or `base_url`. For local files, links stay relative. The extractor builds `data_row` twice; the first assignment is dead code.
-16. **Excel `.xlsx` with `header=false` fails** with "Could not determine any columns". Headers are only derived lazily inside the row loop, after the headers have already been yielded. The `.xls` path handles this correctly.
-17. **Parquet nested columns are mislabelled.** `pq.ParquetFile.schema.names` returns *leaf* column names. A `list<string>` column named `tags` therefore appears as `element`, and its values come out empty. `schema_arrow.names` would give the top-level names.
+16. **Excel `.xlsx` with `header=false`** (fixed). It failed with "Could not determine any columns", because the `C1..Cn` names were worked out only after the headers had been sent. They are now taken from the first data row.
+17. **Parquet nested columns** (fixed). Leaf names from `schema.names` were used, so a list column `tags` appeared as `element` with empty values. The top-level names from `schema_arrow` are used now, and list and struct values are stored as JSON text.
 18. **Blank lines in a CSV file are skipped** (fixed: a trailing blank line used to abort the load with `Incorrect number of bindings supplied`). **CSV rows with fewer fields than the header still abort the whole load.** Rows with more fields lose the extras silently. A failed `CREATE TABLE` load leaves an empty table behind.
 19. **`IGNORE` mode reports rows sent, not rows inserted.**
 20. **`LOAD` and `ERR`** (fixed). A successful `LOAD` did not reset `ERR`, so `IF ERR <> 0` after it could see a stale value from an earlier statement.

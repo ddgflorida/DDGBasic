@@ -840,6 +840,29 @@ g_output_config = OutputConfig()
 g_null_handling_settings = {}
 g_null_handling_default = 'CONVERT_EMPTY_TO_NULL'
 
+
+def null_handling_rules(table_name, headers):
+    """For each column, True if LOAD should store empty (or all-space) text as NULL.
+    A rule set with SET NULL_HANDLING FOR "table.column" wins over one FOR "column",
+    which wins over the global setting (SET NULL_HANDLING TO ...)."""
+    table = str(table_name or '').strip('"').upper()
+    rules = []
+    for header in headers:
+        column = str(header).upper()
+        option = (g_null_handling_settings.get(f"{table}.{column}")
+                  or g_null_handling_settings.get(column)
+                  or g_null_handling_default)
+        rules.append(option in ('NULL', 'CONVERT_EMPTY_TO_NULL'))
+    return rules
+
+
+def apply_null_handling(rules, row):
+    """Replace empty or all-space text with None in the columns whose rule is True."""
+    if not any(rules):
+        return row
+    return [None if convert and isinstance(value, str) and not value.strip() else value
+            for convert, value in zip(rules, row)]
+
 # =================================================================
 # Exception class for loop exits
 # =================================================================
@@ -2050,7 +2073,7 @@ class LegacyJsonNormalizer:
         last_id = self._row_pk_counter
 
         columns = list(row['data'].keys())
-        values = list(row['data'].values())
+        values = apply_null_handling(null_handling_rules(short_table_name, columns), list(row['data'].values()))
         
         # 2. Explicitly inject the PK column and value
         columns.insert(0, table_info['pk'])
@@ -7946,7 +7969,9 @@ class Interpreter:
             parquet_file = pq.ParquetFile(filename)
 
             # --- 2. Yield the headers from the file's schema ---
-            headers = parquet_file.schema.names
+            # schema_arrow gives the top-level column names; schema.names gives leaf names,
+            # so a list or struct column would appear as 'element' or as its fields.
+            headers = parquet_file.schema_arrow.names
             yield {'type': 'headers', 'data': headers}
 
             # --- 3. Iterate over row groups and batches to stream data ---
@@ -8051,7 +8076,13 @@ class Interpreter:
                     except StopIteration:
                         pass 
                 else:
-                    pass 
+                    # No header row: name the columns C1..Cn from the first data row, then put
+                    # that row back so it is loaded as data.
+                    import itertools
+                    first_row = next(rows, None)
+                    if first_row is not None:
+                        headers = [f"C{k+1}" for k in range(len(first_row))]
+                        rows = itertools.chain([first_row], rows)
 
                 # <<< NEW: Append _linenum header >>>
                 if add_line_num:
@@ -8429,6 +8460,11 @@ class Interpreter:
                     header_cells = rows[0].find_all(['th', 'td'])
                     headers.extend([cell.get_text(strip=True) for cell in header_cells])
                     start_row_idx = 1
+                elif rows:
+                    # No header row: name the columns C1..Cn after the widest row
+                    width = max(len(r.find_all('td')) for r in rows)
+                    headers.extend(f"C{k+1}" for k in range(width))
+                data_width = len(headers) - 1   # cells per row, not counting 'source'
                 
                 if add_line_num:
                     headers.append('_linenum')
@@ -8437,7 +8473,10 @@ class Interpreter:
 
                 for i, row_element in enumerate(rows[start_row_idx:]):
                     cells = row_element.find_all('td')
-                    data_row = [source_url] + [cell.get_text(strip=True) for cell in cells]
+                    values = [cell.get_text(strip=True) for cell in cells]
+                    if not has_header:
+                        values = (values + [''] * data_width)[:data_width]   # pad short rows
+                    data_row = [source_url] + values
                     
                     if add_line_num:
                         data_row.append(i + 1)
@@ -8454,7 +8493,6 @@ class Interpreter:
                     relative_href = link.get('href')
                     # 'filename' holds the original URL passed to LOAD HTML
                     absolute_href = urljoin(filename, relative_href)
-                    data_row = [source_url, link.get_text(strip=True), link.get('href')]
                     data_row = [source_url, link.get_text(strip=True), absolute_href]
                     if add_line_num: data_row.append(i + 1)
                     yield {'type': 'data', 'data': data_row, 'physical_line_num': 0, 'logical_line_num': i + 1}
@@ -9060,18 +9098,8 @@ class Interpreter:
                 self.db_cursor.execute(f"DROP TABLE IF EXISTS {self._quote_identifier(metadata_table_name)};")
                 
     def _null_handling_rules(self, table_name, headers):
-        """For each column, True if LOAD should store empty (or all-space) text as NULL.
-        A rule set with SET NULL_HANDLING FOR "table.column" wins over one FOR "column",
-        which wins over the global setting (SET NULL_HANDLING TO ...)."""
-        table = str(table_name or '').strip('"').upper()
-        rules = []
-        for header in headers:
-            column = str(header).upper()
-            option = (g_null_handling_settings.get(f"{table}.{column}")
-                      or g_null_handling_settings.get(column)
-                      or g_null_handling_default)
-            rules.append(option in ('NULL', 'CONVERT_EMPTY_TO_NULL'))
-        return rules
+        """See null_handling_rules()."""
+        return null_handling_rules(table_name, headers)
 
     def _execute_load_pipeline(self, filename, dest_info, options, extractor_func):
         """
@@ -9652,10 +9680,11 @@ class Interpreter:
                 
                 batch = []
                 total_rows = 0
+                empty_to_null = self._null_handling_rules(dest_info['target'], target_headers)
                 self.db_connection.execute('BEGIN TRANSACTION;')
                 try:
                     for transformed_row in transformer:
-                        batch.append(transformed_row)
+                        batch.append(apply_null_handling(empty_to_null, transformed_row))
                         total_rows += 1
                         if len(batch) >= batchsize:
                             cursor.executemany(insert_sql, batch)
