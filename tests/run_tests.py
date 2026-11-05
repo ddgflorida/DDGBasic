@@ -64,6 +64,12 @@ EXPECTED_EXIT = {
 # Keyboard input fed to scripts that use INPUT.
 STDIN = {
     'examples/loadjson': '\x1b[C\x1b[C\x1b[B60\r\x1b',   # BROWSE EDIT: Gadget quantity -> 60
+    'examples/form_demo': 'b2\r\r3\ry\r25\r\x1910\r\r',
+    'examples/menu_demo': 'vccha\rvt\rfq',
+    'examples/grid_demo': '\x1b[6~\x1b[6~\r\r\x1b[F\x1b[C\x1b[C0\r\x1b',
+    'examples/report_demo': 'q',
+    'examples/notes_demo': '\x1b[B\x1b[B\x1b[F\r- book a room\x17/acme\rqq',
+    'examples/mouse_demo': '\x1b[<0;10;5M\x1b[<0;11;5M\x1b[<64;12;5M\x1b[<0;12;5M\x1b[<2;11;5M\x1b',
     'examples/errorhandling': 'nope.txt\n\n',   # file-not-found path, then quit
     'examples/retro_contacts': ('ca' 'hooli\t5552223333\tzz\r\r-5\r\x19500\r\r' '\r'   # Contacts.Add: lookup, a refused credit, [ Save ], ALERT
                                 'ce' '\x1b[B\x1b[B\r' '\t\t\t750\r'                 # Contacts.Edit: EDIT RECORD on HOOLI

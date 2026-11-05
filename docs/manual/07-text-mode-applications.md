@@ -2,6 +2,20 @@
 
 This chapter covers DbBasic's full-screen text interface: coloured screens, boxes, entry forms, menus, editable grids, a memo editor and a text viewer, in the style of 1990s BASIC and xBase programs. It starts with a tutorial, then describes each statement.
 
+Example programs in `examples/`, each short enough to read in a minute:
+
+| Example | Shows |
+|---|---|
+| `form_demo.bas` | An order form: `GET` with `PICTURE`, a `LOOKUP` list, `VALID ... MESSAGE`, `WHEN`, and Save/Cancel buttons |
+| `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
+| `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows |
+| `report_demo.bas` | `REPORT` with nested groups and totals, on the screen, in the viewer and in a paged file |
+| `notes_demo.bas` | `EDIT TEXT` and `VIEW`, including `VIEW FILE` |
+| `mouse_demo.bas` | A tiny paint program: `INKEY$` mouse keys with `MOUSEROW` and `MOUSECOL` |
+| `retro_contacts.bas` | All of it together: the contact manager of 7.1 |
+
+The test runner plays each of them with scripted keys, so they are also tests.
+
 Related material in other chapters:
 
 * `PRINT`, `INPUT` and the console: **Chapter 4** and **Chapter 6**.
