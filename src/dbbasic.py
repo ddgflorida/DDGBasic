@@ -11232,7 +11232,8 @@ class Interpreter:
     def _parse_upgrade_csv_statement(self):
         """
         Parses and executes the UPGRADE CSV command to transform CSV files based on a schema.
-          Note - The schema file can be created with ANALYZE CSV
+          Note - The schema file can be created with ANALYZE CSV ... SAVE SCHEMA TO;
+          a plain JSON array of column objects is accepted too.
         
             >──[ UPGRADE ]──[ CSV ]──( source_pattern )─┬
                                                         │
@@ -11256,13 +11257,14 @@ class Interpreter:
             A required clause specifying the name of the directory where the newly created, transformed CSV files will be saved.
 
         """
-    def _parse_upgrade_csv_statement(self):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': ""})
         self._expect('UPGRADE')
         self._expect('CSV')
         source_pattern = self._parse_expression()
         self._expect('USING')
-        self._expect('ID') # SCHEMA
+        if not (self._current_token() and self._current_token()[0] == 'ID' and self._current_token()[1].upper() == 'SCHEMA'):
+            self._error("Expected SCHEMA after USING")
+        self._next_token()  # SCHEMA
         schema_file = self._parse_expression()
         self._expect('INTO')
         output_folder = self._parse_expression()
@@ -11270,8 +11272,10 @@ class Interpreter:
         try:
             with open(schema_file, 'r', encoding='utf-8') as f:
                 schema = json.load(f)
-            if not isinstance(schema, list):
-                self._error("CSV schema file must contain a JSON array.")
+            # Either the object written by ANALYZE CSV ... SAVE SCHEMA TO ({"columns": [...],
+            # "process_by": ...}) or a plain array of column objects.
+            if not (isinstance(schema, list) or (isinstance(schema, dict) and isinstance(schema.get('columns'), list))):
+                self._error("CSV schema must be a JSON array of columns or an object with a \"columns\" array.")
 
             if not os.path.exists(output_folder):
                 os.makedirs(output_folder)

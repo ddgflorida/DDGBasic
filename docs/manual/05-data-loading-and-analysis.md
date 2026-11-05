@@ -1280,7 +1280,7 @@ Constraint Violations found in 'sales.csv':
 
 **Multiple files** (the pattern matches more than one file). The delimiter is sniffed from the first file and applied to all files. The report covers the consistency of delimiters, header presence and column sets, plus per-column aggregates with `PRESENT_IN_FILES`. The keys stored by `INTO` are `FILES_ANALYZED`, `FILE_LIST`, `TOTAL_RECORDS`, `IS_CONSISTENT`, `CONSISTENCY_DETAILS` and `COLUMN_STATISTICS`.
 
-**SAVE SCHEMA TO** writes `{"process_by": "", "columns": [{name, source, transform, analysis:{suggested_type, max_len}}, ...]}`, with one entry per header, using the union of headers across files. A `transform=col:rule;...` option pre-fills the `transform` field of the matching columns. The schema can be used by `LOAD CSV ... USING SCHEMA` directly. `UPGRADE CSV` cannot read it without editing ([5.17.1](#5171-upgrade-csv)).
+**SAVE SCHEMA TO** writes `{"process_by": "", "columns": [{name, source, transform, analysis:{suggested_type, max_len}}, ...]}`, with one entry per header, using the union of headers across files. A `transform=col:rule;...` option pre-fills the `transform` field of the matching columns. The schema can be used directly by `LOAD CSV ... USING SCHEMA` and by `UPGRADE CSV` ([5.17.1](#5171-upgrade-csv)).
 
 ```basic
 ANALYZE CSV "batch/*.csv" SAVE SCHEMA TO "batch_schema.json" OPTIONS "transform=name:proper"
@@ -1641,7 +1641,13 @@ UPGRADE CSV source_pattern USING SCHEMA schema_file INTO output_folder
 
 For every file matching the glob, `UPGRADE CSV` writes `output_folder/<same name>`, creating the folder if needed. It uses the same column-schema engine as `LOAD CSV ... USING SCHEMA` ([5.11](#511-load-csv--using-schema)): output columns, `source` expressions and pipe-separated `transform` rules. A file that fails is reported to stderr as `- Failed to upgrade 'x': ...` and the other files continue. If no file matches, a warning is printed and the statement returns.
 
-The schema file must be a **JSON array** of column objects. The object written by `ANALYZE CSV ... SAVE SCHEMA TO` is rejected with `CSV schema file must contain a JSON array.` To use a saved schema, copy its `"columns"` array into a file of its own. Because the schema is an array, `process_by` is not available here.
+The schema file can be the object written by `ANALYZE CSV ... SAVE SCHEMA TO` (`{"process_by": "...", "columns": [...]}`) or a plain **JSON array** of column objects. With the object form, `process_by` runs for each row, as in `LOAD CSV ... USING SCHEMA`. CSV values reach it as text, so compare with strings: `IF rec.id = "2" THEN rec.is_valid = 0`. A typical workflow is to analyse one file, edit the saved schema (rename, reorder or add columns, add `transform` rules or a `source` expression), then upgrade a whole batch:
+
+```basic
+ANALYZE CSV "batch/a.csv" SAVE SCHEMA TO "schema.json"
+REM ... edit schema.json ...
+UPGRADE CSV "batch/*.csv" USING SCHEMA "schema.json" INTO "out"
+```
 
 ```basic
 UPGRADE CSV "batch/*.csv" USING SCHEMA "up_schema.json" INTO "out"
@@ -1791,7 +1797,7 @@ The following points were found while checking the source and running the exampl
 
 **USING SCHEMA and UPGRADE**
 
-28. **`UPGRADE CSV` cannot read `ANALYZE CSV`'s saved schema** (it is an object, not an array). The in-code documentation says the two are designed to work together. `_parse_upgrade_csv_statement` is also defined twice (10786 and 10813); the first definition is only a docstring and is overridden.
+28. **`UPGRADE CSV` and `ANALYZE CSV`'s saved schema** (fixed). `UPGRADE CSV` accepted only a JSON array and rejected the object that `ANALYZE CSV ... SAVE SCHEMA TO` writes, although the two are designed to work together. It now accepts both forms, including `process_by`. The duplicate docstring-only definition of `_parse_upgrade_csv_statement` has been merged, and `USING` must now be followed by `SCHEMA`.
 29. **Single quotes in schema `source` expressions.** The `ANALYZE CSV` docstring suggests expressions like `"FirstName & ' ' & LastName"`. Single quotes are only converted when the whole source is one quoted literal, so such expressions raise a parse error. Use backtick strings.
 30. **`UPGRADE JSON`** (fixed): it always failed with "Expected SCHEMA after USING" because the `SCHEMA` check compared the wrong token.
 
