@@ -262,7 +262,15 @@ A quote that is never closed stops the program before it runs, with `Unexpected 
 
 Comments are passed through to the engine, which ignores them.
 
-A `CREATE TRIGGER` statement can't be written as line-level SQL. Its body contains `;` inside `BEGIN ... END`, and the statement is cut at the first one. `EXECUTE` has the same limit.
+A `CREATE [TEMP] TRIGGER` statement ends at the first `;` after the `END` that closes its `BEGIN`, so the `;` after each statement in the body doesn't end it. `CASE ... END` inside the body nests correctly. `EXECUTE` splits trigger statements the same way.
+
+```basic
+CREATE TRIGGER trg AFTER INSERT ON t FOR EACH ROW
+BEGIN
+  INSERT INTO log VALUES ('added ' || NEW.a);
+  INSERT INTO log VALUES (CASE WHEN NEW.a > 1 THEN 'big' ELSE 'small' END);
+END;
+```
 
 ### 4.2.4 How the statement runs
 

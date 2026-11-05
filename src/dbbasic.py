@@ -1023,14 +1023,31 @@ class Lexer:
         out.append(transform(code[chunk_start:]))
         return ''.join(out)
 
+    _TRIGGER_RE = re.compile(r'\s*CREATE\s+(?:TEMP\s+|TEMPORARY\s+)?TRIGGER\b', re.IGNORECASE)
+
     @staticmethod
     def _find_sql_terminator(text, start):
         """Index of the ';' that ends the SQL statement starting at text[start], or -1.
         Semicolons inside '...' strings, "..." identifiers, -- comments and /* */ comments
-        don't count. A doubled quote ('' or "") inside a quoted run is an escape."""
+        don't count. A doubled quote ('' or "") inside a quoted run is an escape.
+        In CREATE [TEMP] TRIGGER, the body's statements end in ';' too, so the terminator
+        is the first ';' after the END that closes BEGIN (CASE ... END nests inside)."""
         i, n = start, len(text)
+        is_trigger = bool(Lexer._TRIGGER_RE.match(text, start))
+        block_depth = 0
         while i < n:
             c = text[i]
+            if is_trigger and (c.isalpha() or c == '_') and (i == 0 or not (text[i - 1].isalnum() or text[i - 1] == '_')):
+                j = i
+                while j < n and (text[j].isalnum() or text[j] == '_'):
+                    j += 1
+                word = text[i:j].upper()
+                if word in ('BEGIN', 'CASE'):
+                    block_depth += 1
+                elif word == 'END' and block_depth > 0:
+                    block_depth -= 1
+                i = j
+                continue
             if c in ("'", '"'):
                 i += 1
                 while i < n:
@@ -1050,7 +1067,7 @@ class Lexer:
                 if close == -1:
                     return -1
                 i = close + 1
-            elif c == ';':
+            elif c == ';' and block_depth == 0:
                 return i
             i += 1
         return -1
@@ -2340,6 +2357,24 @@ class Interpreter:
    
         
     def _split_sql_statements(self, sql_text: str) -> list[str]:
+        """Split a string of SQL into statements (used by EXECUTE). A CREATE TRIGGER
+        statement is kept whole, although its body contains ';'."""
+        statements = []
+        pos = 0
+        while pos < len(sql_text):
+            end = Lexer._find_sql_terminator(sql_text, pos)
+            chunk = sql_text[pos:] if end == -1 else sql_text[pos:end]
+            pos = len(sql_text) if end == -1 else end + 1
+            parts = self._split_simple_sql_statements(chunk)
+            if not parts:
+                continue                      # only whitespace or comments
+            if Lexer._TRIGGER_RE.match(chunk):
+                statements.append(chunk.strip())
+            else:
+                statements.extend(parts)
+        return statements
+
+    def _split_simple_sql_statements(self, sql_text: str) -> list[str]:
         """
         Splits a single string of SQL into a list of individual statements.
 
