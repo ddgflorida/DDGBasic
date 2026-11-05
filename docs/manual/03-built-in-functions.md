@@ -65,7 +65,7 @@ Related chapters:
 | Function | Category | Returns | Summary |
 |---|---|---|---|
 | [`ABS`](#fn-abs) | Math | Number | Absolute value |
-| [`ALERT`](06-files-system-network-ui.md#alert) | Screen | Number | Message box with buttons; the chosen button |
+| [`ALERT`](07-text-mode-applications.md#alert) | Screen | Number | Message box with buttons; the chosen button |
 | [`ARRAY`](#fn-array) | Array | Array | Build an array from its arguments |
 | [`ARRAY_JOIN`](#fn-array_join) | Array | String | Join array elements with a delimiter |
 | [`ARRAY_SIZE`](#fn-array_size) | Array | Number | Number of elements |
@@ -117,7 +117,7 @@ Related chapters:
 | [`HOUR`](#fn-hour) | Date | Number | Hour from `HH:MM:SS` |
 | [`HTMLDECODE$`](#fn-htmldecode-str) | Encoding | String | Decode HTML entities |
 | [`HTMLENCODE$`](#fn-htmlencode-str) | Encoding | String | Escape HTML |
-| [`INKEY$`](06-files-system-network-ui.md#inkey-and-lastkey) | Screen | String | The key pressed, or ""; `INKEY$(0)` waits |
+| [`INKEY$`](07-text-mode-applications.md#inkey-and-lastkey) | Screen | String | The key pressed, or ""; `INKEY$(0)` waits |
 | [`INSTR`](#fn-instr) | String | Number | 1-based position of a substring |
 | [`INSTRREV`](#fn-instrrev) | String | Number | Last position of a substring |
 | [`INT`](#fn-int) | Math | Number | Floor |
@@ -130,7 +130,7 @@ Related chapters:
 | [`ISLEAP`](#fn-isleap) | Date | Boolean | Leap year test |
 | [`ISNUMERIC`](#fn-isnumeric) | String | Boolean | Parses as a number |
 | [`JSON_SERIALIZE$`](#fn-json_serialize-str) | JSON | String | Hash or array to JSON |
-| [`LASTKEY$`](06-files-system-network-ui.md#inkey-and-lastkey) | Screen | String | Key that ended the last `READ`, `MENU` or `BROWSE` |
+| [`LASTKEY$`](07-text-mode-applications.md#inkey-and-lastkey) | Screen | String | Key that ended the last `READ`, `MENU` or `BROWSE` |
 | [`LCASE$`](#fn-lcase-str) | String | String | Lower case |
 | [`LEFT$`](#fn-left-str) | String | String | Leftmost characters |
 | [`LEN`](#fn-len) | String | Number | Length of the text form |
@@ -138,8 +138,8 @@ Related chapters:
 | [`LTRIM$`](#fn-ltrim-str) | String | String | Trim the left side |
 | [`MAP`](#fn-map) | Higher-order | Array | Transform every element |
 | [`MAX`](#fn-max) | Math | Number | Largest argument |
-| [`MENU`](06-files-system-network-ui.md#menu) | Screen | Number | Light-bar menu; the chosen item number |
-| [`MENUBAR$`](06-files-system-network-ui.md#menubar) | Screen | String | Menu bar with pull-down menus; `"Title.Item"` |
+| [`MENU`](07-text-mode-applications.md#menu) | Screen | Number | Light-bar menu; the chosen item number |
+| [`MENUBAR$`](07-text-mode-applications.md#menubar) | Screen | String | Menu bar with pull-down menus; `"Title.Item"` |
 | [`MID$`](#fn-mid-str) | String | String | Substring |
 | [`MIN`](#fn-min) | Math | Number | Smallest argument |
 | [`MINUTE`](#fn-minute) | Date | Number | Minute from a time string |
@@ -166,7 +166,7 @@ Related chapters:
 | [`RND`](#fn-rnd) | Math | Number | Random number |
 | [`ROUND`](#fn-round) | Math | Number | Round to decimals |
 | [`RTRIM$`](#fn-rtrim-str) | String | String | Trim the right side |
-| [`SAVESCREEN`](06-files-system-network-ui.md#savescreen-and-restscreen) | Screen | String | Copy of the screen or an area, for `RESTSCREEN` |
+| [`SAVESCREEN`](07-text-mode-applications.md#savescreen-and-restscreen) | Screen | String | Copy of the screen or an area, for `RESTSCREEN` |
 | [`SECOND`](#fn-second) | Date | Number | Second from a time string |
 | [`SGN`](#fn-sgn) | Math | Number | Sign |
 | [`SIN`](#fn-sin) | Math | Number | Sine |
@@ -1662,7 +1662,7 @@ PRINT "[" + ENVIRON$("DBB_TEST") + "][" + ENVIRON$("NO_SUCH_VAR_X") + "]"
 [hi][]
 ```
 
-`CURDIR$`, `FREEFILE` and `DISKSPACE` are described in [3.10](#310-file-and-directory-functions). The screen functions `ALERT`, `INKEY$`, `LASTKEY$`, `MENU`, `MENUBAR$` and `SAVESCREEN` are described with the text-screen statements in [6.7](06-files-system-network-ui.md#67-text-screens).
+`CURDIR$`, `FREEFILE` and `DISKSPACE` are described in [3.10](#310-file-and-directory-functions). The screen functions `ALERT`, `INKEY$`, `LASTKEY$`, `MENU`, `MENUBAR$` and `SAVESCREEN` are described with the text-screen statements in [Chapter 7](07-text-mode-applications.md).
 
 ---
 

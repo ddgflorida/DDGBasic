@@ -1412,7 +1412,7 @@ the existing documentation:
    recognised only inside those statements and are ordinary names
    elsewhere. About 30 more (`size`, `type`, `title`, `label`, `message`,
    `source`, `choice` and others) were reserved by the old FORM statements
-   and were freed when those were archived (see 6.8).
+   and were freed when those were archived (see 7.8).
 6. **`SHIFT`/`UNSHIFT`** (changed to 0-based). They used to work on index 1,
    treating element 0 as reserved, so on arrays from `ARRAY()`, `PUSH` or
    `SPLIT` they skipped the real first element, and `SHIFT` refused a

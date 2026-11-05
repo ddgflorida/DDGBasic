@@ -835,7 +835,7 @@ The following errors are **not** governed by `SQL_FATAL_ERRORS`. They always sto
 | `HASH_KEYS` | `SET HASH_KEYS PRESERVE_CASE \| IGNORE_CASE` |
 | `NULL_HANDLING` | `SET NULL_HANDLING [FOR expr] TO NULL \| CONVERT_EMPTY_TO_NULL \| PRESERVE_EMPTY_STRINGS \| EMPTY` |
 | `EMAIL` | `SET EMAIL keyword value [keyword value ...]` |
-| `AUTOADVANCE` | `SET AUTOADVANCE ON \| OFF`: whether filling an entry field moves to the next one (see [6.7](06-files-system-network-ui.md#read)) |
+| `AUTOADVANCE` | `SET AUTOADVANCE ON \| OFF`: whether filling an entry field moves to the next one (see [7.3](07-text-mode-applications.md#read)) |
 | `CONFIRM` | `SET CONFIRM ON \| OFF`: Clipper's name for the opposite of `AUTOADVANCE`. `SET CONFIRM OFF` is `SET AUTOADVANCE ON` |
 
 These are the only options. Any other word after `SET` is an error: `SET x = 5` gives `Unknown SET option 'x'. Expected OUTPUT, EMAIL, NULL_HANDLING, SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE or CONFIRM.` To change the database engine, use `DATABASE ENGINE DUCKDB` (4.1), not `SET DATABASE ENGINE`.

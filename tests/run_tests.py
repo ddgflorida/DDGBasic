@@ -60,12 +60,11 @@ EXPECTED_EXIT = {
 STDIN = {
     'examples/loadjson': '\x1b[C\x1b[C\x1b[B60\r\x1b',   # BROWSE EDIT: Gadget quantity -> 60
     'examples/errorhandling': 'nope.txt\n\n',   # file-not-found path, then quit
-    'examples/retro_contacts': ('\x1b[B\r'                          # Add a contact
-                                'hooli\t5552223333\tca\t500\r' ' '  # fill in the form; a key for "Saved"
-                                '\x1b[B\x1b[B\r' '\x1b[B\x1b[B\r'     # Edit: pick the 3rd row (HOOLI)
-                                '\t\t\t750\r' ' '                    # change the credit
-                                '\r' '\x1b'                         # Browse, then Esc
-                                'q'),                               # Quit by its first letter
+    'examples/retro_contacts': ('ca' 'hooli\t5552223333\tzz\r\r-5\r\x19500\r' '\r'   # Contacts.Add: lookup, a refused credit, ALERT
+                                'ce' '\x1b[B\x1b[B\r' '\t\t\t750\r'                 # Contacts.Edit: EDIT RECORD on HOOLI
+                                'cn' '\x1b[B\x1b[B\r' 'Met at expo\x17'              # Contacts.Notes: EDIT TEXT
+                                'cb' '\x1b' 'cd' '\x1b[B\r' 'y'                       # Browse; Delete GLOBEX (ALERT)
+                                'fr' 'q' 'hk' '\x1b' 'ha' '\r' 'fq'),                # Report, Help, About, Quit
     'tests/file_io_fixes': 'Ann\nabc\n42\n',    # a name, then a bad and a good number
     'tests/browse_add_delete': ('\x1b[2~\t' 'pear\t4\r\x1b[C\r\x19Pear2\r\x1b[A\x1b[3~n\x1b[3~y\x1b[2~\x1b' '\x1b[2~\t\t1\r \x1b\x1b'            # SQLite
                                 '\x1b[2~3\t' 'pear\t4\r\x1b[C\r\x19Pear2\r\x1b[A\x1b[3~n\x1b[3~y\x1b[2~\x1b' '\x1b[2~\t\t1\r \x1b\x1b'),         # DuckDB
