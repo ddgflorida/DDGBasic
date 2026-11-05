@@ -750,8 +750,8 @@ class HelpRegistry:
             "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE']
         },
         "SET OUTPUT": {
-            "syntax": 'SET OUTPUT [CONSOLE|FILE "path"|OFF] FORMAT [TEXT|CSV|JSON|SQL|EXCEL] [OPTIONS "..."]',
-            "desc": "Redirects output. Formats: TEXT, CSV, JSON, HTML, SQL, EXCEL, PARQUET.",
+            "syntax": 'SET OUTPUT [CONSOLE|FILE "path"|OFF] FORMAT fmt [OPTIONS "..."]',
+            "desc": "Redirects query output. Formats: TEXT (or TABLE), CSV, JSON, JSONL, XML, HTML, FIXED, PLAIN, SQL, EXCEL, PARQUET.",
             "examples": [
                 'SET OUTPUT FILE "report.csv" FORMAT CSV',
                 'SET OUTPUT CONSOLE FORMAT TABLE OPTIONS "box_style=ASCII"',
@@ -1460,8 +1460,16 @@ class Formatter:
         output, val_idx, fmt_idx = "", 0, 0
         # Added 9 to be equivalent to #
             
+        values_at_pass_start = 0
         while val_idx < len(values):
-            if fmt_idx >= len(format_string): break
+            if fmt_idx >= len(format_string):
+                # More values than fields: reuse the mask from the start (classic PRINT USING),
+                # as long as the last pass used at least one value.
+                if val_idx == values_at_pass_start:
+                    break
+                values_at_pass_start = val_idx
+                fmt_idx = 0
+                continue
             char = format_string[fmt_idx]
             if char in '#09*!&\\$<>^': # Check for '$' as a potential start of a mask
                 # <<< CORRECTED REGEX to properly match masks starting with '$' or '*' >>>
@@ -3476,6 +3484,9 @@ class Interpreter:
                 if var_value is None:
                     self._error(f"Bind variable ':{var_from_sql}' not found in internal state.")
                     return # Stop execution if a variable is missing
+                # BASIC numbers are floats; bind whole numbers as integers so SELECT :i shows 1
+                if isinstance(var_value, float) and var_value.is_integer() and abs(var_value) < 2**63:
+                    var_value = int(var_value)
                 resolved_params.append(var_value)
         else:
             resolved_params = params
@@ -5234,8 +5245,10 @@ class Interpreter:
             if token and token[0] == 'ID' and token[1].upper() == 'FORMAT':
                 self._next_token()
                 format_token = self._current_token()
-                if format_token and format_token[0] in ['ID', 'TEXT', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL", "SQL", "PARQUET", "PLAIN"]:
+                if format_token and format_token[0] in ['ID', 'TEXT', 'TABLE', 'CSV', 'JSON', 'JSONL', 'XML', 'HTML', 'FIXED', "EXCEL", "SQL", "PARQUET", "PLAIN"]:
                     output_format = format_token[1].upper()
+                    if output_format == 'TABLE':
+                        output_format = 'TEXT'      # TABLE is another name for the default bordered table
                     if output_format in ["TEXT", "CSV", "JSON", "JSONL", 'XML', "HTML", "FIXED", "EXCEL", "SQL", "PARQUET", "PLAIN"]: 
                         g_output_config.format = output_format
                         self._next_token()
@@ -5396,7 +5409,7 @@ class Interpreter:
     def _write_as_html(self, results, headers, stream, options={}):
         """Writes query results as a basic HTML table."""
 
-        is_full = options.get('full', '')
+        is_full = str(options.get('full', '')).strip().lower() in ('true', '1', 'y', 'yes')
         report_title = options.get('title')
         if report_title is None:
             report_title = "Query Result"
@@ -5618,11 +5631,16 @@ class Interpreter:
             footer_cell.alignment = Alignment(horizontal="right")
        
         # Auto-adjust column widths
-        for column in worksheet.columns:
+        from openpyxl.utils import get_column_letter
+        merged_ranges = list(worksheet.merged_cells.ranges)
+        for column_index, column in enumerate(worksheet.columns, start=1):
             max_length = 0
-            column_letter = column[0].column_letter
+            # The first cell can be a merged title cell, which has no column_letter
+            column_letter = get_column_letter(column_index)
             
             for cell in column:
+                if any(cell.coordinate in r for r in merged_ranges):
+                    continue    # a title/subtitle/footer spans the columns; don't size by it
                 try:
                     if len(str(cell.value)) > max_length:
                         max_length = len(str(cell.value))
@@ -6184,8 +6202,11 @@ class Interpreter:
         if self._current_token() and self._current_token()[0] == 'USING':
             self._next_token()
             format_string = self._parse_expression()
-            self._expect('SEMICOLON')
             values = []
+            if self._current_token() and self._current_token()[0] == 'SEMICOLON':
+                self._next_token()
+            elif self._current_token() and self._current_token()[0] not in ('NEWLINE', 'END', 'COLON'):
+                self._error("Expected ; after the PRINT USING format string")
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
                 values.append(self._parse_condition())
                 if self._current_token() and self._current_token()[0] == 'COMMA': self._next_token()
@@ -6231,7 +6252,7 @@ class Interpreter:
                 if token and token[0] == 'COMMA':
                     self._next_token()
                     parts.append('\t')
-                    suppress_nl = False
+                    suppress_nl = True      # a trailing comma keeps the cursor on this line
                 elif token and token[0] == 'SEMICOLON':
                     self._next_token()
                     suppress_nl = True

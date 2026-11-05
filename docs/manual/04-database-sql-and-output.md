@@ -425,7 +425,7 @@ SELECT * FROM t WHERE id >= :id;
 
 Behaviour and edge cases:
 
-- **Numbers are bound as floating point.** BASIC numbers are Python floats, so `SELECT :i AS i;` with `i = 1` displays `1.0`. A column with `INTEGER` affinity (SQLite) or type (DuckDB) converts the value on insert, which is why `7` above is stored as an integer.
+- **Whole numbers are bound as integers.** BASIC numbers are floats, but a whole number such as `1` is passed to the database as the integer `1`, so `SELECT :i AS i;` with `i = 1` displays `1` and a `TEXT` column stores `'1'`. Other numbers are bound as floating point.
 - **An undefined variable is a hard error.** Bind lookup does not auto-create variables. A missing name raises `Bind variable ':x' not found in internal state.`. This error is raised regardless of `SET SQL_FATAL_ERRORS` (it is not a database error).
 - **Colons in literals and casts are left alone:**
 
@@ -1190,7 +1190,7 @@ If the file already exists, a **new sheet is added** to it. openpyxl renames dup
 | `title`, `subtitle` | merged title rows above the header |
 | `footer` | merged italic footer row |
 
-`title`, `subtitle` and `footer` currently crash the writer (see 4.14).
+Column widths are sized from the header and data cells; the merged title, subtitle and footer rows don't widen column A.
 
 #### PARQUET (FILE mode only)
 
@@ -1272,7 +1272,7 @@ Separators:
 | Separator | Effect |
 |---|---|
 | `;` | values are joined with nothing between them. A `;` at the end of the statement suppresses the newline. |
-| `,` | inserts a **tab character**. A trailing `,` still ends the line (it does not suppress the newline). |
+| `,` | inserts a **tab character**. A trailing `,` keeps the cursor on the line, like a trailing `;`, so the next `PRINT` continues after the tab. |
 
 `PRINT` on its own prints an empty line.
 
@@ -1306,8 +1306,7 @@ no newline - continued
   "name$": "Ann",
   "age": 30
 }
-trailing comma→
-next
+trailing comma→next
 ```
 
 **File output:** `PRINT #n, ...` writes to the file opened with `OPEN ... AS #n` (Chapter 6). The line ends with `os.linesep`. Mixing `PRINT #n` with `WRITE #n` therefore mixes `\n` lines (on macOS/Linux) with `\r\n` lines (WRITE uses `csv` defaults).
@@ -1327,13 +1326,13 @@ CLOSE #1
 PRINT [#n,] USING mask_expr; expr [, expr ...] [;]
 ```
 
-The mask is any string expression. Values are separated by **commas**. A trailing `;` suppresses the newline. `Formatter.format` walks the mask from left to right:
+The mask is any string expression. Values are separated by **commas**. A trailing `;` suppresses the newline. With no values, the `;` can be left out (`PRINT USING "Totals:"` prints the literal text). `Formatter.format` walks the mask from left to right:
 
 - Literal characters are copied to the output.
 - When the walker reaches a character from `# 0 9 * ! & \ $ < > ^`, it tries to match a field. The next value is formatted into that field.
 - **After the last value**, literal text is copied until the next field character, so `PRINT USING "Total: ### units"; 42` prints `Total:  42 units`. A mask with no values prints an empty line.
 - **A numeric field directly followed by `%`** shows the value multiplied by 100: `PRINT USING "##.#%"; 0.256` prints `25.6%`.
-- If there are more values than fields, the extra values are ignored. The mask is not reused.
+- If there are more values than fields, the mask is reused from the start for the remaining values (`PRINT USING "###"; 1, 2, 3` prints `  1  2  3`).
 
 **Numeric fields.** A field is a run of the characters `$ * # 0 9 , space`, optionally followed by `.` and more `#`/`0` characters, optionally followed by `^^^^`.
 
@@ -1484,21 +1483,21 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 3. **Keyword joining inside string literals** (fixed). Multi-word keyword rewrites used to change text inside strings and SQL literals (`'for each'` became `'FOREACH'`). They now apply only to code (4.2.2).
 4. **`END TRANSACTION;`** (fixed). It was not recognised as SQL, because the keyword list held `'END TRANSACTION'` while the lexer sees the joined token `ENDTRANSACTION`. Joined keywords in SQL code are now also split back apart before the statement is sent, so `FOR EACH ROW` in a trigger reaches the engine intact.
 5. **Bind-variable scanning** (fixed). It used to be purely textual, so `'x:y'`, `':memory:'` and DuckDB `::TYPE` casts were taken as variable references. A missing bind variable is fatal even with `SQL_FATAL_ERRORS OFF`.
-6. **Numeric bind values are always floats**, so `SELECT :i` shows `1.0`.
+6. **Numeric bind values** (fixed). They were always floats, so `SELECT :i` showed `1.0`. Whole numbers are now bound as integers.
 
 **SET**
 
 7. **Unknown `SET` options** (fixed). They used to be skipped silently, with the rest of the line run as a new statement (`SET DATABASE ENGINE DUCKDB` in `examples/setoutputsql.bas` only worked by accident, and `SET x = 5` was an assignment). They now raise `Unknown SET option`.
 8. **`SET NULL_HANDLING`** (fixed). It had no effect: the settings were stored but never read, and the global form was not parsed. It now controls `LOAD`, with empty fields stored as `NULL` by default (4.9.3).
-9. **`SET OUTPUT FORMAT TABLE`** (a `HELP SET OUTPUT` example) is rejected. The table format is called `TEXT`. The help's format list also leaves out `JSONL`, `XML`, `FIXED` and `PLAIN`.
+9. **`SET OUTPUT FORMAT TABLE`** (fixed). It was rejected; `TABLE` is now another name for the default `TEXT` format. The `HELP SET OUTPUT` text now lists every format.
 10. **`SET OUTPUT FORMAT ...` without a mode forces `CONSOLE`**, which silently cancels an earlier `FILE` or `OFF`. `SET OUTPUT CONSOLE` resets the format to `TEXT`, and `FILE` without `FORMAT` keeps the old format.
 11. **`SET OUTPUT OFF` does more than suppress output.** It prevents line-level `SELECT`/`WITH`/`SUMMARIZE`/`PRAGMA` statements from running at all. Side effects such as a `PRAGMA` setting, or `ERR` being reset, do not happen.
 
 **Output writers**
 
 12. **FILE mode overwrites the file on every query.** Only `EXCEL` appends, by adding a sheet.
-13. **The HTML `full` option is true for any non-empty value**, including `full=false`.
-14. **The Excel `title`, `subtitle` and `footer` options crash.** Merged cells cause `'MergedCell' object has no attribute 'column_letter'` during the column-width pass, and the workbook is not saved.
+13. **HTML `full=false`** (fixed). Any non-empty value, including `false`, turned `full` on. Only `true`, `1`, `y` and `yes` do now.
+14. **Excel `title`/`subtitle`/`footer`** (fixed). The column-width pass read `column_letter` from a merged cell and crashed with `'MergedCell' object has no attribute 'column_letter'`, so the workbook was not saved.
 15. **JSON and JSONL output of DuckDB values** (fixed). `DATE`/`TIMESTAMP`/`DECIMAL` values failed with "not JSON serializable". They are now written as ISO text and numbers.
 16. **JSON trailing newline** (fixed). The JSON writer printed no newline after the closing `]`, so the next output ran on. CSV console output still uses `\r\n` line endings.
 
@@ -1513,10 +1512,10 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 **PRINT and PRINT USING**
 
 22. **`PRINT USING` has several gaps:**
-    - It prints an empty line when there are no values.
-    - It does not reuse the mask for extra values.
+    - (Fixed) A mask with no values needed a `;` and printed an empty line; it now prints the literal text.
+    - (Fixed) Extra values are now formatted by reusing the mask.
     - It treats spaces as part of numeric fields.
     - It does not accept `9` after the decimal point.
     - It gives no overflow indicator.
 23. **`PRINT #n, USING ...`** (fixed). Without a trailing `;` it crashed with `cannot access local variable 'parts'`, and with one it never wrote a line ending to the file.
-24. **A trailing `,` in `PRINT` does not suppress the newline.** It emits a tab and then ends the line, unlike classic BASIC.
+24. **A trailing `,` in `PRINT`** (fixed). It printed a tab and then ended the line; it now keeps the cursor on the line, as in classic BASIC.
