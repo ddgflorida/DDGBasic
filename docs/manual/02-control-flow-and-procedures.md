@@ -1476,7 +1476,7 @@ Each of the following was confirmed by running the interpreter.
 12. **`RECNO` numbering** (fixed). In `FOR ... IN CSV` it started at 2 even without a header row, in `JSONL` it counted blank lines, and an inner loop deleted the outer loop's `RECNO`. It now counts records from 1 in every loop and is restored after a nested loop.
 13. **Exit status** (fixed): it was always 0, even after a runtime error; it is now 1 (see 2.17). `EXIT FUNCTION` outside a function still gives an empty `Runtime Error:` message.
 14. **`HELP` debug output** (fixed). `HELP` printed the raw token tuple, for example `('GOSUB', 'GOSUB', 5)`, before every entry.
-15. `PRINT x;` immediately followed by `:` is a syntax error (`Unexpected token in factor: COLON`), so `FOR i = 1 TO 3: PRINT i;: NEXT` fails. Write `PRINT i : NEXT`, or split the line.
+15. **`PRINT x;` followed by `:` or `ELSE`** (fixed). It was a syntax error (`Unexpected token in factor: COLON`), so `FOR i = 1 TO 3: PRINT i;: NEXT` failed. It now works, as do `PRINT: PRINT "x"` and `IF c THEN PRINT a; ELSE PRINT b`.
 16. **`CHAIN` status lines** (fixed). `CHAIN` always printed `CHAIN: ...` status lines to standard output.
 
 **Documentation that does not match the code**

@@ -6235,7 +6235,7 @@ class Interpreter:
                 self._next_token()
             elif self._current_token() and self._current_token()[0] not in ('NEWLINE', 'END', 'COLON'):
                 self._error("Expected ; after the PRINT USING format string")
-            while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
+            while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'ELSE']:
                 values.append(self._parse_condition())
                 if self._current_token() and self._current_token()[0] == 'COMMA': self._next_token()
                 else: break
@@ -6255,12 +6255,12 @@ class Interpreter:
         parts = []
         suppress_nl = False
         if (self._current_token() is None or 
-            self._current_token()[0] in ['NEWLINE', 'END'] or
+            self._current_token()[0] in ['NEWLINE', 'END', 'COLON', 'ELSE'] or
             (self._current_token()[0] in ['PRINT', 'IF', 'FOR', 'WHILE', 'DIM', 'LET', 'GOSUB', 'RETURN'] and 
              self._current_token()[0] not in ['NEXT', 'WEND', 'END LOOP', 'LOOP'])):
             parts.append('\n')
         else:
-            while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END']:
+            while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'ELSE']:
                 value = self._parse_condition()
                 if isinstance(value, dict): 
                     parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2))
@@ -7976,7 +7976,7 @@ class Interpreter:
                 try:
                     sample = infile.read(8192)
                     infile.seek(0)
-                    delimiter = csv.Sniffer().sniff(sample).delimiter
+                    delimiter = csv.Sniffer().sniff(sample, delimiters=',;\t|').delimiter
                 except csv.Error:
                     delimiter = ',' # Default if sniffing fails
 
@@ -9207,6 +9207,7 @@ class Interpreter:
             
             # After the call, the function stops to bypass the normal pipeline
             return 
+        created_table = None
         try:
             extractor = extractor_func(filename, options)
 
@@ -9308,6 +9309,7 @@ class Interpreter:
                     self._error(f"Table '{dest_info['target']}' already exists. Use INTO TABLE ... TRUNCATE to overwrite.")
                 cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in final_headers])
                 cursor.execute(f"CREATE TABLE {self._quote_identifier(dest_info['target'])} ({cols_def});")
+                created_table = dest_info['target']   # dropped again if the load fails
             
             if dest_info.get('db_mode') == 'TRUNCATE':
                 cursor.execute(f"DELETE FROM {self._quote_identifier(dest_info['target'])};")
@@ -9319,6 +9321,12 @@ class Interpreter:
                 for row_info in row_extractor:
                     raw_row = row_info['data']
                     processed_row = [raw_row[i] for i in column_map if i < len(raw_row)]
+                    if len(processed_row) < len(final_headers):
+                        # A short row: the missing fields are loaded as NULL
+                        print(f"Warning: line {row_info.get('physical_line_num', '?')} has {len(raw_row)} fields, expected {len(original_headers)}; the missing fields are loaded as NULL.", file=sys.stderr)
+                        processed_row += [None] * (len(final_headers) - len(processed_row))
+                    elif len(raw_row) > len(original_headers):
+                        print(f"Warning: line {row_info.get('physical_line_num', '?')} has {len(raw_row)} fields, expected {len(original_headers)}; the extra fields are ignored.", file=sys.stderr)
 
                     # --- 3. Apply TRANSFORM Rules ---
                     if transform_rules:
@@ -9592,10 +9600,20 @@ class Interpreter:
                     raise e
             
         except FileNotFoundError:
+            self._drop_failed_load_table(created_table)
             self._error(f"File not found: {filename}")
         except Exception as e:
+            self._drop_failed_load_table(created_table)
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during the LOAD operation: {e}")
+
+    def _drop_failed_load_table(self, table):
+        # Drop the table a failed CREATE TABLE load made, so no empty table is left behind
+        if table:
+            try:
+                self.db_cursor.execute(f"DROP TABLE IF EXISTS {self._quote_identifier(table)};")
+            except Exception:
+                pass
 
     def _show_table_counts(self, tables):
         # Safely attempt to commit/refresh for DuckDB.
@@ -10552,7 +10570,7 @@ class Interpreter:
                 delimiter = options.get('delimiter', 'auto')
                 #print("DEBUG DELIM 1:", delimiter, sample)
                 if delimiter == 'auto':
-                    try: report['DELIMITER'] = sniffer.sniff(sample).delimiter
+                    try: report['DELIMITER'] = sniffer.sniff(sample, delimiters=',;\t|').delimiter
                     except csv.Error: report['DELIMITER'] = ','
                 else: report['DELIMITER'] = delimiter
                 #print("DEBUG DELIM 2:", report['DELIMITER'])
@@ -10970,7 +10988,7 @@ class Interpreter:
                 try:
                     with open(file_list[0], 'r', newline='', encoding='utf-8') as first_file:
                         sample = first_file.read(4096)
-                        detected_delimiter = csv.Sniffer().sniff(sample).delimiter
+                        detected_delimiter = csv.Sniffer().sniff(sample, delimiters=',;\t|').delimiter
                         options['delimiter'] = detected_delimiter
                         print(f"Notice: Auto-detected delimiter '{detected_delimiter}' from first file and applying it to all subsequent files.", file=sys.stderr)
                 except (csv.Error, FileNotFoundError):
@@ -11151,7 +11169,7 @@ class Interpreter:
                 sniffer = csv.Sniffer()
 
                 if options['delimiter'] == 'auto':
-                    try: report['DELIMITER'] = sniffer.sniff(sample).delimiter
+                    try: report['DELIMITER'] = sniffer.sniff(sample, delimiters=',;\t|').delimiter
                     except csv.Error: report['DELIMITER'] = ','
                 else: report['DELIMITER'] = options['delimiter']
                 

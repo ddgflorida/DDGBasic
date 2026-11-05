@@ -329,7 +329,7 @@ This document provides a quick reference to all available functions in the DbBas
 | SPLIT(string$, delimiter$, [limit]) | ARRAY | Splits a string by a delimiter$ and returns an ARRAY of substrings. |
 | SQR(number)             | MATH        | Returns the square root of a number. |
 | STARTSWITH(string$, prefix$) | STRING | Returns true (-1) if string$ starts with prefix$, otherwise false (0). |
-| STR$(number)            | STRING      | Converts a number to its string representation. |
+| STR$(number)            | STRING      | Converts a number to a string as `PRINT` shows it, with a leading space for zero and positive numbers. |
 | STRIPHTML$(string$)     | STRING      | Removes HTML tags from a string. |
 | TAN(number)             | MATH        | Returns the tangent of an angle given in radians. |
 | TIME$()                 | DATE/TIME   | Returns the current system time as an "HH:MI:SS" string. |

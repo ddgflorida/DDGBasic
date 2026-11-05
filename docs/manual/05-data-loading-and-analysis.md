@@ -146,7 +146,9 @@ Here `emp.csv` holds ids 1 to 4, and `emp2.csv` holds id 2 (changed) and id 5 (n
 
 Both rows of the `IGNORE` load were duplicates, so nothing was inserted.
 
-**Transactions.** For `CREATE`, `APPEND`, `TRUNCATE` and `IGNORE`, the inserts run inside one transaction. If any insert fails, for example on a duplicate key with `APPEND` or on a row with too few fields, the whole insert is rolled back. The `CREATE TABLE` and the `TRUNCATE` delete run *before* that transaction starts, so a failed `CREATE TABLE` load leaves an empty table behind.
+**Transactions.** For `CREATE`, `APPEND`, `TRUNCATE` and `IGNORE`, the inserts run inside one transaction. If any insert fails, for example on a duplicate key with `APPEND`, the whole insert is rolled back. The `TRUNCATE` delete runs *before* that transaction starts, so it is not undone. A failed `CREATE TABLE` load drops the table it created.
+
+**Short and long rows.** A row with fewer fields than the header is loaded with `NULL` in the missing columns. A row with more fields loses the extra ones. Both print a warning to stderr, for example `Warning: line 3 has 2 fields, expected 3; the missing fields are loaded as NULL.`
 
 ```
 Runtime Error: An error occurred during the LOAD operation: UNIQUE constraint failed: emp.id at line 3, col 64.
@@ -181,7 +183,7 @@ These are every key the `LOAD` extractors and pipeline read. Unknown keys are ig
 |---|---|---|---|
 | `header` | CSV | `auto` | `true`/`1`/`y` means the first row (after `skip`) holds column names. Any other value except `auto` means no header, and columns are named `C1`, `C2`, .... `auto` uses Python's `csv.Sniffer().has_header()` on the first 5 lines. |
 | `header` | EXCEL, HTML | `true` | The first row holds column names. See [5.5.8](#558-load-excel) and [5.5.7](#557-load-html) for what happens with `false`. |
-| `delimiter` | CSV | `auto` | The field separator. `auto` sniffs the first 8 KB and falls back to `,`. |
+| `delimiter` | CSV | `auto` | The field separator. `auto` sniffs the first 8 KB for a comma, semicolon, tab or pipe, and falls back to `,`. |
 | `encoding` | CSV, FIXED, TEXT, JSON, JSONL, HTML | `utf-8` | The Python codec name, for example `latin-1` or `cp1252`. TEXT opens with `errors='replace'`. The others fail on bad bytes. |
 | `skip` | all except HTML | `0` | Physical lines to skip before reading. For JSON, XML and PARQUET it is the number of records to skip. For EXCEL it is the number of sheet rows. |
 | `limit` | all except HTML | `-1` (no limit) | The maximum number of data records to read. |
@@ -222,7 +224,7 @@ LOAD CSV file dest [OPTIONS "header=auto|true|false, delimiter=auto|c, skip=n, l
 
 The file is read with Python's `csv` module, so quoted fields, embedded commas and embedded newlines are handled. Header names are used exactly as written. Spaces are allowed because identifiers are quoted. Duplicate header names cause `duplicate column name: ...` when the table is created.
 
-If a data row has **fewer** fields than the header, the insert fails (`Incorrect number of bindings supplied ...`) and the whole load is rolled back. If a row has **more** fields, the extra fields are dropped silently.
+If a data row has **fewer** fields than the header, the missing fields are loaded as `NULL`. If a row has **more** fields, the extra fields are dropped. Both print a warning with the line number (see 5.3).
 
 **Example: header detection and headerless files**
 
@@ -1812,7 +1814,7 @@ The following points were found while checking the source and running the exampl
 15. **HTML `LINKS`** (fixed). It resolved `href` against the filename, so links in local files stayed relative. Links and images are now resolved against `base_url`, which defaults to `source_url`.
 16. **Excel `.xlsx` with `header=false`** (fixed). It failed with "Could not determine any columns", because the `C1..Cn` names were worked out only after the headers had been sent. They are now taken from the first data row.
 17. **Parquet nested columns** (fixed). Leaf names from `schema.names` were used, so a list column `tags` appeared as `element` with empty values. The top-level names from `schema_arrow` are used now, and list and struct values are stored as JSON text.
-18. **Blank lines in a CSV file are skipped** (fixed: a trailing blank line used to abort the load with `Incorrect number of bindings supplied`). **CSV rows with fewer fields than the header still abort the whole load.** Rows with more fields lose the extras silently. A failed `CREATE TABLE` load leaves an empty table behind.
+18. **Blank lines in a CSV file are skipped** (fixed: a trailing blank line used to abort the load with `Incorrect number of bindings supplied`). Rows with fewer fields than the header (fixed) used to abort the whole load; the missing fields are now `NULL`, with a warning. Rows with more fields lose the extras, now with a warning. A failed `CREATE TABLE` load (fixed) used to leave an empty table behind; the table is now dropped.
 19. **`IGNORE` mode count** (fixed). It reported the rows sent, not the rows inserted. It now reports both: `0 records loaded into table emp (2 ignored)`.
 20. **`LOAD` and `ERR`** (fixed). A successful `LOAD` did not reset `ERR`, so `IF ERR <> 0` after it could see a stale value from an earlier statement.
 21. **`SET NULL_HANDLING`** (fixed). It used to be stored and never read. It now decides whether `LOAD` stores empty fields as `NULL` (the default) or `''` (see [4.9.3](04-database-sql-and-output.md#493-set-null_handling)).

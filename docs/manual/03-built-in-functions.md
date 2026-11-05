@@ -1953,17 +1953,17 @@ This section lists the places where `README.md` (function table) or `docs/DbBasi
 
 ### Documented with the wrong signature or behaviour
 
-2. **`EXTRACT$`**: the README gives `EXTRACT$(string$, before$, after$)` ("substring between before$ and after$"). The implementation is `EXTRACT$(s$, position [, delimiter$])` and returns the Nth delimited field.
+2. **`EXTRACT$`** (README fixed): the README gave `EXTRACT$(string$, before$, after$)` ("substring between before$ and after$"). The implementation is `EXTRACT$(s$, position [, delimiter$])` and returns the Nth delimited field.
 3. **`DAYSINMONTH`** (fixed): the README gives `(year, month)` but the code took `(month, year)`. Both orders now work.
-4. **`INSTRREV`**: the README gives `INSTRREV([start_pos,] haystack$, needle$)`. The actual signature is `INSTRREV(haystack$, needle$ [, start])`, where `start` limits the end of the search.
-5. **`TYPENAME$`**: the README says it returns `"NUMBER"`. It actually returns `"FLOAT"` for all numbers, and `"UNKNOWN"` for other types.
+4. **`INSTRREV`** (README fixed): the README gave `INSTRREV([start_pos,] haystack$, needle$)`. The actual signature is `INSTRREV(haystack$, needle$ [, start])`, where `start` limits the end of the search.
+5. **`TYPENAME$`** (README fixed): the README said it returned `"NUMBER"`. It actually returns `"FLOAT"` for all numbers, and `"UNKNOWN"` for other types.
 6. **`WEEKDAYNAME$`** (fixed): it mapped 1 to Monday, not Sunday, so it did not match `WEEKDAY`. It now uses 1 = Sunday ... 7 = Saturday.
 7. **`FORMAT$`** (fixed): it had no percent support and dropped any text after the field. A numeric field followed by `%` now scales by 100, and trailing literal text is kept (3.13).
 8. **`HOUR`, `MINUTE`, `SECOND`** (fixed): `HOUR` returned 0 for a `YYYY-MM-DD HH:MM:SS` datetime. All three now use the time part of a datetime.
 9. **`HASH_DELETE` and `HASH_RENAME`**: `DbBasicFunctionReference.md` showed them as statements (`HASH_DELETE(h, "city")`). That form is a syntax error; you must use the result, for example `r = HASH_DELETE(h, "city")`. `HASH_DELETE` now returns -1 if the key was deleted and 0 if it was not present (it used to always return 0).
-10. **`NVL(value, default)`**: the README describes it as "non-null/non-empty". It actually takes any number of arguments (at least two) and also treats `0` as empty.
+10. **`NVL(value, default)`** (README fixed): the README described it as "non-null/non-empty". It actually takes any number of arguments (at least two) and also treats `0` as empty.
 11. **`ARRAY_JOIN`** (fixed): its default delimiter `","` could never be used, because two arguments were required. The delimiter is now optional.
-12. **`STR$`**: the documentation says "converts a number to its string representation". It also adds a leading space for zero and positive numbers, as `PRINT` does.
+12. **`STR$`** (README fixed): the documentation said "converts a number to its string representation". It also adds a leading space for zero and positive numbers, as `PRINT` does.
 
 ### Missing from `docs/DbBasicFunctionReference.md`
 
