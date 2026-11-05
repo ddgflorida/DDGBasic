@@ -1091,7 +1091,15 @@ resumed
 END
 ```
 
-Stops the program. A bare `END` line at the top level stops the main loop. Anywhere else, for example in an `IF`, a loop, a function, a `RUN` child or an `EVAL` string, `END` exits the interpreter process immediately with status 0. Open files are not explicitly closed first.
+Stops the running program, wherever it appears: at the top level, in an `IF`, a loop or a function. The process exits with status 0, and open files and the database are closed normally.
+
+| Where `END` runs | What stops |
+|---|---|
+| Main program | The program |
+| `RUN` child | The child only; control returns to the statement after `RUN` |
+| `EVAL` string | The whole program, as if the code were written in place |
+| REPL | The current input line; the REPL keeps running |
+| Web runner script | The script; its output so far is returned |
 
 ```basic
 FOR i = 1 TO 5
@@ -1119,7 +1127,7 @@ Runs another DbBasic script as a sub-program, then returns to the statement afte
 - The child starts with a **copy** of the caller's variables. When it finishes, the caller's variables are restored from that copy, so nothing the child assigns comes back to the caller. Use files or the database to pass results back.
 - The database connection and open file handles are **shared** with the caller.
 - An error inside the child does not stop the caller. The caller continues with `ERR = 1` and `ERRMSG$` set to the child's error. After a successful run, `ERR = 0`.
-- `END` inside the child, except a bare top-level `END` line, terminates the whole process, not just the child.
+- `END` inside the child ends the child, and the caller continues after `RUN`.
 - The child can define its own `FUNCTION`s and call the caller's. Its functions are discarded when it returns (see "Where functions are available" in 2.12).
 
 ```basic
@@ -1463,7 +1471,7 @@ Each of the following was confirmed by running the interpreter.
 7. **Return value case** (fixed). The return value had to be assigned with the exact case used in the `FUNCTION` line, or the function returned `0`/`""`. Variable names are now case-insensitive everywhere, so any spelling works.
 8. **Functions in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL** (fixed). These never registered `FUNCTION` definitions, so calls failed with `Unknown function`. Each function now records the token list it was defined in, and each of these entry points registers the new source's functions (see 2.12).
 9. **`RUN` arguments** are converted with Python `str()`, so `42` arrives as `"42.0"`.
-10. **`END` inside a `RUN` child or an `EVAL` string** terminates the whole process, because `END` calls `sys.exit` and is not caught.
+10. **`END` inside a `RUN` child or an `EVAL` string** (fixed). `END` called `sys.exit`, so anywhere except a bare top-level `END` line it killed the whole process, including from a `RUN` child, the REPL or the web runner. It now stops just the running program (see 2.15).
 11. **`INCLUDE`** (fixed): it used to fail for every file that existed, because its marker lines began with `'`. See [1.4.1](01-language-fundamentals.md#141-include).
 12. **`RECNO` numbering is inconsistent.** In `FOR ... IN CSV` it starts at 2 even without a header row. In `JSONL` it counts blank lines. It is deleted at the end of every loop, which also hides the outer loop's `RECNO` when loops are nested.
 13. **Exit status** (fixed): it was always 0, even after a runtime error; it is now 1 (see 2.17). `EXIT FUNCTION` outside a function still gives an empty `Runtime Error:` message.

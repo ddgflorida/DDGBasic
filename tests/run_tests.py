@@ -3,7 +3,8 @@
 Run the DbBasic test scripts and report PASS / FAIL / SKIP for each.
 
 A script passes when it exits with status 0 (or with the status listed in
-EXPECTED_EXIT). Each script runs in its own fresh temporary copy of its
+EXPECTED_EXIT) and its output contains the text of every 'REM EXPECT: text'
+line in the script. Each script runs in its own fresh temporary copy of its
 folder, so scripts that create or delete files can't disturb the repo or
 each other.
 
@@ -68,6 +69,17 @@ EXPECTED_EXIT = {
 STDIN = {
     'examples/errorhandling': 'nope.txt\n\n',   # file-not-found path, then quit
 }
+
+
+def expected_output(path):
+    """Text from the script's 'REM EXPECT: text' lines, which must all appear in its output."""
+    expected = []
+    with open(path, encoding='utf-8', errors='replace') as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped.upper().startswith('REM EXPECT:'):
+                expected.append(stripped[len('REM EXPECT:'):].strip())
+    return expected
 
 
 def find_scripts(include_examples):
@@ -139,12 +151,18 @@ def main():
             elapsed = time.time() - started
 
             expected = EXPECTED_EXIT.get(script, 0)
-            if status == expected:
+            missing = [text for text in expected_output(os.path.join(REPO, script + '.bas')) if text not in output]
+            if status == expected and not missing:
                 passed.append(script)
                 print(f"PASS  {script:36} {elapsed:5.1f}s")
             else:
                 failed.append(script)
-                shown = 'timeout' if status is None else f"exit {status}, expected {expected}"
+                if status is None:
+                    shown = 'timeout'
+                elif status != expected:
+                    shown = f"exit {status}, expected {expected}"
+                else:
+                    shown = 'missing expected output: ' + '; '.join(repr(text) for text in missing)
                 print(f"FAIL  {script:36} {elapsed:5.1f}s  ({shown})")
                 if not args.verbose:
                     for line in output.strip().splitlines()[-8:]:

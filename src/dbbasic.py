@@ -920,8 +920,10 @@ class GotoJump(BaseException):
         super().__init__(target)
         self.target = target
 
-class ProgramEnd(Exception):
-    """Exception raised to signal the END of the program."""
+class ProgramEnd(BaseException):
+    """Raised by END to stop the running program: the main program, a RUN child (control
+    returns to the caller) or the current REPL input. A BaseException, so generic
+    'except Exception' handlers don't treat it as an error."""
     pass
 
 class RedirectSignal(Exception):
@@ -2340,6 +2342,8 @@ class Interpreter:
                 if self.program_terminated:
                     break
                     
+        except ProgramEnd:
+            pass        # END stops the current input; the REPL keeps running
         except Exception as e:
             print(f"REPL Error: {e}")
    
@@ -3586,7 +3590,7 @@ class Interpreter:
     def _parse_end_statement(self):
         self._expect('END')
         self.program_terminated = True
-        sys.exit(0)
+        raise ProgramEnd()
 
     def _parse_statement(self):
         token = self._current_token()
@@ -7123,6 +7127,10 @@ class Interpreter:
             eval_interpreter.user_functions = {**self.user_functions, **eval_interpreter.user_functions}
 
             eval_interpreter.run()
+            if eval_interpreter.program_terminated:
+                # END inside an EVAL string ends the program, as if it were written in place
+                self.program_terminated = True
+                raise ProgramEnd()
 
         except Exception as e:
             self._error(f"Error during dynamic execution: {e}, code: {processed_code}")
