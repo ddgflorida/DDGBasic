@@ -2,7 +2,7 @@
 
 DbBasic is a data-centric dialect of BASIC with built-in SQLite and DuckDB support. This manual describes the language as implemented in `src/dbbasic.py`. Each chapter was written from the interpreter source, and every example was run to confirm the output shown.
 
-Where the code and the older documents (`README.md`, `docs/DbBasicCommandRerence.md`, `docs/DbBasicFunctionReference.md`, the built-in `HELP` text) disagree, this manual describes what the code **actually does**. It records each disagreement in the chapter's final *Implementation notes / discrepancies* section.
+Where the code and the older documents (`README.md`, the original `docs/DbBasicCommandRerence.md` and `docs/DbBasicFunctionReference.md` quick references, now replaced by pointers to this manual, and the built-in `HELP` text) disagree, this manual describes what the code **actually does**. It records each disagreement in the chapter's final *Implementation notes / discrepancies* section.
 
 ## Chapters
 

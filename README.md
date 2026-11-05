@@ -146,6 +146,8 @@ PRINT `Imported ${(SELECT COUNT(*) FROM leads;)} clean rows.`
 
 ## 📜 Statements Reference
 
+A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the full syntax, options and examples for every statement and function.
+
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
 | ANALYZE CSV             | Provides a detailed statistical report on a CSV file, including delimiter detection, header presence, and column data types. |
@@ -158,11 +160,11 @@ PRINT `Imported ${(SELECT COUNT(*) FROM leads;)} clean rows.`
 | BROWSER                 | Opens a specified URL in the system's default web browser. |
 | CHAIN                   | Transfers program execution to a different DbBasic script, optionally preserving variables. |
 | CHDIR                   | Changes the current working directory. |
-| CLEAR                   | Resets all user variables (and user-defined functions) to an empty state. Useful in interactive contexts like the web playground. |
+| CLEAR                   | Deletes all variables. User-defined functions stay defined. |
 | CLOSE                   | Closes a specific file handle or all open file handles. |
 | COPY ... AS             | Copies a source file to a destination file. |
 | DATABASE                | Manages the database connection, allowing you to open a file-based database or switch the database engine (SQLite/DuckDB). |
-| DESCRIBE                | Displays the CREATE TABLE statement for an existing database table. |
+| DESCRIBE                | Lists a table's columns and types. Use `SHOW CREATE TABLE` for the CREATE TABLE statement. |
 | DIM                     | Declares a variable (scalar, ARRAY, or HASH). When used inside a FUNCTION body, the declared name is scoped to the function and the outer variable of the same name is preserved across the call. |
 | DO ... LOOP             | Defines a block of code that executes repeatedly, with optional WHILE or UNTIL conditions at the beginning or end. |
 | DUMP                    | A debugging command to print the internal state of the interpreter, such as tokens, variables, or labels. |
@@ -243,7 +245,7 @@ This document provides a quick reference to all available functions in the DbBas
 | DATEDIFF(date1$, date2$)| DATE/TIME   | Returns the number of days between two date strings. |
 | DATESERIAL(year, month, day) | DATE/TIME | Returns a date string built from year, month, and day numbers. |
 | DAY(date$)              | DATE/TIME   | Returns the day of the month (1-31) from a date string. |
-| DAYSINMONTH(year, month) | DATE/TIME | Returns the number of days in the given month and year. |
+| DAYSINMONTH(month, year) | DATE/TIME | Returns the number of days in the given month and year. (year, month) is also accepted. |
 | DAYSINYEAR(year)        | DATE/TIME   | Returns 365 or 366 depending on whether the year is a leap year. |
 | DEGREES(radians)        | MATH        | Converts an angle from radians to degrees. |
 | DISKSPACE(path$)        | FILE        | Returns the number of free bytes on the disk containing the specified path. |
@@ -251,7 +253,7 @@ This document provides a quick reference to all available functions in the DbBas
 | ENVIRON$(var_name$)     | INFO        | Returns the value of a system environment variable. |
 | EOF(file_num)           | FILE        | Returns true (-1) if the end of the specified file handle has been reached, otherwise false (0). |
 | EXP(number)             | MATH        | Returns e (the base of natural logarithms) raised to the power of number. |
-| EXTRACT$(string$, before$, after$) | STRING | Returns the substring of string$ between before$ and after$. |
+| EXTRACT$(string$, position, [delimiter$]) | STRING | Returns the field at position (1-based) when string$ is split on delimiter$ (default comma). |
 | FILE_EXISTS(path$)      | FILE        | Returns true (-1) if the specified file or directory path exists, otherwise false (0). |
 | FILEATTR(path$)         | FILE        | Returns a number representing the file's attributes (e.g., read-only, directory). |
 | FILESIZE(path$)         | FILE        | Returns the size of the specified file in bytes. Returns -1 if the file doesn't exist. |
@@ -264,7 +266,7 @@ This document provides a quick reference to all available functions in the DbBas
 | FORMATDATE$(date$, output_mask$, [input_mask$]) | DATE/TIME | Formats a date string according to a specified mask (e.g. "YYYY-MM-DD"). Optional input_mask$ tells DbBasic how to parse the input. |
 | FREEFILE()              | FILE        | Returns the next available integer for use as a file handle. |
 | HASH_COUNT(hash)        | HASH        | Returns the number of key-value pairs in a hash. |
-| HASH_DELETE(hash, key$) | HASH        | Deletes a key-value pair from a hash. |
+| HASH_DELETE(hash, key$) | HASH        | Deletes a key-value pair from a hash. Use it in an expression (`r = HASH_DELETE(h, k$)`); it always returns 0. |
 | HASH_EXISTS(hash, key$) | HASH        | Returns true (-1) if the key$ exists in the hash, otherwise false (0). |
 | HASH_JOIN(hash1, hash2, ...) | HASH   | Merges two or more hashes into a new hash. Keys from later hashes overwrite earlier ones. |
 | HASH_KEYS(hash)         | HASH        | Returns an ARRAY containing all the keys from a hash. |
@@ -274,7 +276,7 @@ This document provides a quick reference to all available functions in the DbBas
 | HTMLDECODE$(string$)    | STRING      | Decodes HTML entities back to characters. |
 | HTMLENCODE$(string$)    | STRING      | Encodes a string for safe inclusion in HTML. |
 | INSTR([start_pos,] haystack$, needle$) | STRING | Finds the starting position of needle$ within haystack$. Returns 0 if not found. |
-| INSTRREV([start_pos,] haystack$, needle$) | STRING | Like INSTR but searches from the end. |
+| INSTRREV(haystack$, needle$, [start]) | STRING | Like INSTR but searches from the end. start limits where the search ends. |
 | INT(number)             | MATH        | Returns the integer portion of a number by rounding down (same as FLOOR). |
 | IS_ARRAY(variable)      | ARRAY       | Returns true (-1) if the variable is an ARRAY, otherwise false (0). |
 | IS_HASH(variable)       | HASH        | Returns true (-1) if the variable is a HASH, otherwise false (0). |
@@ -299,7 +301,7 @@ This document provides a quick reference to all available functions in the DbBas
 | MONTHCAL$(year, month)  | DATE/TIME   | Returns a calendar of the given month as a multi-line string. |
 | MONTHNAME$(month_num)   | DATE/TIME   | Returns the English name of the given month (1-12). |
 | NOW()                   | DATE/TIME   | Returns the current date and time as "YYYY-MM-DD HH:MI:SS". |
-| NVL(value, default)     | UTILITY     | Returns value if non-null/non-empty, otherwise default. |
+| NVL(value, default, ...) | UTILITY    | Returns the first argument that is not empty (`""` or 0). |
 | OCT$(number)            | STRING      | Returns the octal representation of a number as a string. |
 | ORDINAL$(number)        | STRING      | Returns the English ordinal words for a number (e.g. 1 → "first", 21 → "twenty-first", 100 → "one hundredth"). |
 | PADLEFT$(text$, length, pad_char$) | STRING | Pads a string on the left to a total length using pad_char$. |
@@ -332,7 +334,7 @@ This document provides a quick reference to all available functions in the DbBas
 | TAN(number)             | MATH        | Returns the tangent of an angle given in radians. |
 | TIME$()                 | DATE/TIME   | Returns the current system time as an "HH:MI:SS" string. |
 | TRIM$(string$)          | STRING      | Removes whitespace from both the beginning and end of a string. |
-| TYPENAME$(value)        | UTILITY     | Returns the name of the value's type ("NUMBER", "STRING", "ARRAY", "HASH", etc.). |
+| TYPENAME$(value)        | UTILITY     | Returns the name of the value's type: "FLOAT", "STRING", "ARRAY" or "HASH". |
 | UBOUND(array)           | ARRAY       | Returns the upper bound (the highest index) of an array. Returns -1 for an empty array. |
 | UCASE$(string$)         | STRING      | Converts a string to all uppercase characters. |
 | URL_FILENAME$(url$)     | STRING      | Returns the filename portion of a URL path. |
@@ -343,7 +345,7 @@ This document provides a quick reference to all available functions in the DbBas
 | URLENCODE$(string$)     | STRING      | Percent-encodes a string for safe use in a URL. |
 | VAL(string$)            | STRING/MATH | Converts a string representation of a number into a numeric value. |
 | WEEKDAY(date$)          | DATE/TIME   | Returns the day of the week as a number (1 for Sunday, 7 for Saturday). |
-| WEEKDAYNAME$(weekday_num) | DATE/TIME | Returns the English name of the given weekday (1-7). |
+| WEEKDAYNAME$(weekday_num) | DATE/TIME | Returns the English name of the given weekday (1 = Sunday ... 7 = Saturday, matching WEEKDAY). |
 | YEAR(date$)             | DATE/TIME   | Returns the year from a date string. |
 | YEARCAL$(year)          | DATE/TIME   | Returns a calendar of the given year as a multi-line string. |
 
