@@ -33,6 +33,7 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from bs4 import BeautifulSoup
 from dbscreen import SCREEN, ScreenError, bell as dbscreen_bell
+from dbreport import build_report
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, quote_plus, unquote_plus, urljoin
 import xmltodict
@@ -355,6 +356,11 @@ class HelpRegistry:
             "syntax": 'EDIT RECORD (SELECT ... FROM table WHERE ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]\nEDIT TEXT target [AT top, left, bottom, right] [TITLE title$]',
             "desc": "EDIT TEXT is a boxed memo editor for a multi-line string (lines separated by CHR$(10)); Enter splits lines, Ctrl-Y deletes one, Ctrl-W or F10 saves, Esc cancels (asking first if changed). EDIT RECORD is a one-line entry form: one labelled field per column of the query's row. Enter on the last field or PgDn saves with an UPDATE of the changed columns; with no matching row the form starts blank and saves with an INSERT. KEY defaults to the table's primary key and can't be edited. A refused change shows the database's message and keeps the form open. INTO gets the saved record (empty after Esc).",
             "examples": ['EDIT TEXT rec.notes AT 3, 5, 12, 50 TITLE "Notes"', 'EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact"', 'EDIT RECORD (SELECT name, phone FROM customers WHERE code = :code$) KEY "code" INTO rec']
+        },
+        "REPORT": {
+            "syntax": 'REPORT (SELECT ...) [TITLE title$] [GROUP BY col, ...] [TOTAL col, ...] [FORMAT col mask$, ...] [PAGE lines] [TO FILE path$ | TO VIEW | INTO var$]',
+            "desc": "Prints a query as a report: a title line with the date, column headings, a heading and a subtotal footer for each group (the query must be sorted by the GROUP BY columns), grand totals, and pages with PAGE. FORMAT uses FORMAT$ masks. The report goes to the screen unless TO FILE, TO VIEW or INTO is given.",
+            "examples": ['REPORT (SELECT region, customer, amount FROM sales ORDER BY region) GROUP BY region TOTAL amount FORMAT amount "#,##0.00"', 'REPORT (SELECT * FROM orders ORDER BY id) TITLE "Orders" PAGE 60 TO FILE "orders.txt"']
         },
         "VIEW": {
             "syntax": 'VIEW FILE path$ | VIEW (SELECT ...) | VIEW text$  [AT top, left, bottom, right] [TITLE title$]',
@@ -4013,7 +4019,7 @@ class Interpreter:
             self._error(f"Unknown statement: {token[0]}")
 
     # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see dbscreen.py) ---
-    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT', 'VIEW'}
+    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT', 'VIEW', 'REPORT'}
 
     def _is_screen_statement(self, token):
         """True for CLS, LOCATE, COLOR, BOX, READ or BROWSE used as a statement rather than as
@@ -4074,6 +4080,8 @@ class Interpreter:
                 SCREEN.restore_saved(self._parse_expression())
             elif word == 'VIEW':
                 self._parse_view_statement()
+            elif word == 'REPORT':
+                self._parse_report_statement()
             elif word == 'EDIT':
                 tok = self._current_token()
                 if tok and str(tok[1]).upper() == 'TEXT' and tok[0] == 'ID':
@@ -4384,6 +4392,115 @@ class Interpreter:
                     if i < len(columns):
                         record[columns[i].upper()] = value
             self.variables[into] = record
+
+    def _parse_report_statement(self):
+        """REPORT (SELECT ...) [TITLE t$] [GROUP BY col, ...] [TOTAL col, ...]
+                  [FORMAT col mask$, ...] [PAGE lines] [TO FILE path$ | TO VIEW | INTO var$]
+
+        A text report with a title line, column headings, group headers and subtotals,
+        grand totals and optional pages. Without a destination it is printed."""
+        tok, nxt = self._current_token(), self._peek_token()
+        if not (tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING'):
+            self._error("REPORT needs a query in parentheses: REPORT (SELECT ... ORDER BY ...)")
+        sql = self._extract_sql_from_parens()
+        title, groups, totals, formats, page_length = '', [], [], {}, 0
+        destination, target = 'PRINT', None
+
+        def word_of(tok):
+            return str(tok[1]).upper() if tok and tok[0] not in ('STRING', 'NUMBER') else ''
+
+        def column_names():
+            names = []
+            while True:
+                tok = self._current_token()
+                if not tok or tok[0] in ('NEWLINE', 'COLON'):
+                    break
+                if tok[0] == 'STRING':
+                    names.append(self._to_string(self._parse_expression()))
+                elif tok[0] != 'COMMA':
+                    # A name list continues only after a comma, so a column may be called total or page
+                    names.append(str(tok[1]))
+                    self._next_token()
+                else:
+                    break
+                if self._current_token() and self._current_token()[0] == 'COMMA':
+                    self._next_token()
+                else:
+                    break
+            if not names:
+                self._error("Expected one or more column names")
+            return names
+
+        while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+            tok = self._current_token()
+            word = word_of(tok)
+            if word == 'TITLE':
+                self._next_token()
+                title = self._to_string(self._parse_expression())
+            elif word == 'GROUP':
+                self._next_token()
+                if word_of(self._current_token()) != 'BY':
+                    self._error("Expected BY after GROUP")
+                self._next_token()
+                groups = column_names()
+            elif word == 'TOTAL':
+                self._next_token()
+                totals = column_names()
+            elif word == 'FORMAT':
+                self._next_token()
+                while True:
+                    column = self._current_token()
+                    if not column or column[0] in ('NEWLINE', 'COLON'):
+                        self._error("Expected a column name and a mask after FORMAT")
+                    name = self._to_string(self._parse_expression()) if column[0] == 'STRING' else str(column[1])
+                    if column[0] != 'STRING':
+                        self._next_token()
+                    formats[name] = self._to_string(self._parse_expression())
+                    if self._current_token() and self._current_token()[0] == 'COMMA':
+                        self._next_token()
+                    else:
+                        break
+            elif word == 'PAGE':
+                self._next_token()
+                page_length = int(self._parse_expression())
+            elif tok[0] == 'TO FILE':
+                self._next_token()
+                destination, target = 'FILE', os.path.expanduser(self._to_string(self._parse_expression()))
+            elif tok[0] == 'TO' and word_of(self._peek_token()) == 'VIEW':
+                self._next_token(); self._next_token()
+                destination = 'VIEW'
+            elif tok[0] == 'INTO':
+                self._next_token()
+                destination, target = 'INTO', self._expect('ID')[1]
+            else:
+                self._error(f"Unexpected '{tok[1]}' in REPORT; expected TITLE, GROUP BY, TOTAL, FORMAT, PAGE, TO FILE, TO VIEW or INTO")
+
+        rows = self._execute_sql(sql, is_query=True) or []
+        columns = [d[0] for d in self.db_cursor.description] if self.db_cursor.description else []
+        rows = [[float(v) if isinstance(v, Decimal) else v for v in r] for r in rows]
+        try:
+            lines = build_report(columns, rows, title, groups, totals, formats, page_length,
+                                 datetime.now().strftime('%Y-%m-%d'),
+                                 lambda mask, value: Formatter.format(mask, [value]))
+        except ValueError as e:
+            self._error(str(e))
+        text = '\n'.join(lines) + '\n'
+        if destination == 'FILE':
+            with open(target, 'w', encoding='utf-8') as f:
+                f.write(text)
+        elif destination == 'VIEW':
+            try:
+                SCREEN.view(text.replace('\f', ''), None, title)
+            except ScreenError as e:
+                self._error(str(e))
+        elif destination == 'INTO':
+            self.variables[target] = text
+        else:
+            output = text.replace('\f', '\n')
+            if SCREEN.used:
+                SCREEN.track(output)
+            else:
+                print(output, end='')
 
     def _parse_view_statement(self):
         """VIEW FILE path$ | VIEW (SELECT ...) | VIEW text$  [AT top, left, bottom, right] [TITLE t$]

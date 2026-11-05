@@ -207,6 +207,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | PRINT                   | Outputs text, variables, or expressions to the console or an open file. |
 | PUSH                    | Adds a new element to the end of an array. |
 | READ                    | Edits the pending `@ ... GET` fields; Esc restores the original values. |
+| REPORT                  | Turns a query into a report with a title, group headings, subtotals, totals and pages, to the screen, a file, `VIEW` or a string. |
 | RESTSCREEN              | Puts back a screen area saved with `SAVESCREEN()`. |
 | READ FILE               | Reads the entire content of a text file into a single string variable. |
 | REDIM                   | Resizes a previously declared ARRAY. |

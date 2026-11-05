@@ -11,6 +11,7 @@ DbBasic embeds a relational database in the language. Every program starts with 
 - SQL error handling
 - the `SET` statement and the result-set output pipeline (`SET OUTPUT ... FORMAT ...`)
 - console and file output with `PRINT`, `PRINT USING`, `WRITE` and `ECHO`
+- reports with group headings, subtotals, totals and pages, with `REPORT`
 
 Related chapters:
 
@@ -1468,7 +1469,61 @@ indented echo
 
 ---
 
-## 4.14 Implementation notes / discrepancies
+## 4.14 Reports: REPORT
+
+```
+REPORT (SELECT ...) [TITLE title$] [GROUP BY col, ...] [TOTAL col, ...]
+                    [FORMAT col mask$, ...] [PAGE lines]
+                    [TO FILE path$ | TO VIEW | INTO var$]
+```
+
+`REPORT` turns a query into a printed-style report: a title line with the date, column headings, group headings with subtotals, grand totals and, if asked, pages. The clauses can come in any order; only the query is required.
+
+```basic
+REPORT (SELECT region, customer, qty, amount FROM sales ORDER BY region, customer) _
+    TITLE "Sales by region" _
+    GROUP BY region _
+    TOTAL qty, amount _
+    FORMAT amount "#,##0.00"
+```
+
+```
+Sales by region               2026-11-05
+
+customer  qty   amount
+--------- --- --------
+region: East
+ACME        3   300.00
+GLOBEX      1    50.00
+          --- --------
+East (2)    4   350.00
+
+region: West
+HOOLI       6   804.00
+INITECH     2    80.50
+          --- --------
+West (2)    8   884.50
+
+          === ========
+Total (4)  12 1,234.50
+```
+
+| Clause | Effect |
+|---|---|
+| `TITLE title$` | The first line of each page, with the date on the right (and `Page n` with `PAGE`). |
+| `GROUP BY col, ...` | Start a group each time the value of these columns changes; several columns make nested groups. The query must be sorted by them (`ORDER BY`). Each group gets a heading (`region: East`) and a footer with its name, its row count and the subtotals. The group columns are shown in the headings, not as columns. |
+| `TOTAL col, ...` | Sum these columns in each group footer and in the grand total (`Total (n)`). Without `GROUP BY` or `TOTAL`, the report ends with `(n rows)`. |
+| `FORMAT col mask$, ...` | Show a column, and its totals, with a `FORMAT$` mask, for example `FORMAT amount "$#,##0.00", qty "#,##0"`. |
+| `PAGE lines` | Start a new page every `lines` lines, repeating the title and the column headings. In a file, pages are separated by a form feed, so the file prints page by page. |
+| `TO FILE path$` | Write the report to a file instead of the screen. |
+| `TO VIEW` | Show it in the scrolling viewer ([`VIEW`](07-text-mode-applications.md#view)), with search. |
+| `INTO var$` | Put the report in a string, for example to send with `EMAIL ... BODY`. |
+
+Column headings are the column names, so use `AS` to change them (`SELECT region AS Region`). Numbers are right-aligned and text left-aligned; columns are as wide as their widest value (up to 40 characters), and the columns before the first total widen to fit the footer labels. Column names in the clauses ignore case; an unknown name is an error (`REPORT: there is no column 'x' in the query.`).
+
+---
+
+## 4.15 Implementation notes / discrepancies
 
 These were found by reading `src/dbbasic.py` and running test scripts. They describe current behaviour, which may differ from the built-in `HELP` text and the older documents.
 
