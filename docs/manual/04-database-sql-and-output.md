@@ -837,9 +837,10 @@ The following errors are **not** governed by `SQL_FATAL_ERRORS`. They always sto
 | `NULL_HANDLING` | `SET NULL_HANDLING [FOR expr] TO NULL \| CONVERT_EMPTY_TO_NULL \| PRESERVE_EMPTY_STRINGS \| EMPTY` |
 | `EMAIL` | `SET EMAIL keyword value [keyword value ...]` |
 | `AUTOADVANCE` | `SET AUTOADVANCE ON \| OFF`: whether filling an entry field moves to the next one (see [7.3](07-text-mode-applications.md#read)) |
+| `MOUSE` | `SET MOUSE ON \| OFF`: whether the screen statements take mouse clicks (on by default except on Windows; see [7.7](07-text-mode-applications.md#the-mouse)) |
 | `CONFIRM` | `SET CONFIRM ON \| OFF`: Clipper's name for the opposite of `AUTOADVANCE`. `SET CONFIRM OFF` is `SET AUTOADVANCE ON` |
 
-These are the only options. Any other word after `SET` is an error: `SET x = 5` gives `Unknown SET option 'x'. Expected OUTPUT, EMAIL, NULL_HANDLING, SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE or CONFIRM.` To change the database engine, use `DATABASE ENGINE DUCKDB` (4.1), not `SET DATABASE ENGINE`.
+These are the only options. Any other word after `SET` is an error: `SET x = 5` gives `Unknown SET option 'x'. Expected OUTPUT, EMAIL, NULL_HANDLING, SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE, CONFIRM or MOUSE.` To change the database engine, use `DATABASE ENGINE DUCKDB` (4.1), not `SET DATABASE ENGINE`.
 
 ### 4.9.1 SET SQL_FATAL_ERRORS
 

@@ -21,8 +21,8 @@ Related material in other chapters:
    * [BROWSE](#browse) · [EDIT RECORD](#edit-record)
 6. [Editing and viewing text](#76-editing-and-viewing-text)
    * [EDIT TEXT](#edit-text) · [VIEW](#view)
-7. [The keyboard](#77-the-keyboard)
-   * [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
+7. [The keyboard and mouse](#77-the-keyboard-and-mouse)
+   * [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [The mouse](#the-mouse) · [Keyboard and terminal](#keyboard-and-terminal)
 8. [Replacing the old FORM statements](#78-replacing-the-old-form-statements)
 9. [Implementation notes](#79-implementation-notes)
 
@@ -630,7 +630,7 @@ A missing file is an error with `ERR = 2`. What the box covered is put back when
 
 ---
 
-## 7.7 The keyboard
+## 7.7 The keyboard and mouse
 
 ### INKEY$ and LASTKEY$
 
@@ -651,6 +651,31 @@ DO
     PRINT "You pressed "; k$
 LOOP
 ```
+
+### The mouse
+
+Every screen statement also takes mouse clicks, in terminals that report them (macOS Terminal, iTerm2, Linux terminals, Windows Terminal):
+
+| Statement | Click | Wheel |
+|---|---|---|
+| `READ` | A field: move there (the field being left is checked first, as with Tab) or, inside the current field, move the cursor. A button: press it. | |
+| `MENU()` | An item chooses it; a click outside the menu cancels it (returns 0). | Moves the bar. |
+| `ALERT()` | A button chooses it. | |
+| `MENUBAR$()` | A title opens its menu (or closes it), or chooses a title without items; an item chooses it; a click elsewhere closes an open menu. | Moves the bar in an open menu. |
+| `BROWSE` | A row selects it (in `EDIT`, the cell); a click on the selected row (or cell) chooses it (or edits it), like Enter. | Scrolls 3 rows. |
+| `EDIT TEXT` | Puts the cursor there. | Moves 3 lines. |
+| `VIEW` | | Scrolls 3 lines. |
+
+For your own screens, `INKEY$` returns `CLICK`, `RCLICK` (right button), `MCLICK` (middle button), `WHEELUP` or `WHEELDOWN`, and `MOUSEROW` and `MOUSECOL` give the position of the last click or wheel turn (row and column from 1, as with `LOCATE`):
+
+```basic
+DO
+    k$ = INKEY$(0)
+    IF k$ = "CLICK" THEN @ MOUSEROW, MOUSECOL SAY "*"
+LOOP UNTIL k$ = CHR$(27)
+```
+
+`SET MOUSE OFF` turns the mouse off (and `SET MOUSE ON` back on). It is on by default on macOS and Linux. On Windows it is off by default, because the console then has to deliver all keys in its VT input mode: `SET MOUSE ON` switches it on there; this has not been tested on Windows yet. While the mouse is on, a plain drag no longer selects text in the terminal; most terminals select text when you hold Shift (or Option, depending on the terminal) while dragging. The terminal's normal behaviour comes back when the program ends or when `INPUT` reads a line.
 
 ### Keyboard and terminal
 

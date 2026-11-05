@@ -37,7 +37,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * **Composition:** Pipelines like `REDUCE(MAP(FILTER(nums, is_even), square), add, 0)` work cleanly.
 
 * ### 1990s-Style Text Screens
-    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). No extra packages. See `examples/retro_contacts.bas`.
+    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
@@ -322,6 +322,8 @@ This document provides a quick reference to all available functions in the DbBas
 | MONTH(date$)            | DATE/TIME   | Returns the month (1-12) from a date string. |
 | MONTHCAL$(year, month)  | DATE/TIME   | Returns a calendar of the given month as a multi-line string. |
 | MONTHNAME$(month_num)   | DATE/TIME   | Returns the English name of the given month (1-12). |
+| MOUSECOL                | SCREEN      | The column of the last mouse click or wheel turn. |
+| MOUSEROW                | SCREEN      | The row of the last mouse click or wheel turn. |
 | NOW()                   | DATE/TIME   | Returns the current date and time as "YYYY-MM-DD HH:MI:SS". |
 | NVL(value, default, ...) | UTILITY    | Returns the first argument that is not empty (`""` or 0). |
 | OCT$(number)            | STRING      | Returns the octal representation of a number as a string. |

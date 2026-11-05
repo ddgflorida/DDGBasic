@@ -382,6 +382,11 @@ class HelpRegistry:
             "desc": "Returns the key pressed, or \"\" if none is waiting. INKEY$(0) waits for a key; INKEY$(n) waits up to n seconds. Keys come back as characters (Enter is CHR$(13), Esc CHR$(27), Tab CHR$(9)) or names: UP, DOWN, LEFT, RIGHT, HOME, END, PGUP, PGDN, INS, DEL, BTAB, F1-F12.",
             "examples": ['k$ = INKEY$(0)', 'IF INKEY$ = CHR$(27) THEN EXIT DO']
         },
+        "MOUSEROW": {
+            "syntax": 'MOUSEROW | MOUSECOL',
+            "desc": "The row and column (from 1) of the last mouse click or wheel turn. INKEY$ returns CLICK, RCLICK, MCLICK, WHEELUP or WHEELDOWN for them. The screen statements (READ, MENU, ALERT, MENUBAR$, BROWSE, EDIT TEXT, VIEW) take clicks themselves. SET MOUSE OFF turns the mouse off.",
+            "examples": ['k$ = INKEY$(0)\nIF k$ = "CLICK" THEN @ MOUSEROW, MOUSECOL SAY "*"']
+        },
         "BUTTON$": {
             "syntax": 'BUTTON$',
             "desc": "The label of the @ ... BUTTON that ended the last READ, or \"\" if READ ended another way (Esc, PgDn). A CANCEL button puts the fields' old values back but still returns its label.",
@@ -833,7 +838,7 @@ class HelpRegistry:
         
         # --- CONFIGURATION (SET) ---
         "SET": {
-            "syntax": 'SET [OUTPUT|EMAIL|NULL_HANDLING|SQL_FATAL_ERRORS|HASH_KEYS|AUTOADVANCE|CONFIRM] ...',
+            "syntax": 'SET [OUTPUT|EMAIL|NULL_HANDLING|SQL_FATAL_ERRORS|HASH_KEYS|AUTOADVANCE|CONFIRM|MOUSE] ...',
             "desc": "Configures system behavior. Type HELP SET OUTPUT or HELP SET EMAIL for details.",
             "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE', 'SET AUTOADVANCE ON']
         },
@@ -2896,7 +2901,7 @@ class Interpreter:
         'HASH_VALUES', 'HEX$', 'HOUR', 'HTMLDECODE$', 'HTMLENCODE$', 'INSTR', 'INSTRREV',
         'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
         'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
-        'ALERT', 'BUTTON$', 'INKEY$', 'LASTKEY$', 'MENU', 'MENUBAR$', 'SAVESCREEN',
+        'ALERT', 'BUTTON$', 'INKEY$', 'LASTKEY$', 'MOUSEROW', 'MOUSECOL', 'MENU', 'MENUBAR$', 'SAVESCREEN',
         'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
         'OCT$', 'ORDINAL$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
         'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
@@ -4903,6 +4908,12 @@ class Interpreter:
         if name == 'INKEY$':
             if len(args) > 1: self._error("INKEY$ takes 0 or 1 arguments.")
             return SCREEN.inkey(float(args[0]) if args else None)
+        elif name == 'MOUSEROW':
+            if args: self._error("MOUSEROW takes no arguments.")
+            return float(SCREEN.keys.mouse_row)
+        elif name == 'MOUSECOL':
+            if args: self._error("MOUSECOL takes no arguments.")
+            return float(SCREEN.keys.mouse_col)
         elif name == 'BUTTON$':
             if args: self._error("BUTTON$ takes no arguments.")
             return SCREEN.last_button
@@ -5784,7 +5795,7 @@ class Interpreter:
             
             var_name = actual_var_name
             
-            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$', 'SAVESCREEN', 'BUTTON$'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$', 'SAVESCREEN', 'BUTTON$', 'MOUSEROW', 'MOUSECOL'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                 self._next_token(); 
                 return self._call_builtin(var_name, [])
             
@@ -6096,6 +6107,13 @@ class Interpreter:
                 g_null_handling_default = option
             else:
                 g_null_handling_settings[table_column_str.upper()] = option
+        elif token[0] == 'ID' and token[1].upper() == 'MOUSE':
+            self._next_token()
+            setting_token = self._current_token()
+            if not setting_token or setting_token[0] != 'ID' or setting_token[1].upper() not in ['ON', 'OFF']:
+                self._error("Expected ON or OFF after SET MOUSE")
+            SCREEN.keys.set_mouse(setting_token[1].upper() == 'ON')
+            self._next_token()
         elif token[0] == 'ID' and token[1].upper() in ('AUTOADVANCE', 'CONFIRM'):
             # SET CONFIRM is Clipper's name for the opposite setting: CONFIRM ON means a
             # full field waits for Enter, so it is AUTOADVANCE OFF.
@@ -6194,7 +6212,7 @@ class Interpreter:
         else:
             option = token[1] if token and token[0] not in ('NEWLINE', 'COLON') else '(nothing)'
             self._error(f"Unknown SET option '{option}'. Expected OUTPUT, EMAIL, NULL_HANDLING, "
-                        "SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE or CONFIRM.")
+                        "SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE, CONFIRM or MOUSE.")
 
 
     def _handle_output(self, results, column_names):

@@ -56,6 +56,46 @@ class KeyReader:
         self.is_tty = sys.stdin.isatty()
         self.windows = os.name == 'nt'
         self._saved_mode = None
+        # Mouse: on by default except on Windows, where it needs the console's VT input mode
+        # (SET MOUSE ON switches it on there). Clicks arrive as keys named CLICK, RCLICK,
+        # MCLICK, WHEELUP and WHEELDOWN, with the position in mouse_row/mouse_col.
+        self.mouse_wanted = not self.windows
+        self._mouse_on = False
+        self._win_saved_mode = None
+        self.mouse_row = self.mouse_col = 0
+
+    # --- mouse -----------------------------------------------------------
+    _MOUSE_ON, _MOUSE_OFF = '\x1b[?1000h\x1b[?1006h', '\x1b[?1000l\x1b[?1006l'
+
+    def _mouse_reporting(self, on):
+        if not self.is_tty or on == self._mouse_on:
+            return
+        if self.windows:
+            try:
+                import ctypes
+                k32 = ctypes.windll.kernel32
+                handle = k32.GetStdHandle(-10)                  # STD_INPUT_HANDLE
+                if on:
+                    mode = ctypes.c_uint32()
+                    if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
+                        return
+                    self._win_saved_mode = mode.value
+                    # VT input (0x0200) and extended flags (0x0080), without quick-edit (0x0040)
+                    k32.SetConsoleMode(handle, (mode.value | 0x0200 | 0x0080) & ~0x0040)
+                elif self._win_saved_mode is not None:
+                    k32.SetConsoleMode(handle, self._win_saved_mode)
+                    self._win_saved_mode = None
+            except Exception:
+                return
+        sys.stdout.write(self._MOUSE_ON if on else self._MOUSE_OFF)
+        sys.stdout.flush()
+        self._mouse_on = on
+
+    def set_mouse(self, on):
+        """SET MOUSE ON/OFF."""
+        self.mouse_wanted = on
+        if not on or self._saved_mode is not None or self.windows:
+            self._mouse_reporting(on)
 
     # --- terminal mode (macOS/Linux) -----------------------------------
     def raw_on(self):
@@ -80,8 +120,11 @@ class KeyReader:
             for slot in slots:
                 mode[6][slot] = bytes([disabled]) if isinstance(mode[6][slot], bytes) else disabled
             termios.tcsetattr(fd, termios.TCSANOW, mode)    # TCSAFLUSH would drop keys typed ahead
+            if self.mouse_wanted:
+                self._mouse_reporting(True)
 
     def raw_off(self):
+        self._mouse_reporting(False)
         if self._saved_mode is not None:
             import termios
             termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, self._saved_mode)
@@ -97,6 +140,8 @@ class KeyReader:
             return ch or None
         if self.windows:
             import msvcrt
+            if self.mouse_wanted:
+                self._mouse_reporting(True)
             if timeout is not None:
                 deadline = time.time() + timeout
                 while not msvcrt.kbhit():
@@ -140,6 +185,8 @@ class KeyReader:
                     seq += c
                     if '@' <= c <= '~':
                         break
+                if seq.startswith('<') and seq[-1:] in ('M', 'm'):
+                    return self._mouse_key(seq, timeout)
                 return _CSI_KEYS.get(seq, '')
             if nxt == 'O':
                 return _SS3_KEYS.get(self._read_char(0.05) or '', '')
@@ -151,6 +198,20 @@ class KeyReader:
         if ch in ('\x7f', '\x08'):
             return BACKSPACE
         return ch
+
+    def _mouse_key(self, seq, timeout):
+        """Decodes an SGR mouse report, ESC [ < button ; col ; row M (press) or m (release).
+        Presses and wheel turns become keys; releases and movement are skipped."""
+        try:
+            button, col, row = (int(n) for n in seq[1:-1].split(';'))
+        except ValueError:
+            return ''
+        if seq[-1] == 'm' or button & 32:          # a release, or movement with a button held
+            return self.read_key(timeout)
+        self.mouse_row, self.mouse_col = row, col
+        if button & 64:
+            return 'WHEELDOWN' if button & 1 else 'WHEELUP'
+        return {0: 'CLICK', 1: 'MCLICK', 2: 'RCLICK'}.get(button & 3, '')
 
 
 class Field:
@@ -560,6 +621,23 @@ class Screen:
                 i += direction
             return None
 
+        def hit():
+            """The field or button under the mouse, or None."""
+            r, c = self.keys.mouse_row, self.keys.mouse_col
+            for j, f in enumerate(fields):
+                if f.row == r and f.col <= c < f.col + f.width and allowed(j):
+                    return j
+            return None
+
+        def click_pos(f):
+            """The cursor position for a click inside a field (an editable position)."""
+            if getattr(f, 'is_button', False):
+                return 0
+            p = max(0, min(self.keys.mouse_col - f.col, f.width - 1))
+            while p < f.width and not f._editable(p):
+                p += 1
+            return p if p < f.width else f.first_pos()
+
         index = step(-1, 1)
         if index is None:                      # every field is switched off by WHEN
             self.last_key = ENTER
@@ -585,6 +663,16 @@ class Screen:
                     self.last_key = key
                     self._draw_button(field, False)
                     self._w('\x1b[?25h')
+                    if key == 'CLICK':
+                        j = hit()
+                        if j is None:
+                            continue
+                        if j != index:             # another field or button: go there (and press a button)
+                            index, pos, fresh = j, click_pos(fields[j]), True
+                            if getattr(fields[j], 'is_button', False):
+                                self.keys.pending.insert(0, '\r')
+                            continue
+                        key = ENTER                # a click on this button presses it
                     if key == ESC or (key in (ENTER, ' ') and field.cancel):
                         put_back()
                         if key != ESC:
@@ -615,6 +703,15 @@ class Screen:
                 if key == ESC:
                     put_back()
                     return key
+                click_target = None
+                if key == 'CLICK':
+                    j = hit()
+                    if j is None:
+                        continue
+                    if j == index:                 # inside this field: move the cursor
+                        pos = click_pos(field)
+                        continue
+                    click_target, key = j, TAB     # leave this field with the usual checks first
                 if key == 'F2' and getattr(field, 'lookup', None) is not None and lookup:
                     if self._pick(field, lookup) is not None:
                         pos = field.first_pos()
@@ -641,6 +738,11 @@ class Screen:
                     self._draw_field(field)
                     if key in ('PGDN', 'PGUP', '\x17'):
                         return key
+                    if click_target is not None:
+                        index, pos, fresh = click_target, click_pos(fields[click_target]), True
+                        if getattr(fields[index], 'is_button', False):
+                            self.keys.pending.insert(0, '\r')   # a click on a button presses it
+                        continue
                     nxt = step(index, -1 if key in ('UP', 'BTAB') else 1)
                     if nxt is None:
                         if key in (ENTER, TAB, 'DOWN'):
@@ -749,6 +851,16 @@ class Screen:
                 if key is None:
                     key = ESC
                 self.last_key = key
+                if key == 'CLICK':                              # put the cursor where the click was
+                    r, c = self.keys.mouse_row, self.keys.mouse_col
+                    if r1 < r < r2 and c1 < c < c2:
+                        row = min(top + r - r1 - 1, len(lines) - 1)
+                        col = min(left + c - c1 - 1, len(lines[row]))
+                    continue
+                if key in ('WHEELDOWN', 'WHEELUP'):
+                    row = max(0, min(len(lines) - 1, row + (3 if key == 'WHEELDOWN' else -3)))
+                    col = min(col, len(lines[row]))
+                    continue
                 line = lines[row]
                 if key in ('\x17', 'F10'):                     # Ctrl-W / F10: save
                     return '\n'.join(lines)
@@ -884,6 +996,9 @@ class Screen:
                 self.last_key = key
                 if key in (ESC, 'q', 'Q'):
                     return
+                if key in ('WHEELDOWN', 'WHEELUP'):
+                    top += 3 if key == 'WHEELDOWN' else -3
+                    continue
                 if key in ('DOWN', ENTER): top += 1
                 elif key == 'UP': top -= 1
                 elif key in ('PGDN', ' '): top += height
@@ -996,6 +1111,33 @@ class Screen:
                 if key is None:
                     key = ESC
                 self.last_key = key
+                if key == 'CLICK':
+                    r, c = self.keys.mouse_row, self.keys.mouse_col
+                    if r == row:                       # on the bar: open (or close) that menu
+                        for n, (title_n, items_n) in enumerate(menus):
+                            if positions[n] - 1 <= c < positions[n] + len(title_n) + 1:
+                                if not items_n:
+                                    return title_n
+                                if opened and n == current:
+                                    close_menu()
+                                else:
+                                    current = n
+                                    open_menu()
+                                break
+                        continue
+                    if opened:
+                        top, left, bottom, right = dropdown_area(current)
+                        if top < r < bottom and left < c < right:
+                            k = r - top - 1
+                            if selectable(menus[current][1], k):
+                                return f'{menus[current][0]}.{menus[current][1][k].strip()}'
+                            continue
+                        close_menu()                   # a click elsewhere closes the pull-down
+                    continue
+                if key in ('WHEELDOWN', 'WHEELUP'):
+                    if not opened:
+                        continue
+                    key = 'DOWN' if key == 'WHEELDOWN' else 'UP'
                 title, items = menus[current]
                 if not opened:
                     if key == ESC:
@@ -1066,16 +1208,23 @@ class Screen:
         try:
             while True:
                 col = left + 1 + (inner - len(bar)) // 2
-                out = []
+                out, spans = [], []
                 for n, label in enumerate(labels):
                     fg, bg = (self.field_fg, self.field_bg) if n == choice else (self.fg, self.bg)
                     out.append(self._put(bottom - 1, col, label, fg, bg))
+                    spans.append((col, col + len(label)))
                     col += len(label) + 2
                 self._w(''.join(out) + self._normal())
                 key = self.keys.read_key()
                 if key is None:
                     key = ESC
                 self.last_key = key
+                if key == 'CLICK':
+                    if self.keys.mouse_row == bottom - 1:
+                        for n, (start, end) in enumerate(spans):
+                            if start <= self.keys.mouse_col < end:
+                                return n + 1           # the button clicked
+                    continue
                 if key == ESC:
                     return 0
                 if key == ENTER:
@@ -1112,6 +1261,17 @@ class Screen:
                 if key is None:
                     key = ESC
                 self.last_key = key
+                if key == 'CLICK':
+                    r, c = self.keys.mouse_row, self.keys.mouse_col
+                    if row < r <= row + len(items) and col < c <= col + width:
+                        return r - row                 # the item clicked
+                    if not (row <= r <= row + len(items) + 1 and col <= c <= col + width + 1):
+                        return 0                       # a click outside the menu cancels it
+                    continue
+                if key == 'WHEELDOWN':
+                    key = 'DOWN'
+                elif key == 'WHEELUP':
+                    key = 'UP'
                 if key == ESC:
                     return 0
                 if key == ENTER:
@@ -1283,6 +1443,26 @@ class Screen:
                 if key is None:
                     key = ESC
                 self.last_key = key
+                if key == 'CLICK':
+                    r, c = self.keys.mouse_row, self.keys.mouse_col
+                    n, i = r - (r1 + 3), top + r - (r1 + 3)
+                    if not (0 <= n < page and i < len(cells) and c1 < c < c2):
+                        continue                       # not on a row
+                    new_col = cur_col
+                    if save:                           # which cell: column offsets as drawn
+                        x = c - (c1 + 1)
+                        for k in range(first_col, len(visible)):
+                            if x < cell_offset(k) + widths[visible[k]] + 2:
+                                new_col = k
+                                break
+                    if i == current and new_col == cur_col:
+                        key = ENTER                    # a click on the selected row (or cell) chooses (edits) it
+                    else:
+                        current, cur_col, key = i, new_col, ''
+                elif key in ('WHEELDOWN', 'WHEELUP'):
+                    current += 3 if key == 'WHEELDOWN' else -3
+                    current = min(max(current, 0), max(len(cells) - 1, 0))
+                    key = ''
                 if key == ESC:
                     return -1
                 if save and add and key == 'INS':
