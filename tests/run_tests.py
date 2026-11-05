@@ -112,6 +112,10 @@ def find_scripts(include_examples):
 
 
 def main():
+    # Print UTF-8 even when the output goes to a pipe or a file on Windows (cp1252 can't show box lines)
+    for stream in (sys.stdout, sys.stderr):
+        if (stream.encoding or '').lower().replace('-', '') != 'utf8' and hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', errors='replace')
     parser = argparse.ArgumentParser(description="Run the DbBasic test scripts.")
     parser.add_argument('names', nargs='*', help="only run scripts whose name matches (e.g. 'if' or 'examples/zip')")
     parser.add_argument('--examples', action='store_true', help="also run the scripts in examples/")
@@ -162,7 +166,7 @@ def main():
                     command + [name + '.bas'],
                     cwd=run_dir,
                     input=STDIN.get(script, ''),
-                    capture_output=True, text=True, errors='replace',
+                    capture_output=True, encoding='utf-8', errors='replace',   # DbBasic writes UTF-8
                     timeout=TIMEOUT_SECONDS)
                 status, output = result.returncode, result.stdout + result.stderr
             except subprocess.TimeoutExpired:

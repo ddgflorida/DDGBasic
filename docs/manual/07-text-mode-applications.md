@@ -590,6 +590,8 @@ LOOP
 
 While a program reads keys, the terminal does not echo them and passes Ctrl-S, Ctrl-Q, Ctrl-Y, Ctrl-V and Ctrl-O to the program. Ctrl-C still stops the program. `INPUT` switches the terminal back to normal line editing. When the program ends, the colours, the cursor and the terminal mode are restored. The screen contents are left as they are, as they were in DOS.
 
+DbBasic always writes its output as UTF-8. On Windows, output sent to a pipe or a file would otherwise use the ANSI code page (cp1252), which cannot encode the box-drawing characters and fails with `'charmap' codec can't encode ...`. The console itself shows them as long as its font has the characters (the default fonts of Windows Terminal and the Windows 10+ console do).
+
 When standard input is not a terminal, keys are read from it as a stream, with arrow keys written as their escape sequences (`\x1b[A` for Up). This is how `tests/screen.bas` and `examples/retro_contacts.bas` are run by the test runner.
 
 ---

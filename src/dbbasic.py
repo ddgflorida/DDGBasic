@@ -13830,7 +13830,21 @@ def run_repl(debug=False):
     if interpreter:
         interpreter.close()
 
+def use_utf8_streams():
+    """Makes standard input, output and error UTF-8. On Windows, output that goes to a pipe or a
+    file (not the console) otherwise uses the ANSI code page (cp1252), which can't encode the
+    box-drawing characters of BOX, BROWSE and VIEW and fails with 'charmap' codec errors."""
+    for stream in (sys.stdin, sys.stdout, sys.stderr):
+        encoding = (getattr(stream, 'encoding', None) or '').lower().replace('-', '').replace('_', '')
+        if encoding != 'utf8' and hasattr(stream, 'reconfigure'):
+            try:
+                stream.reconfigure(encoding='utf-8', errors='replace')
+            except Exception:
+                pass
+
+
 def main():
+    use_utf8_streams()
     # If no args (or explicit flag), run REPL
     if len(sys.argv) < 2 or (len(sys.argv) == 2 and sys.argv[1] == '--repl'):
         run_repl(debug="--debug" in sys.argv)
