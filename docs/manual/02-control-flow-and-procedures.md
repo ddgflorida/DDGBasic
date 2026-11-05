@@ -733,7 +733,7 @@ Definition errors (missing parentheses, duplicate or nested definitions, missing
 
 The function's name is used as a variable inside the body. Its value when the body ends becomes the return value. It starts as `0`, or `""` for `$` names, so a function that never assigns it returns that default. `EXIT FUNCTION` returns immediately with whatever value has been assigned so far.
 
-> **Important:** Inside the body, assign the return value using **exactly the same spelling and case** as in the `FUNCTION` line. Variable assignment matches names exactly. Given `FUNCTION Mixed(a)`, the statement `mixed = a + 1` creates a separate variable and the function returns `0`.
+Variable names are not case-sensitive, so given `FUNCTION Mixed(a)`, assigning `mixed = a + 1` or `MIXED = a + 1` sets the return value.
 
 ### Calling
 
@@ -1446,7 +1446,7 @@ Each of the following was confirmed by running the interpreter.
 4. **`EXIT FOR` with `NEXT var`** (fixed). In `FOR ... IN` and `FOR EACH` loops, the variable name after `NEXT` used to be left unconsumed, which caused `Invalid assignment statement`.
 5. **Labels** (fixed). Any `identifier :` sequence used to be recorded as a label, even mid-line (`a = b : ...`, `GOSUB s : ...`), so duplicates stopped the program from loading. Only a name at the start of a line is a label now.
 6. **`GOTO` out of a loop** leaves the loop active, which eventually causes `Expected token NEXT but got None`.
-7. **Return value case.** The return value must be assigned with the exact case used in the `FUNCTION` line. Otherwise the function returns `0` or `""`. This happens because assignment matches names exactly while function calls do not.
+7. **Return value case** (fixed). The return value had to be assigned with the exact case used in the `FUNCTION` line, or the function returned `0`/`""`. Variable names are now case-insensitive everywhere, so any spelling works.
 8. **Functions in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL** (fixed). These never registered `FUNCTION` definitions, so calls failed with `Unknown function`. Each function now records the token list it was defined in, and each of these entry points registers the new source's functions (see 2.12).
 9. **`RUN` arguments** are converted with Python `str()`, so `42` arrives as `"42.0"`.
 10. **`END` inside a `RUN` child or an `EVAL` string** terminates the whole process, because `END` calls `sys.exit` and is not caught.

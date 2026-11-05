@@ -394,7 +394,7 @@ so the following forms are accepted:
 | simple variable | `:id`, `:name$` | the variable's value |
 | hash field (dot notation) | `:h.city$`, `:row.ID` | a key in a hash variable (nested dots allowed) |
 
-Variable lookup is case-insensitive (exact match first, then case-insensitive). Array elements such as `:a(1)` are **not** supported.
+Variable names are case-insensitive (`:Total` and `:total` are the same variable). Array elements such as `:a(1)` are **not** supported.
 
 ```basic
 CREATE TABLE t (id INTEGER, name TEXT);

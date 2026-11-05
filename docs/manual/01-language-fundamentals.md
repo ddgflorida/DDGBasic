@@ -1359,9 +1359,7 @@ To test whether a string is empty, compare it explicitly:
 |---------|-----------------|
 | Keywords (`PRINT`, `for each`, `End If`) | No |
 | Built-in function names | No |
-| Variable **reads** | No. An exact match is tried first, then the first case-insensitive match. |
-| Variable **writes** (simple assignment, `DIM`, `REDIM`, `v(i) =`, `v.k =`) | **Yes.** `count = 1: COUNT = 2` makes two variables. |
-| Collection statements (`PUSH`, `POP`, `SHIFT`, `UNSHIFT`, `SPLICE`, `REVERSE`, `SORT`, `FOR EACH ... IN HASH`) | **Yes** (the array/hash name must match exactly) |
+| Variable names (reads, assignments, `DIM`, `REDIM`, `v(i) =`, `v.k =`, `PUSH`, `POP`, `SHIFT`, `UNSHIFT`, `SPLICE`, `REVERSE`, `SORT`, `FOR EACH ... IN HASH`) | No. `count`, `Count` and `COUNT` are one variable. The spelling used when it is first created is the one `SHOW VARIABLES` displays. |
 | `ON`, `ASC`, `DESC` in `SORT` | **Yes** (uppercase only) |
 | Labels (`GOTO Done` vs `done:`) | **Yes** |
 | Hash keys with `h("key")` | Yes under `PRESERVE_CASE`. Keys are uppercased under `IGNORE_CASE`. |
@@ -1374,14 +1372,14 @@ COUNT = 2
 PRINT count; Count; COUNT
 ```
 
-Output (`Count` finds `count` through the case-insensitive fallback):
+Output:
 
 ```
- 1 1 2
+ 2 2 2
 ```
 
-**Recommendation:** spell each variable, array and label the same way every
-time you use it.
+**Recommendation:** spell each label the same way every time you use it, since
+labels are case-sensitive.
 
 ## 1.17 Implementation notes / discrepancies
 
@@ -1402,10 +1400,10 @@ the existing documentation:
    longer pull it in a second time.
 3. **ECHO word boundary** (fixed). Any line starting with the letters `ECHO`
    used to be rewritten, so `echo_count = 5` printed `_count = 5`.
-4. **Variable writes are case-sensitive but reads are not.** The README and
-   `tests/hashtest.bas` describe BASIC variables as case-insensitive. That holds
-   for reads only. Assignments, `DIM`, `REDIM` and all array statements use the
-   exact spelling.
+4. **Variable name case** (fixed). Reads ignored case but assignments, `DIM`,
+   `REDIM` and the array statements used the exact spelling, so
+   `count = 1: COUNT = 2` made two variables. Variable names are now
+   case-insensitive everywhere (`VariableTable`).
 5. **Reserved words.** `USER` is a reserved keyword token (added for
    `SET EMAIL`), so `DIM user AS HASH` fails. `tests/hashtest.bas` has been
    updated to use `person` instead. Several other

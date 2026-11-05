@@ -846,6 +846,68 @@ g_null_handling_default = 'CONVERT_EMPTY_TO_NULL'
 # =================================================================
 # Exception class for loop exits
 # =================================================================
+class VariableTable(dict):
+    """The interpreter's variable table. Names are case-insensitive (Total, total and TOTAL
+    are one variable) for reads, writes, deletes and membership tests. The spelling used
+    when a variable is first created is kept for display (SHOW VARIABLES, DUMP)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__()
+        self._names = {}                      # UPPER name -> stored spelling
+        self.update(*args, **kwargs)
+
+    def _stored(self, key):
+        return self._names.get(key.upper(), key) if isinstance(key, str) else key
+
+    def __getitem__(self, key):
+        return super().__getitem__(self._stored(key))
+
+    def __setitem__(self, key, value):
+        if isinstance(key, str):
+            key = self._names.setdefault(key.upper(), key)
+        super().__setitem__(key, value)
+
+    def __delitem__(self, key):
+        stored = self._stored(key)
+        super().__delitem__(stored)
+        if isinstance(stored, str):
+            self._names.pop(stored.upper(), None)
+
+    def __contains__(self, key):
+        return super().__contains__(self._stored(key))
+
+    def get(self, key, default=None):
+        return super().get(self._stored(key), default)
+
+    def pop(self, key, *default):
+        stored = self._stored(key)
+        if isinstance(stored, str) and super().__contains__(stored):
+            self._names.pop(stored.upper(), None)
+        return super().pop(stored, *default)
+
+    def setdefault(self, key, default=None):
+        if key not in self:
+            self[key] = default
+        return self[key]
+
+    def update(self, *args, **kwargs):
+        for k, v in dict(*args, **kwargs).items():
+            self[k] = v
+
+    def popitem(self):
+        k, v = super().popitem()
+        if isinstance(k, str):
+            self._names.pop(k.upper(), None)
+        return k, v
+
+    def clear(self):
+        super().clear()
+        self._names.clear()
+
+    def copy(self):
+        return VariableTable(self)
+
+
 class LoopExit(Exception):
     """Exception raised to exit from a loop early."""
     pass
@@ -2088,7 +2150,7 @@ class Interpreter:
         self.lexer = lexer
         self.tokens = self.lexer.tokens
         self.token_index = 0
-        self.variables = {}
+        self.variables = VariableTable()
         lines = self.lexer.raw_source_code.splitlines()
         numbered = [f"{i+1}: {line}" for i, line in enumerate(lines)]
 
@@ -4865,7 +4927,7 @@ class Interpreter:
     def _parse_clear_statement(self):
         """Parses and executes a CLEAR statement to reset all variables."""
         self._expect('CLEAR')
-        self.variables = {}
+        self.variables = VariableTable()
         #print("All variables have been cleared.") 
         
     def _parse_power(self):
