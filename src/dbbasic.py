@@ -1335,7 +1335,7 @@ class Lexer:
                     sql_text = self._restore_sql_keywords(self.modified_source_code[pos:sql_end_pos].strip())
                     tokens.append(('SQL_STRING', sql_text, pos))
                     while i < len(raw_tokens) and raw_tokens[i][2] < sql_end_pos: i += 1
-                    is_start_of_line = False
+                    is_start_of_line = True    # the ';' ends it, so more SQL can follow on the line
                     continue
 
             # Handle IN (SELECT...), EXISTS (SELECT...), or scalar (SELECT...) subqueries
@@ -1408,7 +1408,9 @@ class Lexer:
             elif u_value == 'WITHFOLDERSONLY': kind, value = 'WITH FOLDERSONLY', 'WITH FOLDERSONLY'
             elif u_value == 'WITHFILESONLY': kind, value = 'WITH FILESONLY', 'WITH FILESONLY' 
             
-            tokens.append((kind, value, pos)); is_start_of_line = False; i += 1
+            tokens.append((kind, value, pos)); i += 1
+            # A new statement (and so possibly SQL) also starts after ':', THEN and ELSE
+            is_start_of_line = kind in ('COLON', 'THEN', 'ELSE')
             #print("DEBUG:", tokens)
         return tokens
         

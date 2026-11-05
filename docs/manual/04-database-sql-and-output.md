@@ -137,7 +137,7 @@ WITH    BEGIN   COMMIT  ROLLBACK  ATTACH  COPY
 SUMMARIZE  PRAGMA  END TRANSACTION
 ```
 
-When the lexer sees one of these keywords at the start of a line, it searches forward in the source for the next semicolon. Everything from the keyword up to and including that semicolon becomes a single `SQL_STRING` token. The interpreter passes that text to the database unchanged, apart from the rewrites described below.
+When the lexer sees one of these keywords where a statement starts (see below), it searches forward in the source for the next semicolon. Everything from the keyword up to and including that semicolon becomes a single `SQL_STRING` token. The interpreter passes that text to the database unchanged, apart from the rewrites described below.
 
 The SQL text can use any SQL syntax, including operators that are not BASIC characters, such as `||` (string concatenation), `~`, `|`, `%` and `<<`:
 
@@ -174,22 +174,17 @@ Consequences:
 
   This sends `SELECT 1 AS a\nPRINT "x";` to SQLite, which fails with `near "PRINT": syntax error`.
 - **Indentation is allowed.** Leading spaces and tabs do not count as tokens, so an indented SQL line inside `IF`/`FOR`/`WHILE` blocks still starts in SQL mode.
-- **Only the start of a line counts.** SQL is not recognised after `THEN`, after a `:` statement separator, or after a label:
+- **SQL can start any statement.** It is recognised at the start of a line, after a `:` separator, after `THEN` or `ELSE`, after a label, and after another SQL statement's `;`:
 
   ```basic
-  IF x = 1 THEN SELECT 'inline' AS v;     ' Runtime Error: Unknown statement: SELECT
-  start: SELECT 'labelled' AS v;          ' Runtime Error: Unknown statement: SELECT
+  IF x = 1 THEN SELECT 'inline' AS v;
+  IF found THEN UPDATE t SET n = n + 1 WHERE id = :id; ELSE INSERT INTO t VALUES (:id, 1);
+  x = 5 : DELETE FROM t WHERE id = :x; : PRINT "deleted"
+  retry: DELETE FROM locks WHERE owner = :me$;
+  select 1 as a; select 2 as b;
   ```
 
-  Use a block `IF ... END IF` and put the SQL on a line of its own:
-
-  ```basic
-  IF x = 1 THEN
-     SELECT 'block' AS v;
-  END IF
-  ```
-
-- **One SQL statement per line.** After the first `;`, the rest of the line is parsed as BASIC. `select 1 as a; select 2 as b;` runs the first query, then fails with `Unknown statement: SELECT`. To run several statements from one line or one string, use `EXECUTE` (4.6).
+  Each statement still needs its terminating `;`. A single-line `IF` takes one statement before `ELSE`, the same as for BASIC statements ([2.3](02-control-flow-and-procedures.md#23-if--then--else)).
 - **The keywords are effectively reserved.** A line that starts with, for example, `update` or `copy` is treated as SQL when a semicolon follows it anywhere later in the file.
 
 ### 4.2.2 Keyword joining and SQL text
@@ -1480,7 +1475,7 @@ These were found by reading `src/dbbasic.py` and running test scripts. They desc
 **SQL recognition and text handling**
 
 1. **SQL statement termination** (fixed). Line-level SQL used to end at the first `;` in the source text, even inside `'...'` or a comment. It now skips string literals, quoted identifiers and comments (4.2.3).
-2. **SQL is recognised only at the start of a line.** It is not recognised after `THEN`, after `:`, or after a label. Only one SQL statement is allowed per line.
+2. **SQL only at the start of a line** (fixed). SQL was not recognised after `THEN`, `ELSE`, `:` or a label, and only one SQL statement was allowed per line. It is now recognised wherever a statement starts.
 3. **Keyword joining inside string literals** (fixed). Multi-word keyword rewrites used to change text inside strings and SQL literals (`'for each'` became `'FOREACH'`). They now apply only to code (4.2.2).
 4. **`END TRANSACTION;`** (fixed). It was not recognised as SQL, because the keyword list held `'END TRANSACTION'` while the lexer sees the joined token `ENDTRANSACTION`. Joined keywords in SQL code are now also split back apart before the statement is sent, so `FOR EACH ROW` in a trigger reaches the engine intact.
 5. **Bind-variable scanning** (fixed). It used to be purely textual, so `'x:y'`, `':memory:'` and DuckDB `::TYPE` casts were taken as variable references. A missing bind variable is fatal even with `SQL_FATAL_ERRORS OFF`.

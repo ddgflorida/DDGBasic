@@ -92,7 +92,7 @@ The interpreter chooses the form by looking at what follows `THEN`. If `THEN` is
 
 **Block IF.** The conditions are tested in order: first the `IF`, then each `ELSEIF`. The block belonging to the first true condition runs, and execution continues after `END IF`. If no condition is true and there is an `ELSE` block, that block runs. Block IFs can be nested to any depth. `ELSEIF` must be written as one word. Writing `ELSE IF` starts a new single-line `IF` inside the `ELSE` branch.
 
-**Single-line IF.** The behaviour around colons is easy to get wrong:
+**Single-line IF.** The statement after `THEN` or `ELSE` can be any statement, including SQL (`IF found THEN DELETE FROM t WHERE id = :id;`). The behaviour around colons is easy to get wrong:
 
 - **True condition:** the statement after `THEN` runs. If an `ELSE` follows, the `ELSE` statement is skipped up to the next colon or end of line. Any statements after that colon **still run**.
 - **False condition:** everything up to the end of the line, or up to `ELSE`, is skipped. If there is an `ELSE`, the statement after it runs, followed by any further colon-separated statements on the line.

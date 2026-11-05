@@ -870,13 +870,9 @@ FOR rec IN (SELECT * FROM contacts WHERE id = :id)
     @ 5, 13 SAY "Last  : " GET rec.last_name PICTURE "@!S20"
     @ 6, 13 SAY "Email : " GET rec.email     PICTURE "@S40"
     READ
-    IF LASTKEY$ <> CHR$(27) THEN
-        UPDATE contacts SET last_name = :rec.last_name, email = :rec.email WHERE id = :id;
-    END IF
+    IF LASTKEY$ <> CHR$(27) THEN UPDATE contacts SET last_name = :rec.last_name, email = :rec.email WHERE id = :id;
 NEXT
 ```
-
-The `UPDATE` must start its own line: SQL is recognised only at the start of a line, so it can't follow `THEN` on the same line ([4.14](04-database-sql-and-output.md#414-implementation-notes--discrepancies), item 2).
 
 | `GET` picture | Meaning |
 |---|---|
