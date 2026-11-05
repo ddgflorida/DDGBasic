@@ -912,6 +912,14 @@ class LoopExit(Exception):
     """Exception raised to exit from a loop early."""
     pass
 
+class GotoJump(BaseException):
+    """Raised by GOTO. Loop bodies, IF branches and function bodies let it pass when the
+    target is outside them (ending that block), so the jump is made at the level that
+    contains the target. A BaseException, so generic 'except Exception' handlers ignore it."""
+    def __init__(self, target):
+        super().__init__(target)
+        self.target = target
+
 class ProgramEnd(Exception):
     """Exception raised to signal the END of the program."""
     pass
@@ -2327,7 +2335,7 @@ class Interpreter:
             # 4. Run until we hit the end of this input
             self.program_terminated = False
             while self._current_token() and self._current_token()[0] != 'END':
-                if not self._parse_line():
+                if not self._parse_top_line():
                     break
                 if self.program_terminated:
                     break
@@ -2448,7 +2456,7 @@ class Interpreter:
         label_name = self._expect('ID')[1]
         if label_name not in self.labels:
             self._error(f"Label '{label_name}' not found for GOTO.")
-        self.token_index = self.labels[label_name]
+        raise GotoJump(self.labels[label_name])
     
     def _debug_state(self, message):
         """A helper function to print the current parser state."""
@@ -3424,13 +3432,59 @@ class Interpreter:
             return None
 
     def run_block(self, end_tokens):
+        body_start = self.token_index
         while True:
             token = self._current_token()
             if not token or token[0] in end_tokens:
                 break
-            if not self._parse_line(end_tokens):
-                break
+            try:
+                if not self._parse_line(end_tokens):
+                    break
+            except GotoJump as jump:
+                (end_token,) = end_tokens
+                if body_start <= jump.target < self._block_end_index(body_start, end_token):
+                    self.token_index = jump.target      # target is inside this block: keep going
+                    continue
+                if end_token == 'END FUNCTION':
+                    self._error("GOTO cannot jump out of a FUNCTION.")
+                raise                                   # target is outside: end this block
             if self.program_terminated: break
+
+    def _parse_top_line(self):
+        """_parse_line for the top-level statement loops: performs a GOTO that has
+        unwound out of every enclosing block."""
+        try:
+            return self._parse_line()
+        except GotoJump as jump:
+            self.token_index = jump.target
+            return True
+
+    _BLOCK_OPENERS = {'NEXT': ('FOR', 'FOR EACH'), 'WEND': ('WHILE',), 'LOOP': ('DO',), 'END FUNCTION': ()}
+
+    def _block_end_index(self, start, end_token):
+        """Index of the end_token (NEXT/WEND/LOOP/END FUNCTION) that closes the block whose
+        body starts at start. Only keywords that begin a statement nest, so DO WHILE,
+        LOOP WHILE and EXIT FOR/DO/LOOP don't count."""
+        cache = self.__dict__.setdefault('_block_end_cache', {})
+        key = (id(self.tokens), len(self.tokens), start, end_token)
+        if key in cache:
+            return cache[key]
+        openers = self._BLOCK_OPENERS.get(end_token, ())
+        level, i, n = 1, start, len(self.tokens)
+        result = n
+        while i < n:
+            kind = self.tokens[i][0]
+            prev = self.tokens[i - 1][0] if i > 0 else 'NEWLINE'
+            if kind in openers and prev in ('NEWLINE', 'COLON', 'THEN', 'ELSE'):
+                level += 1
+            elif kind == end_token and prev != 'EXIT':
+                level -= 1
+                if level == 0:
+                    result = i
+                    break
+            i += 1
+        cache[key] = result
+        return result
 
     def _skip_block(self, start_token, end_token):
         # FOR, FOR EACH and FOR ... IN all close with NEXT, so any of them nests.
@@ -3808,7 +3862,7 @@ class Interpreter:
             # --- MODIFIED: Catch the RedirectSignal ---
             try:
                 while self._current_token():
-                    if not self._parse_line() or self.program_terminated:
+                    if not self._parse_top_line() or self.program_terminated:
                         break
             except RedirectSignal as e:
                 # Restore stdout before returning the signal
@@ -3825,7 +3879,7 @@ class Interpreter:
     def run(self):
         try:
             while self._current_token() and self._current_token()[0] != 'END':
-                if not self._parse_line():
+                if not self._parse_top_line():
                     break
                 if self.program_terminated:
                     break
@@ -3843,7 +3897,7 @@ class Interpreter:
                 # Continue execution from error handler
                 try:
                     while self._current_token() and self._current_token()[0] != 'END':
-                        if not self._parse_line():
+                        if not self._parse_top_line():
                             break
                         if self.program_terminated:
                             break
@@ -5714,9 +5768,7 @@ class Interpreter:
                 stop_at = jump_locations['elseifs'][0] if jump_locations['elseifs'] else \
                           (jump_locations['else'] if jump_locations['else'] is not None else endif_index)
                 
-                while self.token_index < stop_at:
-                    if self.program_terminated: return
-                    self._parse_line()
+                if self._run_if_branch(stop_at): return
                 
                 self.token_index = endif_index
 
@@ -5738,9 +5790,7 @@ class Interpreter:
                         next_stop_at = jump_locations['elseifs'][i+1] if i + 1 < len(jump_locations['elseifs']) else \
                                        (jump_locations['else'] if jump_locations['else'] is not None else endif_index)
 
-                        while self.token_index < next_stop_at:
-                            if self.program_terminated: return
-                            self._parse_line()
+                        if self._run_if_branch(next_stop_at): return
                         
                         # After executing, jump to the end
                         self.token_index = endif_index
@@ -5753,9 +5803,7 @@ class Interpreter:
                         self._expect('ELSE')
                         if self._current_token()[0] == 'NEWLINE': self._next_token()
                         
-                        while self.token_index < endif_index:
-                             if self.program_terminated: return
-                             self._parse_line()
+                        if self._run_if_branch(endif_index): return
                     else:
                         # No true conditions and no ELSE block, so just jump to END IF
                         self.token_index = endif_index
@@ -5768,6 +5816,23 @@ class Interpreter:
             # If an EXIT FOR/DO is hit, jump past the whole IF structure
             self.token_index = endif_index + 1 if endif_index is not None else len(self.tokens)
             raise e
+
+    def _run_if_branch(self, stop_at):
+        """Run the statements of a block-IF branch up to stop_at (its ELSEIF/ELSE/END IF).
+        A GOTO to a label inside the branch continues there; one outside leaves the IF.
+        Returns True if the program terminated."""
+        branch_start = self.token_index
+        while self.token_index < stop_at:
+            if self.program_terminated:
+                return True
+            try:
+                self._parse_line()
+            except GotoJump as jump:
+                if branch_start <= jump.target < stop_at:
+                    self.token_index = jump.target
+                else:
+                    raise
+        return False
 
     def _to_string(self, value):
         """Converts a value to a string, formatting floats that are whole numbers as integers."""
@@ -6851,7 +6916,7 @@ class Interpreter:
             try:
                 # Execute the called program
                 while self._current_token() and self._current_token()[0] != 'END' and not self.program_terminated:
-                    if not self._parse_line():
+                    if not self._parse_top_line():
                         break
             except ProgramEnd:
                 pass # Normal program termination is not an error

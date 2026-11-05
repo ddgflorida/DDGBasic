@@ -627,7 +627,21 @@ Labels are global. A label inside a function body can be reached from anywhere, 
 
 A name followed by a colon later on a line is not a label. So `a = b : c = b` and `GOSUB report : PRINT "x"` are ordinary multi-statement lines.
 
-> **Caution:** Do not `GOTO` out of a `FOR`, `WHILE` or `DO` body. The loop is still active, so execution continues from the label as if inside the loop. The program usually ends with `Expected token NEXT but got None` when the input runs out. Use `EXIT FOR`/`EXIT WHILE`/`EXIT DO` instead.
+**GOTO and blocks.** A `GOTO` to a label inside the current loop body or `IF` branch simply continues there, for example to skip the rest of an iteration. A `GOTO` to a label outside it ends every loop and block `IF` it leaves, then continues at the label. A loop variable keeps the value it had at the jump; a `FOR ... IN` variable is restored, as with `EXIT FOR`. Jumping out of a `FUNCTION` is an error (`GOTO cannot jump out of a FUNCTION.`), but a `GOTO` within a function body is fine. Jumping *into* a loop body from outside is not supported.
+
+```basic
+FOR i = 1 TO 10
+  IF i = 3 THEN GOTO found
+NEXT
+PRINT "not found"
+END
+found:
+PRINT "found at"; i
+```
+
+```
+found at 3
+```
 
 ### Example
 
@@ -1445,7 +1459,7 @@ Each of the following was confirmed by running the interpreter.
 3. *(merged into item 1)*
 4. **`EXIT FOR` with `NEXT var`** (fixed). In `FOR ... IN` and `FOR EACH` loops, the variable name after `NEXT` used to be left unconsumed, which caused `Invalid assignment statement`.
 5. **Labels** (fixed). Any `identifier :` sequence used to be recorded as a label, even mid-line (`a = b : ...`, `GOSUB s : ...`), so duplicates stopped the program from loading. Only a name at the start of a line is a label now.
-6. **`GOTO` out of a loop** leaves the loop active, which eventually causes `Expected token NEXT but got None`.
+6. **`GOTO` out of a loop or block `IF`** (fixed). A `GOTO` out of a loop left the loop running, which ended in `Expected token NEXT but got None`. Repeated jumps eventually hit Python's recursion limit. A `GOTO` out of a block `IF` was silently redirected to just after `END IF`. `GOTO` now ends the blocks it leaves (see 2.10).
 7. **Return value case** (fixed). The return value had to be assigned with the exact case used in the `FUNCTION` line, or the function returned `0`/`""`. Variable names are now case-insensitive everywhere, so any spelling works.
 8. **Functions in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL** (fixed). These never registered `FUNCTION` definitions, so calls failed with `Unknown function`. Each function now records the token list it was defined in, and each of these entry points registers the new source's functions (see 2.12).
 9. **`RUN` arguments** are converted with Python `str()`, so `42` arrives as `"42.0"`.
