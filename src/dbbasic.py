@@ -322,14 +322,19 @@ class HelpRegistry:
             "examples": ['BOX 2, 5, 10, 60, "Customer" DOUBLE']
         },
         "@": {
-            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition]]',
-            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left.",
-            "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Email: " GET rec.email PICTURE "@S40"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 20, 1 SAY total PICTURE "$#,###.##"']
+            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [WHEN condition] [LOOKUP (SELECT ...)]]',
+            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left; MESSAGE text is shown on the bottom line when it fails. WHEN skips the field when false. LOOKUP gives a list of allowed values (first column): F2 opens it, and leaving with a value not in the list opens it too.",
+            "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Email: " GET rec.email PICTURE "@S40"', '@ 7, 10 SAY "State: " GET state$ PICTURE "!!" LOOKUP (SELECT code, name FROM states)', '@ 8, 10 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000" WHEN type$ = "B"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 20, 1 SAY total PICTURE "$#,###.##"']
         },
         "READ": {
             "syntax": 'READ',
             "desc": "Edits the GET fields in order. Tab/Enter/Down go to the next field, Shift-Tab/Up to the previous one, PgDn or Ctrl-W finish, Ctrl-Y clears a field, Ins toggles insert mode. Enter on the last field finishes. Esc puts back the values the variables had and ends READ; check LASTKEY$ = CHR$(27). With SET AUTOADVANCE ON (or Clipper's SET CONFIRM OFF), filling a field's last position moves to the next field.",
             "examples": ['READ\nIF LASTKEY$ = CHR$(27) THEN GOTO cancelled']
+        },
+        "ALERT": {
+            "syntax": 'choice = ALERT(message$ [, button1$, button2$, ...] | ALERT(message$, buttons_array)',
+            "desc": "Shows a centred message box with buttons and puts the screen back afterwards. ';' in the message starts a new line. Left/Right move, Enter chooses, a button's first letter chooses it. Returns the button number from 1, or 0 for Esc. With no buttons there is one OK button.",
+            "examples": ['IF ALERT("Delete this customer?", "No", "Yes") = 2 THEN DELETE FROM customers WHERE id = :id;', 'x = ALERT("Saved")']
         },
         "MENU": {
             "syntax": 'choice = MENU(row, col, item1$, item2$, ... | items_array)',
@@ -2819,7 +2824,7 @@ class Interpreter:
         'HASH_VALUES', 'HEX$', 'HOUR', 'HTMLDECODE$', 'HTMLENCODE$', 'INSTR', 'INSTRREV',
         'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
         'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
-        'INKEY$', 'LASTKEY$', 'MENU', 'SAVESCREEN',
+        'ALERT', 'INKEY$', 'LASTKEY$', 'MENU', 'SAVESCREEN',
         'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
         'OCT$', 'ORDINAL$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
         'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
@@ -4040,15 +4045,28 @@ class Interpreter:
                 self._error(f"GET {var_name}: a whole array or hash can't be edited; GET one of its fields.")
             last = target[1][-1][1] if target[1] else target[0]
             numeric = not str(last).endswith('$') and isinstance(value, (int, float)) and not isinstance(value, bool)
-            picture = self._to_string(self._parse_expression()) if keyword('PICTURE') else None
-            valid = None
-            if keyword('VALID'):
-                # Remember where the condition is; READ evaluates it when the field is left
-                valid = (self.tokens, self.token_index)
-                while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
-                    self._next_token()
+            picture = valid = message = when = lookup = None
+            # The clauses can come in any order
+            while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+                if keyword('PICTURE'):
+                    picture = self._to_string(self._parse_expression())
+                elif keyword('VALID'):
+                    valid = self._skip_get_condition()     # evaluated by READ when the field is left
+                elif keyword('WHEN'):
+                    when = self._skip_get_condition()      # evaluated by READ when the field is reached
+                elif keyword('MESSAGE'):
+                    message = self._to_string(self._parse_expression())
+                elif keyword('LOOKUP'):
+                    tok, nxt = self._current_token(), self._peek_token()
+                    if not (tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING'):
+                        self._error("LOOKUP needs a query in parentheses: LOOKUP (SELECT code, name FROM ...)")
+                    lookup = self._extract_sql_from_parens()
+                else:
+                    self._error(f"Unexpected '{self._current_token()[1]}' after GET {var_name}: "
+                                "expected PICTURE, VALID, MESSAGE, WHEN or LOOKUP")
             try:
-                SCREEN.add_get(row, col, var_name, value, picture, valid, numeric, target)
+                SCREEN.add_get(row, col, var_name, value, picture, valid, numeric, target,
+                               message=message, when=when, lookup=lookup)
             except ScreenError as e:
                 self._error(str(e))
         elif not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
@@ -4125,22 +4143,52 @@ class Interpreter:
         container, key = self._get_target_slot(target)
         container[key] = value
 
+    GET_CLAUSE_WORDS = ('PICTURE', 'VALID', 'MESSAGE', 'WHEN', 'LOOKUP')
+
+    def _skip_get_condition(self):
+        """Remembers where a VALID or WHEN condition starts and moves past it. The condition
+        ends at the end of the statement, or at a clause word (MESSAGE, WHEN, ...) that follows
+        a complete operand, so VALID x > 0 MESSAGE "..." works and VALID message <> "" too."""
+        start = (self.tokens, self.token_index)
+        previous = None
+        while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+            tok = self._current_token()
+            if (previous is not None and previous[0] in ('ID', 'NUMBER', 'STRING', 'RPAREN', 'RBRACKET')
+                    and tok[0] == 'ID' and tok[1].upper() in self.GET_CLAUSE_WORDS):
+                break
+            previous = tok
+            self._next_token()
+        if previous is None:
+            self._error("Expected a condition")
+        return start
+
+    def _evaluate_saved_condition(self, saved_at):
+        saved = (self.tokens, self.token_index)
+        self.tokens, self.token_index = saved_at
+        try:
+            return bool(self._parse_condition())
+        finally:
+            self.tokens, self.token_index = saved
+
     def _run_read(self):
         def assign(field, value):
             self._set_target_value(field.target, value)
 
         def check_valid(field):
-            saved = (self.tokens, self.token_index)
-            self.tokens, self.token_index = field.valid
-            try:
-                return bool(self._parse_condition())
-            finally:
-                self.tokens, self.token_index = saved
+            return self._evaluate_saved_condition(field.valid)
+
+        def check_when(field):
+            return self._evaluate_saved_condition(field.when)
 
         def current_values(fields):
             return [self._get_target_value(f.target) for f in fields]
 
-        SCREEN.read(assign, check_valid, current_values)
+        def lookup(field):
+            rows = self._execute_sql(field.lookup, is_query=True) or []
+            columns = [d[0] for d in self.db_cursor.description] if self.db_cursor.description else []
+            return columns, rows
+
+        SCREEN.read(assign, check_valid, current_values, check_when=check_when, lookup=lookup)
 
     def _parse_browse_statement(self):
         """BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY col$]] [AT r1, c1, r2, c2] [TITLE t$] [INTO var]"""
@@ -4584,6 +4632,10 @@ class Interpreter:
         elif name == 'LASTKEY$':
             if args: self._error("LASTKEY$ takes no arguments.")
             return SCREEN.last_key
+        elif name == 'ALERT':
+            if not args: self._error("ALERT requires a message, then optional button labels.")
+            buttons = args[1] if len(args) == 2 and isinstance(args[1], list) else args[1:]
+            return float(SCREEN.alert(self._to_string(args[0]), [self._to_string(b) for b in buttons]))
         elif name == 'SAVESCREEN':
             if len(args) not in (0, 4): self._error("SAVESCREEN takes no arguments, or top, left, bottom, right.")
             try:

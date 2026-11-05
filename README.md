@@ -153,7 +153,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
-| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field (`GET`) for a variable, a hash field such as `rec.name`, or an array element, with an optional `PICTURE` mask and `VALID` check. See `READ`. |
+| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field (`GET`) for a variable, a hash field such as `rec.name`, or an array element, with optional `PICTURE`, `VALID ... MESSAGE`, `WHEN` and `LOOKUP (SELECT ...)` clauses. See `READ`. |
 | ANALYZE CSV             | Provides a detailed statistical report on a CSV file, including delimiter detection, header presence, and column data types. |
 | ANALYZE FIXED           | Analyzes a fixed-width text file, automatically guessing column breaks if not specified, and reports on the layout. |
 | ANALYZE JSON            | Analyzes a JSON file, reporting on its structure, record count, and the consistency of object keys. |
@@ -237,6 +237,7 @@ This document provides a quick reference to all available functions in the DbBas
 | Function Name            | Type        | Description |
 |-------------------------|-------------|-------------|
 | ABS(number)             | MATH        | Returns the absolute value of a number. |
+| ALERT(message$, [button$, ...]) | SCREEN | Shows a message box with buttons and returns the chosen button number (0 for Esc). |
 | ARRAY(...)              | ARRAY       | A constructor that creates and returns a new ARRAY from the provided arguments. |
 | ARRAY_JOIN(array, [delimiter$]) | ARRAY  | Concatenates the elements of an array into a single string, separated by delimiter$ (default comma). |
 | ARRAY_SIZE(array)       | ARRAY       | Returns the total number of elements in an array. |

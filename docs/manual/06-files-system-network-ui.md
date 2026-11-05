@@ -24,7 +24,7 @@ Related material in other chapters:
 5. [HTTP: FETCH](#65-http-fetch)
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
 7. [Text screens](#67-text-screens)
-   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
+   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [ALERT()](#alert) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
 8. [TUI forms (archived)](#68-tui-forms-archived)
 9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
 
@@ -853,8 +853,11 @@ The colour numbers are those of QBasic:
 ### @ ... SAY ... GET
 
 ```
-@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition]]
+@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$]
+                                                  [WHEN condition] [LOOKUP (SELECT ...)]]
 ```
+
+The `GET` clauses can come in any order.
 
 `SAY` writes the value of `expr` at the position. With `PICTURE`, the value is formatted as `FORMAT$(expr, mask$)` would format it: `@ 20, 1 SAY 1234.5 PICTURE "#,###.##"` shows `1,234.50`.
 
@@ -882,7 +885,43 @@ NEXT
 
 For a numeric field, a template only sets the width. The value is typed as a number (commas are ignored), and an entry that is not a number is refused with a beep.
 
-`VALID condition` is checked whenever the cursor leaves the field, after the variable has been given the typed value. If the condition is false, DbBasic beeps and the cursor stays in the field.
+`VALID condition` is checked whenever the cursor leaves the field, after the variable has been given the typed value. If the condition is false, DbBasic beeps and the cursor stays in the field. With `MESSAGE text$`, the text is also shown on the bottom line of the screen until the next key, so the user knows why:
+
+```basic
+@ 5, 5 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000"
+```
+
+`WHEN condition` is checked when the cursor would move into the field. If it is false, the field is skipped, in whichever direction the cursor was moving. Use it for fields that only apply sometimes. A field skipped as the last one ends `READ`:
+
+```basic
+@ 3, 5 SAY "Type  : " GET type$ PICTURE "!" VALID type$ = "P" OR type$ = "B" MESSAGE "Type must be P or B"
+@ 5, 5 SAY "Credit: " GET credit WHEN type$ = "B"
+```
+
+A condition ends at the end of the statement or at the next clause word (`MESSAGE`, `WHEN`, `LOOKUP`, `PICTURE`, `VALID`), so `VALID message$ <> ""` still works with a variable called `message$`.
+
+**LOOKUP** gives a field a list of allowed values from a query. Its first column holds the values; any other columns are shown as a description:
+
+```basic
+@ 4, 5 SAY "State : " GET state$ PICTURE "!!" LOOKUP (SELECT code, name FROM states ORDER BY code)
+```
+
+- F2 opens the list under the field (above it if there is no room). Enter picks a row and puts its first column in the field; Esc closes the list.
+- Leaving the field with a value that is not in the list (ignoring case and spaces) opens the list too, at the first row that starts with what was typed. Picking a row accepts it and moves on; Esc keeps the cursor in the field. An empty field is not checked; add `VALID state$ <> ""` to require a value.
+- The query runs each time the list is needed, so bind variables (`:country$`) see the current values of other fields.
+
+```
+    State : ZZ
+    Credit: ┌─────── Choose ───────┐
+    Name  : │ code │ name          │
+            │──────────────────────│
+            │ CA   │ California    │
+            │ FL   │ Florida       │
+            │ NY   │ New York      │
+            │ TX   │ Texas         │
+            │ 1 of 4   Enter=select│
+            └──────────────────────┘
+```
 
 ### READ
 
@@ -898,10 +937,33 @@ For a numeric field, a template only sets the width. The value is typed as a num
 | Backspace, Del | Delete. |
 | Ins | Switch between insert mode (the default) and overwrite mode. |
 | Ctrl-Y | Clear the field. |
+| F2 | Open the field's `LOOKUP` list. |
 
 Each value is stored when you leave its field. The first key you type in a numeric field replaces the old number.
 
 **Auto-advance.** `SET AUTOADVANCE ON` makes `READ` behave like Clipper with `SET CONFIRM OFF`: typing a character into a field's last position moves on as if Enter had been pressed. A field with a template such as `"99999"` or `"(999) 999-9999"` is then filled without pressing Tab, and filling the last field ends `READ` (`LASTKEY$` is `CHR$(13)`). `VALID` still applies: a refused value keeps the cursor in the field. `SET AUTOADVANCE OFF`, the default, keeps the cursor in a full field until Enter, Tab or an arrow key. Clipper's spelling also works, with the opposite sense: `SET CONFIRM OFF` is `SET AUTOADVANCE ON`, and `SET CONFIRM ON` is `SET AUTOADVANCE OFF`. The setting also applies to `EDIT RECORD`, but not to a cell being edited in `BROWSE`. Afterwards, `LASTKEY$` holds the key that ended `READ`, so `IF LASTKEY$ = CHR$(27)` tells you the user cancelled.
+
+### ALERT()
+
+```
+choice = ALERT(message$ [, button1$, button2$, ...])
+choice = ALERT(message$, buttons)               REM an array of labels
+```
+
+`ALERT` shows a centred, double-lined box with a message and a row of buttons, waits for a choice and puts the screen back. A `;` in the message starts a new line. Left/Right (or Tab) move between the buttons, Enter chooses, and the first letter of a button chooses it at once. It returns the button's number, counting from 1, or `0` for Esc. With no buttons there is a single `OK`.
+
+```basic
+IF ALERT("Save changes?;They can't be undone.", "Yes", "No", "Cancel") = 1 THEN GOSUB save
+```
+
+```
+╔═════════════════════════╗
+║      Save changes?      ║
+║  They can't be undone.  ║
+║                         ║
+║   Yes    No    Cancel   ║
+╚═════════════════════════╝
+```
 
 ### MENU()
 

@@ -73,6 +73,8 @@ STDIN = {
     'tests/edit_record': ('\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'     # SQLite
                           '\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '2\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'),  # DuckDB
     'tests/auto_advance': 'ca01234\x1990210' '5551234567' 'xyz\tq\r',
+    'tests/form_helpers': ('\x19x\r\x19b\r' 'zz\r\x1b[B\x1b[B\r' '9999\r\x194000\r' '\rAnn\r'
+                           '\r\x1bOQ\x1b[B\r\r\r' '\x1b[C\r' '\r' 'c' '\x1b' '\r'),
     'tests/get_targets': '\x19jones\t\t900\r\x19250\r' '\x19uno\t\x19Austin\t02116\r' '\x19zzz\t\x19yyy\x1b',
     'tests/screen': ('ann smith\t5551234567\t-5\r\x1912\r'   # READ, with a VALID failure
                      'zzz\x1b'                               # READ cancelled with Esc

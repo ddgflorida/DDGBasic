@@ -488,9 +488,11 @@ class Screen:
         self._w(''.join(out))
 
     # --- GET / READ ----------------------------------------------------
-    def add_get(self, row, col, var_name, value, picture, valid, numeric, target=None):
+    def add_get(self, row, col, var_name, value, picture, valid, numeric, target=None,
+                message=None, when=None, lookup=None):
         field = Field(row, col, var_name, value, picture, valid, numeric)
         field.target = target       # where READ stores the value (the interpreter's description)
+        field.message, field.when, field.lookup = message, when, lookup
         self.gets.append(field)
         self._draw_field(field)
         return field
@@ -501,18 +503,38 @@ class Screen:
             out += f'\x1b[{field.row};{field.col + cursor}H'
         self._w(out + ('' if cursor is not None else self._normal()))
 
-    def read(self, assign, check_valid, current_values):
+    def read(self, assign, check_valid, current_values, check_when=None, lookup=None):
         """Edits the pending GET fields. assign(field, value) stores a field's value,
-        check_valid(field) evaluates its VALID condition, and current_values(fields)
-        returns their values. Esc puts back the values they had when READ started.
-        Returns the key that ended it."""
+        check_valid(field) evaluates its VALID condition, check_when(field) its WHEN
+        condition, and current_values(fields) returns their values. lookup(field) returns
+        (columns, rows) for a field with LOOKUP. Esc puts back the values the fields had
+        when READ started. Returns the key that ended it."""
         fields, self.gets = self.gets, []
         if not fields:
             return ''
         saved = current_values(fields)
-        index, insert = 0, True
-        pos = fields[0].first_pos()
+
+        def allowed(i):
+            f = fields[i]
+            return getattr(f, 'when', None) is None or check_when is None or check_when(f)
+
+        def step(i, direction):
+            """The next field in a direction whose WHEN allows it, or None."""
+            i += direction
+            while 0 <= i < len(fields):
+                if allowed(i):
+                    return i
+                i += direction
+            return None
+
+        index = step(-1, 1)
+        if index is None:                      # every field is switched off by WHEN
+            self.last_key = ENTER
+            return ENTER
+        insert = True
+        pos = fields[index].first_pos()
         fresh = True        # the first key typed into a numeric field replaces its value
+        message_under = None
         self._w('\x1b[?25h')
         try:
             while True:
@@ -521,6 +543,9 @@ class Screen:
                 key = self.keys.read_key()
                 if key is None:            # input ended: give up as if Esc was pressed
                     key = ESC
+                if message_under:          # a VALID message stays up until the next key
+                    self.restore_saved(message_under)
+                    message_under = None
                 self.last_key = key
                 if key == ESC:
                     for f, value in zip(fields, saved):
@@ -528,20 +553,38 @@ class Screen:
                         f.buffer = f._initial_buffer(value)
                         self._draw_field(f)
                     return key
+                if key == 'F2' and getattr(field, 'lookup', None) is not None and lookup:
+                    if self._pick(field, lookup) is not None:
+                        pos = field.first_pos()
+                    continue
                 if key in (ENTER, TAB, 'DOWN', 'UP', 'BTAB', 'PGDN', 'PGUP', '\x17'):
                     try:
-                        assign(field, field.value())
+                        value = field.value()
                     except ValueError:
                         bell()
                         continue
+                    if getattr(field, 'lookup', None) is not None and lookup and str(value).strip() \
+                            and not self._in_lookup(field, value, lookup):
+                        # Not an allowed value: offer the list, starting at the closest match
+                        if self._pick(field, lookup, value) is None:
+                            bell()
+                            continue
+                        value = field.value()
+                    assign(field, value)
                     if field.valid is not None and not check_valid(field):
                         bell()
+                        if getattr(field, 'message', None):
+                            message_under = self._show_message(field.message)
                         continue
                     self._draw_field(field)
-                    if key in ('PGDN', 'PGUP', '\x17') or (key in (ENTER, TAB, 'DOWN') and index == len(fields) - 1):
+                    if key in ('PGDN', 'PGUP', '\x17'):
                         return key
-                    index = index - 1 if key in ('UP', 'BTAB') else index + 1
-                    index = max(0, index)
+                    nxt = step(index, -1 if key in ('UP', 'BTAB') else 1)
+                    if nxt is None:
+                        if key in (ENTER, TAB, 'DOWN'):
+                            return key         # past the last field
+                        nxt = index            # already at the first field
+                    index = nxt
                     pos = fields[index].first_pos()
                     fresh = True
                     continue
@@ -557,7 +600,99 @@ class Screen:
                     # The field is full: go on as if Enter had been pressed
                     self.keys.pending.insert(0, ENTER)
         finally:
+            if message_under:
+                self.restore_saved(message_under)
             self._w(self._normal())
+
+    def _show_message(self, text):
+        """Shows a message on the bottom line; returns what it covered, for restore_saved."""
+        under = self.save(self.rows, 1, self.rows, self.cols)
+        self._w(self._put(self.rows, 1, (' ' + str(text))[:self.cols].ljust(self.cols), self.field_fg, self.field_bg)
+                + self._normal())
+        return under
+
+    @staticmethod
+    def _matches(a, b):
+        return str(a).strip().upper() == str(b).strip().upper()
+
+    def _in_lookup(self, field, value, lookup):
+        columns, rows = lookup(field)
+        if isinstance(value, float) and value == int(value):
+            value = int(value)
+        return any(self._matches(row[0], value) for row in rows)
+
+    def _pick(self, field, lookup, typed=''):
+        """Opens the LOOKUP list under the field. Fills the field with the first column of
+        the chosen row and returns that value, or returns None for Esc."""
+        columns, rows = lookup(field)
+        if not rows:
+            bell()
+            return None
+        typed = str(typed).strip().upper()
+        start = next((i for i, r in enumerate(rows) if typed and str(r[0]).upper().startswith(typed)), 0)
+        width = min(self.cols, max(24, 4 + sum(min(30, max(len(str(c)), max(len(str(r[i])) for r in rows))) + 3
+                                                for i, c in enumerate(columns))))
+        height = min(len(rows), 10) + 5
+        top = field.row + 1 if field.row + height <= self.rows else max(1, field.row - height)
+        left = max(1, min(field.col, self.cols - width + 1))
+        chosen = self.browse(columns, [list(r) for r in rows], (top, left, top + height - 1, left + width - 1),
+                             'Choose', start=start)
+        if chosen < 0:
+            return None
+        value = rows[chosen][0]
+        if isinstance(value, float) and value == int(value):
+            value = int(value)
+        field.buffer = field._initial_buffer('' if value is None else value)
+        self._draw_field(field)
+        return value
+
+    # --- ALERT ---------------------------------------------------------
+    def alert(self, message, buttons):
+        """A centred message box with buttons. Returns the chosen button (from 1), or 0 for Esc.
+        A ';' in the message starts a new line."""
+        buttons = [str(b) for b in buttons] or ['OK']
+        lines = str(message).split(';')
+        labels = [f' {b} ' for b in buttons]
+        bar = '  '.join(labels)
+        inner = min(self.cols - 2, max(max(len(line) for line in lines), len(bar), 16) + 4)
+        height = len(lines) + 4
+        top = max(1, (self.rows - height) // 2 + 1)
+        left = max(1, (self.cols - inner - 2) // 2 + 1)
+        bottom, right = top + height - 1, left + inner + 1
+        underneath = self.save(top, left, min(bottom, self.rows), min(right, self.cols))
+        self.box(top, left, bottom, right, double=True)
+        for n, line in enumerate(lines):
+            self._w(self._put(top + 1 + n, left + 1, line.strip()[:inner].center(inner), self.fg, self.bg))
+        choice = 0
+        self._w('\x1b[?25l')
+        try:
+            while True:
+                col = left + 1 + (inner - len(bar)) // 2
+                out = []
+                for n, label in enumerate(labels):
+                    fg, bg = (self.field_fg, self.field_bg) if n == choice else (self.fg, self.bg)
+                    out.append(self._put(bottom - 1, col, label, fg, bg))
+                    col += len(label) + 2
+                self._w(''.join(out) + self._normal())
+                key = self.keys.read_key()
+                if key is None:
+                    key = ESC
+                self.last_key = key
+                if key == ESC:
+                    return 0
+                if key == ENTER:
+                    return choice + 1
+                if key in ('RIGHT', TAB, 'DOWN'):
+                    choice = (choice + 1) % len(labels)
+                elif key in ('LEFT', 'BTAB', 'UP'):
+                    choice = (choice - 1) % len(labels)
+                elif len(key) == 1:
+                    hits = [n for n, b in enumerate(buttons) if b.strip()[:1].upper() == key.upper()]
+                    if hits:
+                        return hits[0] + 1
+        finally:
+            self.restore_saved(underneath)
+            self._w('\x1b[?25h')
 
     # --- MENU ----------------------------------------------------------
     def menu(self, row, col, items):
@@ -600,7 +735,7 @@ class Screen:
             self._w('\x1b[?25h')
 
     # --- BROWSE --------------------------------------------------------
-    def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None):
+    def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None, start=0):
         """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
 
         With save, the grid is editable: Left/Right move between cells, Enter (or typing)
@@ -633,6 +768,9 @@ class Screen:
         page = r2 - r1 - 4                     # rows between the header line and the status line
         inner = c2 - c1 - 1
         top, current, first_col, cur_col = 0, 0, 0, 0   # cur_col indexes visible[]
+        if 0 < start < len(rows):
+            current = start
+            top = max(0, start - (page - 1))
         message = ''
         underneath = self.save(r1, c1, r2, c2)
         self.box(r1, c1, r2, c2, title)
