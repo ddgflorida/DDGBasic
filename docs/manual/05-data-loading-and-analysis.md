@@ -1136,7 +1136,7 @@ Behaviour common to all four loops:
 |---|---|---|---|
 | `CSV` | A hash. Keys `"1"`, `"2"`, ... hold the field by position. With `header=true`, header-name keys are added too. | The **entire file is read into memory** before the first iteration. Comma delimiter only. | 1, 2, ... (data rows; a header row is not counted) |
 | `JSON` | A hash, converted as for `PARSEJSON`, with nested hashes and arrays. | The whole file is parsed. It must be an array of objects or a single object. An empty array skips the body. | 1, 2, ... |
-| `JSONL` | Each line parsed, converted as for `PARSEJSON`. | Streams one line at a time. Blank lines are skipped. An invalid line is skipped with a warning. | 1, 2, ... (records; blank and skipped lines are not counted) |
+| `JSONL` | Each line parsed, converted as for `PARSEJSON`. | Streams one line at a time. Blank lines are skipped. An invalid line is skipped with a warning. | the line number in the file (blank and skipped lines leave gaps) |
 | `TEXT` | A string, the line without its `CR`/`LF`. | Streams. Invalid bytes are replaced. Blank lines are included. | 1, 2, ... |
 
 **CSV loop details.** The `OPTIONS` text is only searched for the substring `header=true`, case-insensitively. Other keys are ignored, and the default is no header. Header names have every character other than `A-Z a-z 0-9 _` removed: `Product ID` becomes the key `ProductID`. Under `SET HASH_KEYS IGNORE_CASE`, they are also uppercased. Parentheses around the filename are optional, because they are simply a parenthesised expression.

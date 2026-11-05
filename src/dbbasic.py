@@ -10137,7 +10137,6 @@ class Interpreter:
 
         loop_body_start_index = self.token_index
         original_value = self.variables.get(loop_var_name)
-        row_number = 0
         try:
             with open(filename, 'r', encoding='utf-8') as infile:
                 # Iterate over each line in the JSONL file
@@ -10152,8 +10151,8 @@ class Interpreter:
                     except json.JSONDecodeError:
                         print(f"Warning: Skipping invalid JSON on line {line_number} of '{filename}'", file=sys.stderr)
                         continue
-                    row_number += 1
-                    self.variables['RECNO'] = float(row_number)
+                    # RECNO is the line number in the file, so it matches the warnings and an editor
+                    self.variables['RECNO'] = float(line_number)
                     
                     # Convert the Python dict to a DbBasic HASH
                     record_hash = self._python_to_basic_data(record)

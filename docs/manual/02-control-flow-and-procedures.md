@@ -328,7 +328,7 @@ FOR line$ IN TEXT(filename$) ... NEXT
 The file name must be in parentheses.
 
 - **JSON** reads the whole file. The top-level value must be an array; a single object is treated as an array of one. Each element is converted to DbBasic values (objects become HASHes and arrays become ARRAYs). JSON numbers stay numeric. `RECNO` counts from 1.
-- **JSONL** reads one JSON document per line and skips blank lines. A line that is not valid JSON is skipped with `Warning: Skipping invalid JSON on line N of 'file'` on stderr, and the loop continues, as `LOAD JSONL` does. Lines holding an array or a plain value are passed to the loop as they are; check `TYPENAME$(obj)` if the file may contain them. `RECNO` counts the records the loop receives, from 1; blank and skipped lines are not counted.
+- **JSONL** reads one JSON document per line and skips blank lines. A line that is not valid JSON is skipped with `Warning: Skipping invalid JSON on line N of 'file'` on stderr, and the loop continues, as `LOAD JSONL` does. Lines holding an array or a plain value are passed to the loop as they are; check `TYPENAME$(obj)` if the file may contain them. `RECNO` is the record's line number in the file, so blank and skipped lines leave gaps, and it matches the line numbers in the warnings.
 - **TEXT** returns each line without its trailing `\n` or `\r\n`. The file is read as UTF-8, and undecodable bytes are replaced rather than causing an error. `RECNO` counts from 1.
 - A missing file causes the error `File not found for JSON loop: ...` (or `JSONL`/`TEXT`). Malformed JSON in a `JSON` file causes `Invalid JSON ...`.
 
@@ -350,7 +350,7 @@ NEXT
  1 id= 1 tag=red
  2 id= 2 tag=blue
  1 id= 1 tag=red
- 2 id= 2 tag=blue
+ 3 id= 2 tag=blue
  1: first line
  2: second line
 ```
@@ -1473,7 +1473,7 @@ Each of the following was confirmed by running the interpreter.
 9. **`RUN` arguments** (fixed). They were converted with Python `str()`, so `42` arrived as `"42.0"`; they now arrive as `PRINT` shows them (`"42"`).
 10. **`END` inside a `RUN` child or an `EVAL` string** (fixed). `END` called `sys.exit`, so anywhere except a bare top-level `END` line it killed the whole process, including from a `RUN` child, the REPL or the web runner. It now stops just the running program (see 2.15).
 11. **`INCLUDE`** (fixed): it used to fail for every file that existed, because its marker lines began with `'`. See [1.4.1](01-language-fundamentals.md#141-include).
-12. **`RECNO` numbering** (fixed). In `FOR ... IN CSV` it started at 2 even without a header row, in `JSONL` it counted blank lines, and an inner loop deleted the outer loop's `RECNO`. It now counts records from 1 in every loop and is restored after a nested loop.
+12. **`RECNO` numbering** (fixed). In `FOR ... IN CSV` it started at 2 even without a header row, and an inner loop deleted the outer loop's `RECNO`. It now counts records from 1 and is restored after a nested loop. In `FOR ... IN JSONL` it is the line number in the file, so it matches the skipped-line warnings.
 13. **Exit status** (fixed): it was always 0, even after a runtime error; it is now 1 (see 2.17). `EXIT FUNCTION` outside a function still gives an empty `Runtime Error:` message.
 14. **`HELP` debug output** (fixed). `HELP` printed the raw token tuple, for example `('GOSUB', 'GOSUB', 5)`, before every entry.
 15. **`PRINT x;` followed by `:` or `ELSE`** (fixed). It was a syntax error (`Unexpected token in factor: COLON`), so `FOR i = 1 TO 3: PRINT i;: NEXT` failed. It now works, as do `PRINT: PRINT "x"` and `IF c THEN PRINT a; ELSE PRINT b`.
