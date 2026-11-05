@@ -28,6 +28,11 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TIMEOUT_SECONDS = 120
 
+# Scripts that need longer than TIMEOUT_SECONDS (large local data files).
+SLOW = {
+    'examples/npimonthly':      600,    # 100,000 rows of the NPPES file with constraint checks
+}
+
 # Scripts that need data files outside the repo; they run only where the file exists.
 NEEDS_FILE = {
     'tests/loadexcel':          r'c:\ddg\data\excel\example.xlsx',
@@ -167,10 +172,10 @@ def main():
                     cwd=run_dir,
                     input=STDIN.get(script, ''),
                     capture_output=True, encoding='utf-8', errors='replace',   # DbBasic writes UTF-8
-                    timeout=TIMEOUT_SECONDS)
+                    timeout=SLOW.get(script, TIMEOUT_SECONDS))
                 status, output = result.returncode, result.stdout + result.stderr
             except subprocess.TimeoutExpired:
-                status, output = None, f"(timed out after {TIMEOUT_SECONDS}s)"
+                status, output = None, f"(timed out after {SLOW.get(script, TIMEOUT_SECONDS)}s)"
             elapsed = time.time() - started
 
             expected = EXPECTED_EXIT.get(script, 0)

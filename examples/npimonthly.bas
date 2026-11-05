@@ -1,10 +1,10 @@
 REM ---
 REM DbBasic program to analyze the NPPES NPI Monthly Data file.
 REM This script uses the ANALYZE CSV command to generate a detailed
-REM statistical report on the first 10000 data records.
+REM statistical report on the first 100,000 data records.
 REM ---
 
-PRINT "--- Starting NPPES File Analysis (first 1000 records) ---"
+PRINT "--- Starting NPPES File Analysis (first 100,000 records) ---"
 PRINT
 
 REM --- Configuration ---
@@ -30,8 +30,9 @@ REM 5. Date fields must be in MM/DD/YYYY format (if not empty).
 constraints$ = constraints$ + "[Provider Enumeration Date]:ISDATE(MM/DD/YYYY);[Last Update Date]:ISDATE(MM/DD/YYYY)"
 
 REM --- Construct the Final OPTIONS String ---
-REM We combine the header setting with our constraints and a limit of 100,000.
-options$ = `header=true limit=9999999 constraints="` + constraints$ + `"`
+REM We combine the header setting with our constraints and a limit of 100,000 records.
+REM (The full file has millions of rows; raise the limit to analyze more of it.)
+options$ = `header=true limit=100000 constraints="` + constraints$ + `"`
 
 PRINT "Analyzing file: "; nppes_file$
 PRINT "Using options: "; options$
