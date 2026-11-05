@@ -24,7 +24,7 @@ Related material in other chapters:
 5. [HTTP: FETCH](#65-http-fetch)
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
 7. [Text screens](#67-text-screens)
-   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [ALERT()](#alert) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
+   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [@ ... SAY ... GET](#--say--get) · [READ](#read) · [ALERT()](#alert) · [MENUBAR$()](#menubar) · [MENU()](#menu) · [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen) · [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Keyboard and terminal](#keyboard-and-terminal)
 8. [TUI forms (archived)](#68-tui-forms-archived)
 9. [Implementation notes / discrepancies](#69-implementation-notes--discrepancies)
 
@@ -964,6 +964,42 @@ IF ALERT("Save changes?;They can't be undone.", "Yes", "No", "Cancel") = 1 THEN 
 ║   Yes    No    Cancel   ║
 ╚═════════════════════════╝
 ```
+
+### MENUBAR$()
+
+```
+choice$ = MENUBAR$([row,] "Title:item|item|...", "Title:item|...", ...)
+choice$ = MENUBAR$([row,] menus)                 REM an array of the same strings
+```
+
+`MENUBAR$` draws a menu bar across the screen, on row 1 unless `row` is given, with a pull-down menu under each title. Each argument is a title, a `:` and its items separated by `|`. An item `-` draws a separator line. A title with no items, such as `"Exit"`, is chosen directly.
+
+```basic
+DO
+    choice$ = MENUBAR$("File:Open|Save|-|Quit", "Customers:Browse|Add|Report", "Help:About")
+    IF choice$ = "Customers.Browse" THEN BROWSE "customers" EDIT
+    IF choice$ = "Help.About" THEN x = ALERT("Contacts 1.0")
+LOOP UNTIL choice$ = "File.Quit" OR choice$ = ""
+```
+
+```
+ File   Customers   Help
+       ┌────────┐
+       │ Browse │
+       │ Add    │
+       │ Report │
+       └────────┘
+```
+
+| Key | On the bar | In a pull-down |
+|---|---|---|
+| Left, Right | Move to the previous or next title. | Open the neighbouring menu. |
+| Enter, Down | Open the menu (or choose a title with no items). | Enter chooses the item; Down moves down. |
+| Up, Home, End | | Move; the separator is skipped. |
+| A letter | Opens the title starting with it. | Chooses the item starting with it. |
+| Esc | Return `""`. | Close the pull-down. |
+
+It returns `"Title.Item"`, using the text as written, so the program reads naturally and does not depend on the order of the items. A title chosen directly gives `"Title"`. The bar stays on the screen as part of the program's display. The pull-downs are removed, and what they covered is put back, along with the cursor.
 
 ### MENU()
 

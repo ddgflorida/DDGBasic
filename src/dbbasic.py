@@ -336,6 +336,11 @@ class HelpRegistry:
             "desc": "Shows a centred message box with buttons and puts the screen back afterwards. ';' in the message starts a new line. Left/Right move, Enter chooses, a button's first letter chooses it. Returns the button number from 1, or 0 for Esc. With no buttons there is one OK button.",
             "examples": ['IF ALERT("Delete this customer?", "No", "Yes") = 2 THEN DELETE FROM customers WHERE id = :id;', 'x = ALERT("Saved")']
         },
+        "MENUBAR$": {
+            "syntax": 'choice$ = MENUBAR$([row,] "Title:item|item|...", ...) | MENUBAR$([row,] menus_array)',
+            "desc": "Draws a menu bar (row 1 unless given) with a pull-down menu under each title. Items are separated by |; '-' is a separator; a title without items is chosen directly. Left/Right move between menus, Enter/Down open and choose, a first letter chooses. Returns \"Title.Item\" (or \"Title\"), or \"\" for Esc. The bar stays drawn; the pull-downs are removed.",
+            "examples": ['choice$ = MENUBAR$("File:Open|Save|-|Quit", "Customers:Browse|Add", "Help:About")\nIF choice$ = "File.Quit" THEN END']
+        },
         "MENU": {
             "syntax": 'choice = MENU(row, col, item1$, item2$, ... | items_array)',
             "desc": "Shows a boxed light-bar menu. Arrows move, Enter chooses, the first letter of an item chooses it directly. Returns the item number from 1, or 0 for Esc. What the menu covered is put back when it returns.",
@@ -2824,7 +2829,7 @@ class Interpreter:
         'HASH_VALUES', 'HEX$', 'HOUR', 'HTMLDECODE$', 'HTMLENCODE$', 'INSTR', 'INSTRREV',
         'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
         'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
-        'ALERT', 'INKEY$', 'LASTKEY$', 'MENU', 'SAVESCREEN',
+        'ALERT', 'INKEY$', 'LASTKEY$', 'MENU', 'MENUBAR$', 'SAVESCREEN',
         'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
         'OCT$', 'ORDINAL$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
         'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
@@ -4632,6 +4637,21 @@ class Interpreter:
         elif name == 'LASTKEY$':
             if args: self._error("LASTKEY$ takes no arguments.")
             return SCREEN.last_key
+        elif name == 'MENUBAR$':
+            args = list(args)
+            row = 1
+            if args and isinstance(args[0], (int, float)) and not isinstance(args[0], bool):
+                row = int(args.pop(0))
+            specs = args[0] if len(args) == 1 and isinstance(args[0], list) else args
+            if not specs: self._error("MENUBAR$ requires at least one menu, such as \"File:Open|Save|Quit\".")
+            menus = []
+            for spec in specs:
+                title, _, items = self._to_string(spec).partition(':')
+                menus.append((title.strip(), [i.strip() for i in items.split('|') if i.strip()] if items else []))
+            try:
+                return SCREEN.menubar(menus, row)
+            except ScreenError as e:
+                self._error(str(e))
         elif name == 'ALERT':
             if not args: self._error("ALERT requires a message, then optional button labels.")
             buttons = args[1] if len(args) == 2 and isinstance(args[1], list) else args[1:]

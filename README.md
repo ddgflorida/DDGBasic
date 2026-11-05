@@ -310,6 +310,7 @@ This document provides a quick reference to all available functions in the DbBas
 | MAP(array, fn)          | ARRAY/HOF   | Returns a new array with each element passed through fn (a UDF or built-in name). |
 | MAX(num1, num2, ...)    | MATH        | Returns the largest number from a list of arguments. |
 | MENU(row, col, item$, ...) | SCREEN   | Shows a light-bar menu and returns the chosen item number (0 for Esc). |
+| MENUBAR$([row,] "Title:item|...", ...) | SCREEN | Shows a menu bar with pull-down menus and returns "Title.Item" ("" for Esc). |
 | MID$(string$, start_pos, [length]) | STRING | Returns a substring of a specified length starting from start_pos. |
 | MIN(num1, num2, ...)    | MATH        | Returns the smallest number from a list of arguments. |
 | MOD(number1, number2)   | MATH        | Returns the remainder of number1 divided by number2. |

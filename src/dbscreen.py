@@ -646,6 +646,135 @@ class Screen:
         self._draw_field(field)
         return value
 
+    # --- MENUBAR -------------------------------------------------------
+    def menubar(self, menus, row=1):
+        """A menu bar across the screen with pull-down menus. menus is a list of
+        (title, [items]); an item '-' is a separator. Returns "Title.Item", "Title" for
+        a title with no items, or "" for Esc. The bar stays drawn; the pull-downs don't."""
+        if not menus:
+            raise ScreenError("MENUBAR needs at least one menu.")
+        positions, x = [], 2
+        for title, _ in menus:
+            positions.append(x)
+            x += len(title) + 3
+        current, opened, item = 0, False, 0
+        underneath = None
+        cursor = (self.cur_row, self.cur_col)   # put back afterwards, so PRINT carries on where it was
+
+        def selectable(items, i):
+            return items[i].strip() != '-'
+
+        def first_item(items):
+            return next((i for i in range(len(items)) if selectable(items, i)), 0)
+
+        def draw_bar():
+            out = [self._put(row, 1, ' ' * self.cols, self.field_fg, self.field_bg)]
+            for n, (title, _) in enumerate(menus):
+                fg, bg = (self.fg, self.bg) if n == current else (self.field_fg, self.field_bg)
+                out.append(self._put(row, positions[n] - 1, f' {title} ', fg, bg))
+            self._w(''.join(out) + self._normal())
+
+        def dropdown_area(n):
+            items = menus[n][1]
+            width = max(len(i) for i in items) + 2
+            left = max(1, min(positions[n] - 1, self.cols - width - 1))
+            return row + 1, left, row + 2 + len(items), left + width + 1
+
+        def draw_dropdown():
+            items = menus[current][1]
+            top, left, bottom, right = dropdown_area(current)
+            self.box(top, left, bottom, right)
+            width = right - left - 1
+            out = []
+            for n, text in enumerate(items):
+                if not selectable(items, n):
+                    out.append(self._put(top + 1 + n, left, '├' + '─' * width + '┤', self.fg, self.bg))
+                    continue
+                fg, bg = (self.field_fg, self.field_bg) if n == item else (self.fg, self.bg)
+                out.append(self._put(top + 1 + n, left + 1, (' ' + text).ljust(width), fg, bg))
+            self._w(''.join(out) + self._normal())
+
+        def open_menu():
+            nonlocal opened, item, underneath
+            close_menu()
+            if menus[current][1]:
+                underneath = self.save(*dropdown_area(current))
+                opened, item = True, first_item(menus[current][1])
+            else:
+                opened = False
+
+        def close_menu():
+            nonlocal opened, underneath
+            if underneath:
+                self.restore_saved(underneath)
+                underneath = None
+            opened = False
+
+        def move(items, i, direction):
+            for _ in range(len(items)):
+                i = (i + direction) % len(items)
+                if selectable(items, i):
+                    return i
+            return i
+
+        self._w('\x1b[?25l')
+        try:
+            while True:
+                draw_bar()
+                if opened:
+                    draw_dropdown()
+                key = self.keys.read_key()
+                if key is None:
+                    key = ESC
+                self.last_key = key
+                title, items = menus[current]
+                if not opened:
+                    if key == ESC:
+                        return ''
+                    if key in ('RIGHT', TAB):
+                        current = (current + 1) % len(menus)
+                    elif key in ('LEFT', 'BTAB'):
+                        current = (current - 1) % len(menus)
+                    elif key in (ENTER, 'DOWN'):
+                        if not items:
+                            return title
+                        open_menu()
+                    elif len(key) == 1:
+                        hits = [n for n, (t, _) in enumerate(menus) if t.strip()[:1].upper() == key.upper()]
+                        if hits:
+                            current = hits[0]
+                            if not menus[current][1]:
+                                return menus[current][0]
+                            open_menu()
+                    continue
+                if key == ESC:
+                    close_menu()
+                elif key == 'DOWN':
+                    item = move(items, item, 1)
+                elif key == 'UP':
+                    item = move(items, item, -1)
+                elif key == 'HOME':
+                    item = first_item(items)
+                elif key == 'END':
+                    item = move(items, 0, -1)
+                elif key in ('RIGHT', 'LEFT', TAB, 'BTAB'):
+                    current = (current + (1 if key in ('RIGHT', TAB) else -1)) % len(menus)
+                    open_menu()
+                elif key == ENTER:
+                    return f'{title}.{items[item].strip()}'
+                elif len(key) == 1:
+                    hits = [n for n, text in enumerate(items)
+                            if selectable(items, n) and text.strip()[:1].upper() == key.upper()]
+                    if hits:
+                        return f'{title}.{items[hits[0]].strip()}'
+        finally:
+            close_menu()
+            draw_bar_final = [self._put(row, 1, ' ' * self.cols, self.field_fg, self.field_bg)]
+            for n, (title, _) in enumerate(menus):
+                draw_bar_final.append(self._put(row, positions[n] - 1, f' {title} ', self.field_fg, self.field_bg))
+            self.cur_row, self.cur_col = cursor
+            self._w(''.join(draw_bar_final) + self._normal() + f'\x1b[{cursor[0]};{cursor[1]}H' + '\x1b[?25h')
+
     # --- ALERT ---------------------------------------------------------
     def alert(self, message, buttons):
         """A centred message box with buttons. Returns the chosen button (from 1), or 0 for Esc.
