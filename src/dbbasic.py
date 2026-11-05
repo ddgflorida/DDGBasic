@@ -9590,7 +9590,9 @@ class Interpreter:
         """
         Extractor for XML files. Serializes complex child elements into JSON strings.
         Requires a 'record_tag' option to identify the repeating elements for rows.
-        Headers are the child tags of the first record element found.
+        Columns are the record element's attributes (unless attributes=false), then its
+        child tags, taken from the first 'samplesize' records. An attribute with the same
+        name as a child tag becomes <name>_attr.
         """
         record_tag = options.get('record_tag')
         if not record_tag:
@@ -9607,6 +9609,8 @@ class Interpreter:
             # --- 1. Infer headers by sampling N records to find all possible columns ---
             seen_headers = set()
             ordered_headers = [] # Preserve order of discovery
+            with_attributes = str(options.get('attributes', 'true')).lower() not in ('false', '0', 'n', 'no')
+            seen_attributes, ordered_attributes = set(), []
             sample_size = int(options.get('samplesize', 1000))
             if int(options.get('limit', -1)) != -1:   # no need to look past the last record loaded
                 sample_size = min(sample_size, max(1, int(options.get('skip', 0)) + int(options.get('limit'))))
@@ -9617,6 +9621,12 @@ class Interpreter:
                 # Check if the element that just finished parsing is our record tag
                 if self._clean_tag(element.tag) == self._clean_tag(record_tag):
                     if records_sampled < sample_size:
+                        if with_attributes:
+                            for attribute in element.attrib:
+                                clean_attribute = self._clean_tag(attribute)
+                                if clean_attribute not in seen_attributes:
+                                    seen_attributes.add(clean_attribute)
+                                    ordered_attributes.append(clean_attribute)
                         for child in element:
                             clean_child_tag = self._clean_tag(child.tag)
                             if clean_child_tag not in seen_headers:
@@ -9632,7 +9642,9 @@ class Interpreter:
                         break
             
             headers = ordered_headers
-            yield {'type': 'headers', 'data': headers}
+            # Attribute columns first; one that clashes with a child tag is renamed name_attr
+            attribute_columns = [a + '_attr' if a in seen_headers else a for a in ordered_attributes]
+            yield {'type': 'headers', 'data': attribute_columns + headers}
 
             # --- 2. Stream the file again to yield data rows ---
             context = ET.iterparse(filename, events=('end',))
@@ -9651,8 +9663,9 @@ class Interpreter:
                     else:
                         # Build a dictionary of the current record's children for efficient lookup
                         current_record_children = {self._clean_tag(child.tag): child for child in element}
-                        
-                        data_row = []
+                        record_attributes = {self._clean_tag(k): v for k, v in element.attrib.items()}
+
+                        data_row = [record_attributes.get(a, "") for a in ordered_attributes]
                         for h in headers: # Iterate through the master list of all possible headers
                             child_element = current_record_children.get(h)
                             

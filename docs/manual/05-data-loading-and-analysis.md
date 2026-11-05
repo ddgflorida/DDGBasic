@@ -194,6 +194,7 @@ These are every key the `LOAD` extractors and pipeline read. Unknown keys are ig
 | `samplesize` | JSON, JSONL, XML | JSON: all records. JSONL and XML: `1000` | The number of records scanned to build the column list (the union of keys or child tags). |
 | `record_path` | JSON | none | A dot path to the array to load, for example `data.rows`. |
 | `record_tag` | XML | inferred | The repeating element that forms one row. |
+| `attributes` | XML | `true` | Load the attributes of the record element as columns. `attributes=false` loads only its child elements, as before. |
 | `element_type` | HTML | `TABLES` | `TABLES`, `LINKS` or `IMAGES` (case-insensitive). |
 | `table_index` | HTML | `0` | Which `<table>` to load (0-based). |
 | `source_url` | HTML | the filename | The value written into the `source` column. |
@@ -422,15 +423,15 @@ Warning: Skipping non-object JSON on line 5
 ### 5.5.6 LOAD XML
 
 ```
-LOAD XML file dest [OPTIONS "record_tag=name, samplesize=n, skip=n, limit=n, normalize=true"]
+LOAD XML file dest [OPTIONS "record_tag=name, attributes=true|false, samplesize=n, skip=n, limit=n, normalize=true"]
 ```
 
-Every element whose tag (with any namespace removed) equals `record_tag` becomes one row. Its **child elements** become columns, taken as the union of child tags from the first `samplesize` records.
+Every element whose tag (with any namespace removed) equals `record_tag` becomes one row. Its **attributes** and its **child elements** become columns, taken as the union of the names in the first `samplesize` records. The attribute columns come first.
 
 - A simple child becomes its text.
 - A child that has attributes or children of its own is converted to a dictionary and stored as JSON text. Attributes become `@name` keys and mixed text becomes `#text`.
 - A child that is missing from a record gives `""`.
-- **Attributes of the record element itself are not loaded.**
+- An attribute of the record element becomes a column of the same name, with any namespace prefix removed (`x:status` gives `status`). If a child element has the same name, the attribute column is called `name_attr`. `attributes=false` leaves attributes out.
 
 If `record_tag` is omitted, the extractor infers it. It picks the child tag that most dominates its parent and occurs at least twice, and prints `Notice: 'record_tag' not specified. Inferred '<tag>'.` The file is parsed in streaming mode, so large files are fine.
 
@@ -452,16 +453,16 @@ The source file is:
 ```
 Notice: 'record_tag' not specified. Inferred '<book>'.
 2 records loaded into table books
-+-------+---------+------------------------------------+------+
-| title | author  |               price                | year |
-+-------+---------+------------------------------------+------+
-| Dune  | Herbert | 9.99                               |      |
-| Emma  | Austen  | {"@currency": "GBP", "#text": 5.5} | 1815 |
-+-------+---------+------------------------------------+------+
++----+-------+---------+------------------------------------+------+
+| id | title | author  |               price                | year |
++----+-------+---------+------------------------------------+------+
+| b1 | Dune  | Herbert | 9.99                               | NULL |
+| b2 | Emma  | Austen  | {"@currency": "GBP", "#text": 5.5} | 1815 |
++----+-------+---------+------------------------------------+------+
 (2 rows returned)
 ```
 
-The `id` attribute on `<book>` is lost here. Use `normalize=true` ([5.12](#512-normalising-json-and-xml-into-related-tables)) if you need attributes.
+The `id` attribute of `<book>` is the first column. Use `normalize=true` ([5.12](#512-normalising-json-and-xml-into-related-tables)) to turn nested elements into related tables.
 
 ### 5.5.7 LOAD HTML
 
@@ -1808,7 +1809,7 @@ The following points were found while checking the source and running the exampl
 
 10. **`fields=` is ignored** for JSON, TEXT, XML, HTML and PARQUET (for FIXED it is the column layout). A warning is now printed: `Warning: the fields option is ignored by LOAD JSON.`
 11. **JSON values are inserted with their native types.** `NULL` is used for missing keys and booleans become 1/0. All other formats insert strings. Empty fields are stored as `NULL` unless `SET NULL_HANDLING` says otherwise (4.9.3).
-12. **XML record attributes are dropped** by the flat `LOAD XML`. Only child elements become columns.
+12. **XML record attributes** (fixed). The flat `LOAD XML` dropped the attributes of the record element, so `<book id="b1">` lost its `id`. They are now columns (the option `attributes=false` restores the old behaviour, for example for an `INTO TABLE` load into an existing table without those columns).
 13. **The XML `limit` option** (fixed). It stopped emitting rows but kept scanning to the end of the file; it now stops reading.
 14. **HTML `header=false`** (fixed). The header list stayed `['source']`, so every cell was dropped. Columns are now named `C1..Cn` after the widest row.
 15. **HTML `LINKS`** (fixed). It resolved `href` against the filename, so links in local files stayed relative. Links and images are now resolved against `base_url`, which defaults to `source_url`.
