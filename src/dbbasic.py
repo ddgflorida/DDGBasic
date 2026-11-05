@@ -322,9 +322,9 @@ class HelpRegistry:
             "examples": ['BOX 2, 5, 10, 60, "Customer" DOUBLE']
         },
         "@": {
-            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET var [PICTURE mask$] [VALID condition]]',
-            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field for a variable after the SAY text; READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left.",
-            "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 20, 1 SAY total PICTURE "$#,###.##"']
+            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition]]',
+            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left.",
+            "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Email: " GET rec.email PICTURE "@S40"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 20, 1 SAY total PICTURE "$#,###.##"']
         },
         "READ": {
             "syntax": 'READ',
@@ -4031,11 +4031,13 @@ class Interpreter:
             SCREEN.say(row, col, text)
             col += len(text)
         if keyword('GET'):
-            var_name = self._expect('ID')[1]
-            value = self._get_variable_value(var_name, auto_create=True)
+            target = self._parse_get_target()
+            var_name = self._get_target_name(target)
+            value = self._get_target_value(target)
             if isinstance(value, (list, dict)):
-                self._error(f"GET {var_name}: only simple variables can be edited.")
-            numeric = not var_name.endswith('$') and isinstance(value, (int, float))
+                self._error(f"GET {var_name}: a whole array or hash can't be edited; GET one of its fields.")
+            last = target[1][-1][1] if target[1] else target[0]
+            numeric = not str(last).endswith('$') and isinstance(value, (int, float)) and not isinstance(value, bool)
             picture = self._to_string(self._parse_expression()) if keyword('PICTURE') else None
             valid = None
             if keyword('VALID'):
@@ -4044,7 +4046,7 @@ class Interpreter:
                 while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
                     self._next_token()
             try:
-                SCREEN.add_get(row, col, var_name, value, picture, valid, numeric)
+                SCREEN.add_get(row, col, var_name, value, picture, valid, numeric, target)
             except ScreenError as e:
                 self._error(str(e))
         elif not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
@@ -4052,9 +4054,78 @@ class Interpreter:
         if not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
             self._error("Unexpected text after the @ statement")
 
+    def _parse_get_target(self):
+        """The variable after GET: name, a hash field (rec.name, rec.ship.city) or an
+        element (a(2), h("key")). Returns (name, [(kind, key), ...])."""
+        name = self._expect('ID')[1]
+        steps = []
+        while self._current_token() and self._current_token()[0] in ('DOT', 'LPAREN'):
+            if self._current_token()[0] == 'DOT':
+                self._next_token()
+                tok = self._current_token()
+                if not tok or tok[0] in self.INVALID_KEY_TOKENS:
+                    self._error("Expected a key name after '.'")
+                self._next_token()
+                steps.append(('dot', tok[1]))
+            else:
+                self._next_token()
+                key = self._parse_expression()
+                self._expect('RPAREN')
+                steps.append(('item', key))
+        return name, steps
+
+    def _get_target_name(self, target):
+        name, steps = target
+        for kind, key in steps:
+            name += f'.{key}' if kind == 'dot' else f'({self._to_string(key)})'
+        return name
+
+    def _get_target_slot(self, target):
+        """The (container, key) that holds a GET target's value. A missing hash is created,
+        as assignment does; a hash field is found the way rec.name reads it (case-insensitively)."""
+        name, steps = target
+        container, key = self.variables, name
+        for kind, step in steps:
+            value = container.get(key) if isinstance(container, dict) else container[key]
+            if not isinstance(value, (dict, list)):
+                if kind == 'item':
+                    self._error(f"'{self._get_target_name((name, []))}' is not an array or hash.")
+                value = {}
+                container[key] = value
+            if isinstance(value, list):
+                if kind == 'dot':
+                    self._error("Dot notation only for HASH.")
+                index = int(step)
+                if not 0 <= index < len(value):
+                    self._error("Array index out of bounds.")
+                container, key = value, index
+            elif kind == 'dot':
+                base = str(step).rstrip('$')
+                match = base if base in value else next((k for k in value if str(k).lower() == base.lower()), None)
+                container, key = value, match if match is not None else self._normalize_hash_key(base)
+            else:
+                container, key = value, self._normalize_hash_key(step)
+        return container, key
+
+    def _get_target_value(self, target):
+        if not target[1]:
+            return self._get_variable_value(target[0], auto_create=True)
+        container, key = self._get_target_slot(target)
+        if isinstance(container, list):
+            return container[key]
+        value = container.get(key)
+        return "" if value is None else value
+
+    def _set_target_value(self, target, value):
+        if not target[1]:
+            self.variables[target[0]] = value
+            return
+        container, key = self._get_target_slot(target)
+        container[key] = value
+
     def _run_read(self):
-        def assign(name, value):
-            self.variables[name] = value
+        def assign(field, value):
+            self._set_target_value(field.target, value)
 
         def check_valid(field):
             saved = (self.tokens, self.token_index)
@@ -4064,8 +4135,8 @@ class Interpreter:
             finally:
                 self.tokens, self.token_index = saved
 
-        def current_values(names):
-            return {n: self._get_variable_value(n, auto_create=True) for n in names}
+        def current_values(fields):
+            return [self._get_target_value(f.target) for f in fields]
 
         SCREEN.read(assign, check_valid, current_values)
 

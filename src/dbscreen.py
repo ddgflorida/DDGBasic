@@ -481,8 +481,9 @@ class Screen:
         self._w(''.join(out))
 
     # --- GET / READ ----------------------------------------------------
-    def add_get(self, row, col, var_name, value, picture, valid, numeric):
+    def add_get(self, row, col, var_name, value, picture, valid, numeric, target=None):
         field = Field(row, col, var_name, value, picture, valid, numeric)
+        field.target = target       # where READ stores the value (the interpreter's description)
         self.gets.append(field)
         self._draw_field(field)
         return field
@@ -494,13 +495,14 @@ class Screen:
         self._w(out + ('' if cursor is not None else self._normal()))
 
     def read(self, assign, check_valid, current_values):
-        """Edits the pending GET fields. assign(name, value) stores a value and
-        check_valid(field) evaluates its VALID condition. Esc puts back the
-        values the variables had when READ started. Returns the key that ended it."""
+        """Edits the pending GET fields. assign(field, value) stores a field's value,
+        check_valid(field) evaluates its VALID condition, and current_values(fields)
+        returns their values. Esc puts back the values they had when READ started.
+        Returns the key that ended it."""
         fields, self.gets = self.gets, []
         if not fields:
             return ''
-        saved = current_values([f.var_name for f in fields])
+        saved = current_values(fields)
         index, insert = 0, True
         pos = fields[0].first_pos()
         fresh = True        # the first key typed into a numeric field replaces its value
@@ -514,15 +516,14 @@ class Screen:
                     key = ESC
                 self.last_key = key
                 if key == ESC:
-                    for name, value in saved.items():
-                        assign(name, value)
-                    for f in fields:
-                        f.buffer = f._initial_buffer(saved[f.var_name])
+                    for f, value in zip(fields, saved):
+                        assign(f, value)
+                        f.buffer = f._initial_buffer(value)
                         self._draw_field(f)
                     return key
                 if key in (ENTER, TAB, 'DOWN', 'UP', 'BTAB', 'PGDN', 'PGUP', '\x17'):
                     try:
-                        assign(field.var_name, field.value())
+                        assign(field, field.value())
                     except ValueError:
                         bell()
                         continue

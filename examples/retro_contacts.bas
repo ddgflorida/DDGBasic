@@ -41,21 +41,20 @@ browse_contacts:
     RETURN
 
 add_contact:
-    name$ = "" : phone$ = "" : state$ = "" : credit = 0
+    c.name = "" : c.phone = "" : c.state = "" : c.credit = 0
     GOSUB entry_screen
     IF LASTKEY$ = CHR$(27) THEN RETURN
-    INSERT INTO contacts (name, phone, state, credit) VALUES (:name$, :phone$, :state$, :credit);
+    INSERT INTO contacts (name, phone, state, credit) VALUES (:c.name, :c.phone, :c.state, :c.credit);
     GOSUB saved_message
     RETURN
 
 edit_contact:
-    BROWSE (SELECT id, name, phone, state, credit FROM contacts ORDER BY name) AT 3, 4, 17, 75 TITLE "Pick a contact to edit" INTO picked
+    BROWSE (SELECT id, name, phone, state, credit FROM contacts ORDER BY name) AT 3, 4, 17, 75 TITLE "Pick a contact to edit" INTO c
     IF LASTKEY$ = CHR$(27) THEN RETURN
-    id = picked.id : name$ = picked.name : phone$ = picked.phone : state$ = picked.state : credit = picked.credit
     GOSUB draw_frame
     GOSUB entry_screen
     IF LASTKEY$ = CHR$(27) THEN RETURN
-    UPDATE contacts SET name = :name$, phone = :phone$, state = :state$, credit = :credit WHERE id = :id;
+    UPDATE contacts SET name = :c.name, phone = :c.phone, state = :c.state, credit = :c.credit WHERE id = :c.id;
     GOSUB saved_message
     RETURN
 
@@ -71,15 +70,16 @@ delete_contact:
     RETURN
 
 entry_screen:
+    REM The fields are edited straight in the record hash c
     BOX 5, 10, 13, 68, "Contact"
-    @ 7, 13 SAY "Name   : " GET name$ PICTURE "@!S30" VALID LEN(TRIM$(name$)) > 0
-    @ 8, 13 SAY "Phone  : " GET phone$ PICTURE "(999) 999-9999"
-    @ 9, 13 SAY "State  : " GET state$ PICTURE "!!"
-    @ 10, 13 SAY "Credit : " GET credit PICTURE "999999.99" VALID credit >= 0 AND credit <= 100000
+    @ 7, 13 SAY "Name   : " GET c.name   PICTURE "@!S30" VALID LEN(TRIM$(c.name)) > 0
+    @ 8, 13 SAY "Phone  : " GET c.phone  PICTURE "(999) 999-9999"
+    @ 9, 13 SAY "State  : " GET c.state  PICTURE "!!"
+    @ 10, 13 SAY "Credit : " GET c.credit PICTURE "999999.99" VALID c.credit >= 0 AND c.credit <= 100000
     READ
     RETURN
 
 saved_message:
-    @ 15, 13 SAY "Saved: " & name$
+    @ 15, 13 SAY "Saved: " & c.name
     k$ = INKEY$(1.5)
     RETURN

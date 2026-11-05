@@ -854,12 +854,29 @@ The colour numbers are those of QBasic:
 ### @ ... SAY ... GET
 
 ```
-@ row, col [SAY expr [PICTURE mask$]] [GET var [PICTURE mask$] [VALID condition]]
+@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition]]
 ```
 
 `SAY` writes the value of `expr` at the position. With `PICTURE`, the value is formatted as `FORMAT$(expr, mask$)` would format it: `@ 20, 1 SAY 1234.5 PICTURE "#,###.##"` shows `1,234.50`.
 
-`GET` puts an entry field for a variable straight after the `SAY` text, or at `col` if there is no `SAY`. It shows the variable's current value in the field colours. Nothing is edited until `READ`. Only simple variables can be edited, not array elements or hash fields. A variable whose name ends in `$`, or that holds a string, gets a text field; any other variable gets a numeric field.
+`GET` puts an entry field for a variable straight after the `SAY` text, or at `col` if there is no `SAY`. It shows the current value in the field colours. Nothing is edited until `READ`.
+
+The target can be a variable (`name$`, `qty`), a hash field (`rec.name`, `rec.ship.city`, `h("key")`) or an array element (`a(2)`). A hash field is found the way `rec.name` reads it, ignoring case, so `GET rec.name` edits the `NAME` column of a row from `FOR rec IN (SELECT ...)` or `BROWSE ... INTO rec`. A field that does not exist yet is created when `READ` stores it. A target whose name ends in `$`, or that holds a string, gets a text field; one that holds a number gets a numeric field. A whole array or hash can't be edited.
+
+Editing a record hash keeps a form short, because bind variables can name hash fields too:
+
+```basic
+FOR rec IN (SELECT * FROM contacts WHERE id = :id)
+    @ 5, 13 SAY "Last  : " GET rec.last_name PICTURE "@!S20"
+    @ 6, 13 SAY "Email : " GET rec.email     PICTURE "@S40"
+    READ
+    IF LASTKEY$ <> CHR$(27) THEN
+        UPDATE contacts SET last_name = :rec.last_name, email = :rec.email WHERE id = :id;
+    END IF
+NEXT
+```
+
+The `UPDATE` must start its own line: SQL is recognised only at the start of a line, so it can't follow `THEN` on the same line ([4.14](04-database-sql-and-output.md#414-implementation-notes--discrepancies), item 2).
 
 | `GET` picture | Meaning |
 |---|---|
@@ -881,7 +898,7 @@ For a numeric field, a template only sets the width. The value is typed as a num
 | Enter, Tab, Down | Next field. On the last field, Enter, Tab or Down ends `READ`. |
 | Shift-Tab, Up | Previous field. |
 | PgDn, PgUp, Ctrl-W | End `READ`. |
-| Esc | End `READ` and put back the values every variable had when `READ` started. |
+| Esc | End `READ` and put back the values every field had when `READ` started. |
 | Left, Right, Home, End | Move within the field. |
 | Backspace, Del | Delete. |
 | Ins | Switch between insert mode (the default) and overwrite mode. |
@@ -1025,7 +1042,7 @@ These were found while checking the source against behaviour. Line numbers refer
 18. **`SHELL` without `INTO`** writes directly to the process's stdout, bypassing `SET OUTPUT`.
 19. **Text screens are a prototype** (6.7, new). Known limits:
     - `SAVESCREEN` and `RESTSCREEN` (added) work from DbBasic's own copy of the screen, which does not include query tables, `SHELL` output or error messages;
-    - `GET` edits simple variables only, not array elements or hash fields;
+    - (added) `GET` edits hash fields and array elements as well as variables;
     - a numeric field's `PICTURE` sets only its width;
     - `BROWSE` reads every row into memory; `BROWSE ... EDIT` (added) updates cells but can't add or delete rows;
     - the Windows key handling has not been tested;

@@ -153,7 +153,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
-| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field for a variable (`GET`) with an optional `PICTURE` mask and `VALID` check. See `READ`. |
+| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field (`GET`) for a variable, a hash field such as `rec.name`, or an array element, with an optional `PICTURE` mask and `VALID` check. See `READ`. |
 | ANALYZE CSV             | Provides a detailed statistical report on a CSV file, including delimiter detection, header presence, and column data types. |
 | ANALYZE FIXED           | Analyzes a fixed-width text file, automatically guessing column breaks if not specified, and reports on the layout. |
 | ANALYZE JSON            | Analyzes a JSON file, reporting on its structure, record count, and the consistency of object keys. |
