@@ -1739,7 +1739,7 @@ class Screen:
     # --- BROWSE --------------------------------------------------------
     def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None,
                start=0, frozen=0, formats=None, color_col=None, shadow=False,
-               on_move=None, switch=False, keep=False, draw_only=False, bar=True, state=None):
+               on_move=None, switch=False, keep=False, draw_only=False, bar=True, state=None, keys_hint=None):
         """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
 
         With save, the grid is editable: Left/Right move between cells, Enter (or typing)
@@ -1762,7 +1762,9 @@ class Screen:
         current row changes; with switch, F6 (and Tab when not editing) or a click outside the
         grid ends it with last_key set to that key; keep leaves the grid drawn instead of
         putting back what it covered; draw_only draws it and returns; bar=False draws no bar;
-        state, a dict, keeps the position and sort between turns."""
+        state, a dict, keeps the position and sort between turns. keys_hint replaces
+        "Enter=select  Esc=cancel" on the status line; 'back' marks a detail grid, whose Esc
+        goes back to the master."""
         screen_rows, screen_cols = self.size()
         r1, c1, r2, c2 = area or (1, 1, screen_rows, screen_cols)
         if r2 - r1 < 4 or c2 - c1 < 10:
@@ -2018,9 +2020,12 @@ class Screen:
                     extra = ('  Ins=add' if add else '') + ('  Del=delete' if delete else '')
                     status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=edit{extra}  F3=sort  Esc=done'
                 else:
-                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns  F3=sort'
+                    hint = 'Enter=back  Esc=back' if keys_hint == 'back' else keys_hint or 'Enter=select  Esc=cancel'
+                    status = f' {current + 1 if cells else 0} of {len(cells)}   {hint}  ←→=columns  F3=sort'
                 if switch and not message and not typed:
                     status = status.replace('  F3=sort', '  F3=sort  ' + ('F6' if save else 'Tab') + '=switch')
+                    if keys_hint == 'back':        # a detail grid: Esc (and Enter) go back to the master
+                        status = status.replace('Esc=done', 'Esc=back')
                 message = ''
                 out.append(self._put(r2 - 1, c1 + 1, status[:inner].ljust(inner), self.fg, self.bg))
                 self._w(''.join(out) + self._normal())

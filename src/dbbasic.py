@@ -355,7 +355,7 @@ class HelpRegistry:
         },
         "BROWSE": {
             "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [INTO var] [DETAIL (SELECT ... WHERE col = :var.col) [EDIT [KEY key$]] [TITLE t$] ...]',
-            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown. DETAIL adds a second grid below for the rows of the master's current row (INTO var holds it, so the DETAIL query uses :var.col); Tab (F6 in an EDIT grid) or a click switches grids, and lines added with Ins are linked to the master row.",
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown. DETAIL adds a second grid below for the rows of the master's current row (INTO var holds it, so the DETAIL query uses :var.col); Enter or Tab on the master (F6 in an EDIT grid) or a click goes to the detail, Esc goes back, Esc on the master ends with INTO holding its current row, and lines added with Ins are linked to the master row.",
             "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"', 'BROWSE (SELECT name, city, balance, CASE WHEN balance < 0 THEN 12 END AS shade FROM customers) FREEZE 1 FORMAT balance "#,##0.00" COLOR "shade"', 'BROWSE (SELECT id, customer FROM orders) INTO o DETAIL (SELECT * FROM order_lines WHERE order_id = :o.id) EDIT KEY "line_id"']
         },
         "EDIT": {
@@ -4617,9 +4617,10 @@ class Interpreter:
 
     def _browse_master_detail(self, spec, grid, detail):
         """BROWSE ... DETAIL: the master grid on top, the detail grid under it. Moving the
-        master's bar puts its row in INTO var and runs the DETAIL query again. Tab (F6 in an
-        EDIT grid) or a click switches grids; Esc or Enter in the detail grid goes back to the
-        master. Returns the master row chosen with Enter, or -1."""
+        master's bar puts its row in INTO var and runs the DETAIL query again. Enter on the
+        master (when it isn't an EDIT grid), Tab (F6 in an EDIT grid) or a click goes to the
+        detail grid; Esc, Tab/F6 or Enter there goes back. Esc on the master ends, returning
+        the row its bar is on (-1 if it has none)."""
         into = spec['into']
         screen_rows, screen_cols = SCREEN.size()
         r1, c1, r2, c2 = spec['area'] or (1, 1, screen_rows, screen_cols)
@@ -4632,10 +4633,17 @@ class Interpreter:
         links = re.findall(r'(?i)([A-Za-z_][\w.]*)\s*=\s*:' + re.escape(into) + r'\.([A-Za-z_]\w*)', detail['sql'])
         state_master, state_detail = {}, {}
         current_detail = {}
+        name = (detail['title'] or 'detail').strip()
+        master_hint = f"Enter={(name if len(name) <= 12 else 'detail').lower()}  Esc=done"
 
         def show_detail(index):
             record = self._browse_record(grid, index)
             self.variables[into] = record
+            if not record:                    # no master row: nothing to show the details of
+                current_detail['grid'] = None
+                state_detail.clear()
+                draw_detail()
+                return
             fixed = {column.split('.')[-1]: record.get(field.upper()) for column, field in links} if record else {}
             current_detail['grid'] = self._browse_grid(detail, fixed)
             state_detail.clear()
@@ -4643,8 +4651,11 @@ class Interpreter:
 
         def draw_detail():
             g = current_detail['grid']
+            if g is None:
+                SCREEN.box(*detail_area, detail['title'])
+                return
             SCREEN.browse(g['columns'], g['rows'], detail_area, detail['title'], draw_only=True, bar=False,
-                          switch=True, state=state_detail, **g['options'])
+                          switch=True, state=state_detail, keys_hint='back', **g['options'])
 
         def inside(area):
             a1, b1, a2, b2 = area
@@ -4654,15 +4665,19 @@ class Interpreter:
         try:
             while True:
                 chosen = SCREEN.browse(grid['columns'], grid['rows'], master_area, spec['title'], on_move=show_detail,
-                                       switch=True, keep=True, state=state_master, **grid['options'])
+                                       switch=True, keep=True, state=state_master,
+                                       keys_hint=None if grid['options']['save'] else master_hint, **grid['options'])
                 key = SCREEN.last_key
-                if key not in ('F6', '\t', 'CLICK'):
-                    return chosen if key == '\r' else -1
+                if key not in ('F6', '\t', 'CLICK', '\r'):
+                    # Esc: the screen is done; INTO gets the row the bar is on
+                    return state_master.get('current', -1) if len(grid['rows']) else -1
                 if key == 'CLICK' and not inside(detail_area):
                     continue
                 g = current_detail['grid']
+                if g is None:                          # no master row, so no detail grid to go to
+                    continue
                 SCREEN.browse(g['columns'], g['rows'], detail_area, detail['title'], switch=True, keep=True,
-                              state=state_detail, **g['options'])
+                              state=state_detail, keys_hint='back', **g['options'])
                 draw_detail()                          # without its bar while the master has the keys
                 if detail['edit']:
                     # The lines may have changed what the master shows (a total): fetch it again

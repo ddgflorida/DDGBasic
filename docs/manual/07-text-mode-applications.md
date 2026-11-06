@@ -682,7 +682,7 @@ BROWSE (SELECT id, customer, placed FROM orders ORDER BY id) INTO o TITLE "Order
 │ 3  │ Initech   │ 2026-02-01                                                  │
 │ 4  │ Hooli     │ 2026-02-11                                                  │
 │                                                                              │
-│ 3 of 4   Enter=select  Esc=cancel  ←→=columns  F3=sort  Tab=switch           │
+│ 3 of 4   Enter=lines  Esc=done  ←→=columns  F3=sort  Tab=switch              │
 └──────────────────────────────────────────────────────────────────────────────┘
 ┌─────────────────────────────────── Lines ────────────────────────────────────┐
 │ line_id │ product  │ qty │ price │ total                                     │
@@ -694,7 +694,7 @@ BROWSE (SELECT id, customer, placed FROM orders ORDER BY id) INTO o TITLE "Order
 ```
 
 - **Layout.** The `AT` area (the whole screen without it) is split: the master gets a little under half, the detail the rest. The area must be at least 12 rows high. `AT` and `INTO` belong to the master, before `DETAIL`; the other clauses can be given to each grid.
-- **Keys.** The master has the keys first. Tab goes to the detail grid and back; in an `EDIT` grid, where Tab moves between cells, F6 does it. A click on the other grid switches too. Esc (or Enter, without `EDIT`) in the detail grid goes back to the master. Enter on the master chooses its row, as in a plain `BROWSE`, and Esc there ends with an empty hash.
+- **Keys.** The master has the keys first. Enter on it (or Tab) goes to the detail grid; in an `EDIT` grid, where Enter edits and Tab moves between cells, F6 does it. A click on the other grid switches too. In the detail grid, Esc, Tab/F6 or (without `EDIT`) Enter goes back to the master. Esc on the master ends the screen, and `INTO var` keeps the row its bar is on, so the program knows which one the user was looking at (`LASTKEY$` is Esc; a master with no rows gives an empty hash). Unlike a plain `BROWSE`, a master-detail screen is for working through rows, not for picking one.
 - **Editing.** Either grid can have `EDIT`. A line added with Ins in the detail grid is linked to the master row: for each `column = :var.field` in the `DETAIL` query, the new row gets the master's value, and the form doesn't ask for it. When the keys come back from an `EDIT` detail grid, the master is fetched again, so a total it shows stays current.
 - A column worked out by the query (`qty * price AS total`) is shown but can't be edited, in any `BROWSE ... EDIT`, and the Ins form leaves it out.
 
