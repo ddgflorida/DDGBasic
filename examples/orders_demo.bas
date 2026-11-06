@@ -3,6 +3,7 @@ REM under the bar are shown below and follow it as it moves. Enter (or Tab) goes
 REM lines, where Enter edits a cell, Ins adds a line (its order_id is filled in) and Del
 REM deletes one; F6 or Esc goes back to the orders. Esc on the orders ends.
 REM Open orders are green and cancelled ones red: the colour comes from the query (COLOR).
+REM Business rule: only the lines of an open order can be changed (EDIT WHEN ... MESSAGE).
 DATABASE OPEN ":memory:"
 CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, placed TEXT, status TEXT);
 CREATE TABLE order_lines (line_id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(id),
@@ -22,7 +23,8 @@ BROWSE (SELECT o.id, o.customer, o.placed, o.status,
     FORMAT amount "#,##0.00" COLOR "shade" _
     DETAIL (SELECT line_id, product, qty, price, qty * price AS total
               FROM order_lines WHERE order_id = :o.id ORDER BY line_id) _
-    EDIT KEY "line_id" TITLE "Lines" FORMAT price "#,##0.00", total "#,##0.00"
+    EDIT KEY "line_id" WHEN o.status = "open" MESSAGE "Shipped and cancelled orders can't be changed" _
+    TITLE "Lines" FORMAT price "#,##0.00", total "#,##0.00"
 
 COLOR 7, 0
 CLS
@@ -31,4 +33,5 @@ IF HASH_COUNT(o) = 0 THEN
 ELSE
     PRINT "Last order:"; o.id; " for "; o.customer; ":"; (SELECT COUNT(*) FROM order_lines WHERE order_id = :o.id); " lines, total "; TRIM$(FORMAT$((SELECT SUM(qty * price) FROM order_lines WHERE order_id = :o.id), "$#,##0.00"))
 END IF
+REM EXPECT: Shipped and cancelled orders can't be changed
 REM EXPECT: Last order: 3 for Initech: 4 lines, total $54.45

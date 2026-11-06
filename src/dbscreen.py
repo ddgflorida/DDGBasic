@@ -1740,7 +1740,7 @@ class Screen:
     def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None,
                start=0, frozen=0, formats=None, color_col=None, shadow=False,
                on_move=None, switch=False, keep=False, draw_only=False, bar=True, state=None, keys_hint=None,
-               exit_keys=()):
+               exit_keys=(), can_edit=None):
         """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
 
         With save, the grid is editable: Left/Right move between cells, Enter (or typing)
@@ -1766,7 +1766,9 @@ class Screen:
         state, a dict, keeps the position and sort between turns. keys_hint replaces
         "Enter=select  Esc=cancel" on the status line; 'back' marks a detail grid, whose Esc
         goes back to the master. A key in exit_keys (EXIT ON) ends the grid, returning the
-        current row, with last_key set to it, so the program can act on it."""
+        current row, with last_key set to it, so the program can act on it. can_edit()
+        (EDIT WHEN), asked once as the grid is shown, returns None or why the rows can't be
+        changed now: editing, Ins and Del are then refused with that message."""
         screen_rows, screen_cols = self.size()
         r1, c1, r2, c2 = area or (1, 1, screen_rows, screen_cols)
         if r2 - r1 < 4 or c2 - c1 < 10:
@@ -1837,6 +1839,7 @@ class Screen:
             cur_col, first_col = state.get('cur_col', 0), state.get('first_col', frozen)
             current = max(0, min(current, len(rows) - 1))
         notified = None                        # the row on_move last heard about
+        refusal = can_edit() if (save and can_edit) else None   # EDIT WHEN: why the rows are read-only
         message = ''
         if keep or draw_only:
             underneath = None
@@ -2018,6 +2021,8 @@ class Screen:
                     status = ' ' + message
                 elif typed:
                     status = f' {current + 1 if cells else 0} of {len(cells)}   Find: {typed}'
+                elif save and refusal:
+                    status = f' {current + 1 if cells else 0} of {len(cells)}   {refusal}  F3=sort  Esc=done'
                 elif save:
                     extra = ('  Ins=add' if add else '') + ('  Del=delete' if delete else '')
                     status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=edit{extra}  F3=sort  Esc=done'
@@ -2094,6 +2099,10 @@ class Screen:
                     return -1
                 if key == 'F3':
                     sort_by(visible[cur_col] if save else visible[first_col if first_col < len(visible) else 0])
+                    continue
+                if refusal and (key in ('INS', 'DEL', ENTER, 'F2') or (len(key) == 1 and key.isprintable())):
+                    bell()                     # EDIT WHEN: these rows can't be changed now
+                    message = refusal
                     continue
                 if save and add and key == 'INS':
                     new_index = add()

@@ -12,7 +12,7 @@ Example programs in `examples/`, each short enough to read in a minute:
 | `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
 | `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows, with sorting, type-ahead, `FREEZE`, `FORMAT` and row colours (`COLOR`) |
 | `invoice_demo.bas` | A traditional invoice screen on the Chinook database: the header as a form, the lines as a grid, PgUp/PgDn between invoices, F2 find, F4 edit the header, Ins add a track (`BROWSE ... EXIT ON`) |
-| `orders_demo.bas` | A master-detail screen: orders on top, their lines below (`BROWSE ... DETAIL`), editable, with totals that follow |
+| `orders_demo.bas` | A master-detail screen: orders on top, their lines below (`BROWSE ... DETAIL`), editable only for open orders (`EDIT WHEN`), with totals that follow |
 | `themes_demo.bas` | The same form in each `SET THEME` colour scheme |
 | `progress_demo.bas` | A `PROGRESS` bar while a table loads, a `MENU` longer than the screen that scrolls, and drop shadows |
 | `report_demo.bas` | `REPORT` with nested groups and totals, on the screen, in the viewer and in a paged file |
@@ -627,9 +627,10 @@ IF ALERT("Save changes?;They can't be undone.", "Yes", "No", "Cancel") = 1 THEN 
 ### BROWSE
 
 ```
-BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE title$]
+BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$] [WHEN condition [MESSAGE text$]]]
+        [AT top, left, bottom, right] [TITLE title$]
         [FREEZE n] [FORMAT column mask$, ...] [COLOR column$] [EXIT ON keys$] [INTO var]
-        [DETAIL (SELECT ... WHERE column = :var.column) [EDIT [KEY key$]] [TITLE title$]
+        [DETAIL (SELECT ... WHERE column = :var.column) [EDIT [KEY key$] [WHEN condition [MESSAGE text$]]] [TITLE title$]
                 [FREEZE n] [FORMAT column mask$, ...] [COLOR column$]]
 ```
 
@@ -664,6 +665,16 @@ BROWSE (SELECT name, city, phone, email, balance,
 ```
 
 This is after scrolling right past `city`, `phone` and `email` and clicking the `balance` heading.
+
+**Business rules: EDIT WHEN.** `EDIT WHEN condition` lets the rows be changed only while the condition is true, the way `WHEN` switches a `GET` field on and off. It is checked each time the grid is shown, and for a `DETAIL` grid each time the master's bar moves, so it can look at the master row. When it is false, the rows can still be read, scrolled and sorted, but Enter, typing, Ins and Del beep and show the `MESSAGE` (or `These rows can't be changed.`), and the status line shows it in place of `Enter=edit  Ins=add  Del=delete`:
+
+```basic
+BROWSE (SELECT id, customer, status FROM orders ORDER BY id) INTO o _
+    DETAIL (SELECT line_id, product, qty, price FROM order_lines WHERE order_id = :o.id) _
+    EDIT KEY "line_id" WHEN o.status = "open" MESSAGE "Shipped and cancelled orders can't be changed"
+```
+
+The rule lives in the program, next to the screen it governs. A database can enforce the same rule as well (a `CHECK` constraint or, in SQLite, a trigger), as a second line of defence for changes made outside the program; `BROWSE` shows such a refusal as `Not saved: ...`.
 
 **Keys for the program: EXIT ON.** `EXIT ON "PgUp,PgDn,F2"` makes those keys end `BROWSE`, wherever the bar is, and `LASTKEY$` says which one it was (`"PGUP"`, `"PGDN"`, `"F2"`), so the program can act on it and show the grid again. The key names are those of `ON KEY`. A listed key no longer does its own job in the grid: with `EXIT ON "Ins"`, Ins is the program's to handle (to add a row its own way, say), not the grid's.
 

@@ -77,7 +77,7 @@ STDIN = {
     'examples/progress_demo': '\x1b[F\r\r',
     'examples/themes_demo': 'ag\x1b',   # Amber, Green, Esc
     'examples/invoice_demo': '\x1b[6~\x1b[6~\x1b[5~\x1bOQgon\r\x1b[2~smells\r\x1b[F\x1b[C\x1b[C3\r\x1bOS\t\t\t\x19Testville\x1b[6~\x1b',   # F2 find, Ins track, qty, F4 city
-    'examples/orders_demo': '\x1b[B\x1b[B\r\x1b[C\x1b[C5\r\x1b[2~\tBolt\t4\t0.5\r\x1b\x1b',   # Enter on order 3: edit a qty, add a line; Esc, Esc
+    'examples/orders_demo': '\r5\x1b[2~\x1b' '\x1b[B\x1b[B\r\x1b[C\x1b[C5\r\x1b[2~\tBolt\t4\t0.5\r\x1b\x1b',   # Enter on order 3: edit a qty, add a line; Esc, Esc
     'examples/contact': 'Ann Lee\r5551234567\rann@example.com\rn\r \r\r',   # State NY, Active off, Save
     'examples/report_demo': 'q',
     'examples/notes_demo': '\x1b[B\x1b[B\x1b[F\r- book a room\x17/acme\rqq',
@@ -101,6 +101,7 @@ STDIN = {
                         'ce\x1b[B\r' + '\t' * 7 + '9\r\r' 'cd\ry' 'fq'),
     'tests/browse_detail': ('\x1b[B\x1b[B\t\x1b[C\x1b[C5\r\x1b[C\x1b[C\r\x1b[2~9\tBolt\t4\t0.5\r\x1b\x1b[A\x1b'
                             '\x1b[B\r\x1b\x1b[A\t\t\x1b' '\x1b') * 2,
+    'tests/browse_edit_when': '\r\x1b[C9\r\x1b[3~y\x1b[2~\x1b' '\x1b[B\r\x1b[C9\r\x1b\x1b' '7\r\x1b',
     'tests/browse_power': ('\x1bOR\x1bOR\r' '\x1b[C\x1bORc\r' 'b\r' 'a\x08d\r' '\x1b[C\x1bORc11234\r' '\x1b[C\x1bORc1123\r' '\x1b[C\x1bOR\x1bOR\r\x19Zed\r\x1b' '\x1b[2~9\tEve\r\x1b') * 2,   # SQLite, then DuckDB
     'tests/browse_edit': '\x1b[C\r\x19Apricot\r\x1b[C7\r-1\r\x1b[B\x1b[C\r\x19\r\x1b[D\x1b[DBanana2\t\x1b' '\r\x1b[CCherry\r\x1b' * 2,   # SQLite, then DuckDB
     'tests/edit_record': ('\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'     # SQLite

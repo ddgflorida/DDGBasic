@@ -354,8 +354,8 @@ class HelpRegistry:
             "examples": ['choice = MENU(5, 10, "Add", "Edit", "Quit")']
         },
         "BROWSE": {
-            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [EXIT ON keys$] [INTO var] [DETAIL (SELECT ... WHERE col = :var.col) [EDIT [KEY key$]] [TITLE t$] ...]',
-            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown. DETAIL adds a second grid below for the rows of the master's current row (INTO var holds it, so the DETAIL query uses :var.col); Enter or Tab on the master (F6 in an EDIT grid) or a click goes to the detail, Esc goes back, Esc on the master ends with INTO holding its current row, and lines added with Ins are linked to the master row. EXIT ON \"PgUp,PgDn,F2\" makes those keys end BROWSE so the program can handle them (LASTKEY$ says which).",
+            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$] [WHEN condition [MESSAGE text$]]] [AT top, left, bottom, right] [TITLE t$] [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [EXIT ON keys$] [INTO var] [DETAIL (SELECT ... WHERE col = :var.col) [EDIT [KEY key$]] [TITLE t$] ...]',
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown. DETAIL adds a second grid below for the rows of the master's current row (INTO var holds it, so the DETAIL query uses :var.col); Enter or Tab on the master (F6 in an EDIT grid) or a click goes to the detail, Esc goes back, Esc on the master ends with INTO holding its current row, and lines added with Ins are linked to the master row. EXIT ON \"PgUp,PgDn,F2\" makes those keys end BROWSE so the program can handle them (LASTKEY$ says which). EDIT WHEN condition [MESSAGE text$] allows changes only while the condition holds (checked as the grid is shown, per master row for DETAIL).",
             "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"', 'BROWSE (SELECT name, city, balance, CASE WHEN balance < 0 THEN 12 END AS shade FROM customers) FREEZE 1 FORMAT balance "#,##0.00" COLOR "shade"', 'BROWSE (SELECT id, customer FROM orders) INTO o DETAIL (SELECT * FROM order_lines WHERE order_id = :o.id) EDIT KEY "line_id"']
         },
         "EDIT": {
@@ -4102,10 +4102,18 @@ class Interpreter:
         i = self.token_index + 1
         if i < len(self.tokens) and self.tokens[i][0] in ('ASSIGN', 'DOT'):
             return False
-        while i < len(self.tokens) and self.tokens[i][0] not in ('NEWLINE', 'COLON'):
-            if self.tokens[i][0] == 'ASSIGN':
-                return False            # color(2) = 5 assigns an array element
-            i += 1
+        if i < len(self.tokens) and self.tokens[i][0] == 'LPAREN':
+            # color(2) = 5 assigns an array element: an = straight after the brackets. An = later
+            # on (BROWSE (...) EDIT WHEN o.status = "open") belongs to the statement.
+            depth = 0
+            while i < len(self.tokens) and self.tokens[i][0] not in ('NEWLINE', 'COLON'):
+                if self.tokens[i][0] == 'LPAREN':
+                    depth += 1
+                elif self.tokens[i][0] == 'RPAREN':
+                    depth -= 1
+                    if depth == 0:
+                        return not (i + 1 < len(self.tokens) and self.tokens[i + 1][0] == 'ASSIGN')
+                i += 1
         return True
 
     def _screen_ints(self, count, optional=0):
@@ -4369,16 +4377,22 @@ class Interpreter:
 
     GET_CLAUSE_WORDS = ('PICTURE', 'VALID', 'MESSAGE', 'WHEN', 'LOOKUP', 'CHECKBOX', 'LIST', 'HINT')
 
-    def _skip_get_condition(self):
+    # The clause words that end an EDIT WHEN condition of BROWSE
+    BROWSE_CLAUSE_WORDS = ('MESSAGE', 'TITLE', 'FORMAT', 'COLOR', 'EXIT', 'DETAIL', 'AT', 'INTO', 'FREEZE',
+                           'KEY', 'EDIT')
+
+    def _skip_get_condition(self, clause_words=None):
         """Remembers where a VALID or WHEN condition starts and moves past it. The condition
         ends at the end of the statement, or at a clause word (MESSAGE, WHEN, ...) that follows
-        a complete operand, so VALID x > 0 MESSAGE "..." works and VALID message <> "" too."""
+        a complete operand, so VALID x > 0 MESSAGE "..." works and VALID message <> "" too.
+        clause_words defaults to those of GET."""
+        words = clause_words or self.GET_CLAUSE_WORDS
         start = (self.tokens, self.token_index)
         previous = None
         while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
             tok = self._current_token()
             if (previous is not None and previous[0] in ('ID', 'NUMBER', 'STRING', 'RPAREN', 'RBRACKET')
-                    and tok[0] == 'ID' and tok[1].upper() in self.GET_CLAUSE_WORDS):
+                    and tok[0] not in ('STRING', 'NUMBER') and str(tok[1]).upper() in words):
                 break
             previous = tok
             self._next_token()
@@ -4461,7 +4475,7 @@ class Interpreter:
                 table = source
                 sql = f"SELECT * FROM {self._quote_identifier(source)}"
         spec = dict(sql=sql, table=table, area=None, title='', into=None, edit=False, key=None,
-                    frozen=0, formats={}, color=None, exit_keys=())
+                    frozen=0, formats={}, color=None, exit_keys=(), edit_when=None, edit_message='')
         while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
             tok = self._current_token()
             word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
@@ -4479,6 +4493,14 @@ class Interpreter:
             elif word == 'KEY':
                 self._next_token()
                 spec['key'] = self._to_string(self._parse_expression())
+            elif word == 'WHEN':
+                # EDIT WHEN condition: the rows can be changed only while it is true. It is
+                # checked each time the grid is shown (for a DETAIL grid, for each master row).
+                self._next_token()
+                spec['edit_when'] = self._skip_get_condition(self.BROWSE_CLAUSE_WORDS)
+            elif word == 'MESSAGE':
+                self._next_token()
+                spec['edit_message'] = self._to_string(self._parse_expression())
             elif word == 'FREEZE':
                 self._next_token()
                 spec['frozen'] = int(self._parse_expression())
@@ -4508,6 +4530,8 @@ class Interpreter:
                 self._error(f"Unexpected '{tok[1]}' in BROWSE")
         if spec['key'] and not spec['edit']:
             self._error("KEY is only used with BROWSE ... EDIT")
+        if (spec['edit_when'] or spec['edit_message']) and not spec['edit']:
+            self._error("WHEN and MESSAGE are only used with BROWSE ... EDIT")
         if spec['edit']:
             if spec['table'] and not spec['key']:
                 # A table can be edited by its rowid, which is fetched but not shown
@@ -4604,9 +4628,16 @@ class Interpreter:
 
         format_fns = {column_index(name, 'FORMAT'): (lambda mask: lambda v: Formatter.format(mask, [v]).strip())(mask)
                       for name, mask in spec['formats'].items()}
+        can_edit = None
+        if spec['edit_when']:
+            def can_edit():
+                """EDIT WHEN: None if the rows can be changed now, otherwise why not."""
+                if self._evaluate_saved_condition(spec['edit_when']):
+                    return None
+                return spec['edit_message'] or "These rows can't be changed."
         options = dict(save=save, hidden=hidden, locked=locked, add=add, delete=delete,
                        frozen=spec['frozen'], formats=format_fns, color_col=color_index,
-                       exit_keys=spec['exit_keys'])
+                       exit_keys=spec['exit_keys'], can_edit=can_edit)
         return dict(columns=columns, rows=results, hidden=hidden, options=options)
 
     @staticmethod
