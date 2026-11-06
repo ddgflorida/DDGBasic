@@ -70,9 +70,10 @@ EXPECTED_EXIT = {
 # Keyboard input fed to scripts that use INPUT.
 STDIN = {
     'examples/loadjson': '\x1b[C\x1b[C\x1b[B60\r\x1b',   # BROWSE EDIT: Gadget quantity -> 60
-    'examples/form_demo': 'b2\r\r3\ry\r25\r\x1910\r\r',
+    'examples/form_demo': '\x1bOP b2\r\r3\ry\r25\r\x1910\r20261115\rn\r5551234567\r \r\r',   # F1 help first
     'examples/menu_demo': 'vccha\rvt\rfq',
-    'examples/grid_demo': '\x1b[6~\x1b[6~\r\r\x1b[F\x1b[C\x1b[C0\r\x1b',
+    'examples/grid_demo': '\x1bORmi\r\r\x1b[F\x1b[C\x1b[C0\r\x1b',   # F3 sorts by city, "mi" finds Miami
+    'examples/progress_demo': '\x1b[F\r\r',
     'examples/report_demo': 'q',
     'examples/notes_demo': '\x1b[B\x1b[B\x1b[F\r- book a room\x17/acme\rqq',
     'examples/mouse_demo': '\x1b[<0;10;5M\x1b[<0;11;5M\x1b[<64;12;5M\x1b[<0;12;5M\x1b[<2;11;5M\x1b',

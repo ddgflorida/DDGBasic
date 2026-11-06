@@ -6,9 +6,10 @@ Example programs in `examples/`, each short enough to read in a minute:
 
 | Example | Shows |
 |---|---|
-| `form_demo.bas` | An order form: `GET` with `PICTURE`, a `LOOKUP` list, `VALID ... MESSAGE`, `WHEN`, and Save/Cancel buttons |
+| `form_demo.bas` | An order form: `GET` with `PICTURE`, a `LOOKUP` list, a date (`@D`), number masks, `@R` phone, `CHECKBOX`, a drop-down `LIST`, `VALID ... MESSAGE`, `WHEN`, Save/Cancel buttons, and F1 help with `ON KEY` |
 | `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
-| `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows |
+| `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows, with sorting, type-ahead, `FREEZE`, `FORMAT` and row colours (`COLOR`) |
+| `progress_demo.bas` | A `PROGRESS` bar while a table loads, a `MENU` longer than the screen that scrolls, and drop shadows |
 | `report_demo.bas` | `REPORT` with nested groups and totals, on the screen, in the viewer and in a paged file |
 | `notes_demo.bas` | `EDIT TEXT` and `VIEW`, including `VIEW FILE` |
 | `mouse_demo.bas` | A tiny paint program: `INKEY$` mouse keys with `MOUSEROW` and `MOUSECOL` |
