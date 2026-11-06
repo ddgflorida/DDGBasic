@@ -1,2 +1,9 @@
 build/
 __pycache__/
+.DS_Store
+.venv/
+venv/
+# Files the examples make when run in place (make_form_demo.bas)
+*.db
+*.duckdb
+customers_form.bas

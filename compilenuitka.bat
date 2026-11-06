@@ -2,7 +2,7 @@
 rem Build a standalone DbBasic executable with Nuitka (Windows) and install it.
 rem
 rem Usage: compilenuitka.bat [install_dir]
-rem   install_dir defaults to c:\ddg\bin
+rem   install_dir defaults to %USERPROFILE%\bin (add it to PATH to run dbbasic anywhere)
 rem   Set PYTHON to use a particular Python (default: python).
 rem   Needs: pip install -r requirements.txt -r requirements-build.txt
 setlocal
@@ -11,7 +11,7 @@ set "REPO_DIR=%~dp0"
 set "SRC_DIR=%REPO_DIR%src"
 set "BUILD_DIR=%REPO_DIR%build"
 set "INSTALL_DIR=%~1"
-if "%INSTALL_DIR%"=="" set "INSTALL_DIR=c:\ddg\bin"
+if "%INSTALL_DIR%"=="" set "INSTALL_DIR=%USERPROFILE%\bin"
 if "%PYTHON%"=="" set "PYTHON=python"
 
 rem Unpack once into a per-build cache folder instead of a fresh temp folder

@@ -3,6 +3,7 @@
 ![Language](https://img.shields.io/badge/language-BASIC-blue.svg)
 ![Backend](https://img.shields.io/badge/backend-Python-green.svg)
 ![Status](https://img.shields.io/badge/status-Active-brightgreen.svg)
+![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 
 DbBasic is a custom, modern dialect of the BASIC programming language, built from the ground up in Python. It is designed with a strong focus on data processing, file manipulation, and direct database interaction, making it a powerful tool for scripting and data analysis tasks.
 You can think of it as either SQLite/DuckDb wrapped in a procedural language, or a BASIC with direct SQLite/DuckDb support.
@@ -71,7 +72,7 @@ python3 src/dbbasic.py examples/hello.bas      # run a script
 python3 src/dbbasic.py                         # interactive REPL
 ```
 
-To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `c:\ddg\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`.
+To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `dbbasic` from anywhere.
 
 The full **Programmer's Reference Manual** is in [`docs/manual/`](docs/manual/README.md). Run the test suite with `python3 tests/run_tests.py`.
 
@@ -403,3 +404,9 @@ PRINT `Row ${i}: ${row("city$")} (${CARDINAL$(row("count"))})`
 ```
 
 `$$` produces a literal `$`. Lone `{` and `}` are literal, so JSON, regex, and code snippets pass through intact. Regular double-quoted strings are unaffected.
+
+---
+
+## 📄 License
+
+DbBasic is released under the [MIT License](LICENSE). The sample data in `examples/dotgov.csv` is the public list of .gov domains published by CISA.
