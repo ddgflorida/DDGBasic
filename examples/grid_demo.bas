@@ -17,9 +17,9 @@ CLS
 
 REM 1. A picker. The customer column stays put while the others scroll (FREEZE 2 keeps
 REM    id and customer), amounts are shown as money, and the row colour comes from the query:
-REM    yellow for big orders, red for refunds (negative amounts).
+REM    green for big orders, red for refunds (negative amounts).
 BROWSE (SELECT id, customer, city, email, phone, placed, amount,
-               CASE WHEN amount < 0 THEN 12 WHEN amount > 900 THEN 14 END AS shade
+               CASE WHEN amount < 0 THEN 12 WHEN amount > 900 THEN 10 END AS shade
           FROM orders ORDER BY id) AT 1, 1, 22, 72 TITLE "Pick an order (click a heading to sort)" FREEZE 2 FORMAT amount "$#,##0.00" COLOR "shade" INTO picked
 IF LASTKEY$ <> CHR$(27) THEN x = ALERT("You picked order " & picked.id & ";" & picked.customer & ", " & picked.city)
 

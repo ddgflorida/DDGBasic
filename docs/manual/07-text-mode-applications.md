@@ -644,7 +644,7 @@ Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns.
 
 - `FREEZE n` keeps the first `n` columns at the left (after a `║`) while Left/Right scroll the others, so a name stays in view next to wide data.
 - `FORMAT column mask$, ...` shows columns with `FORMAT$` masks, right-aligned, as in `REPORT`. Only the display changes: `INTO` and editing see the stored values.
-- `COLOR column$` names a column of the query that holds each row's text colour (0-15, as in `COLOR`). The column is not shown. A row whose value is blank, or not a colour, uses the normal colour, and the current row keeps the highlight bar.
+- `COLOR column$` names a column of the query that holds each row's text colour (0-15, as in `COLOR`). Pick strong colours, such as 10 (light green) or 12 (light red): in some colour schemes, such as Windows Terminal's default, 14 (yellow) is so pale and 7 (grey) so close to 15 (white) that a coloured row hardly stands out. The column is not shown. A row whose value is blank, or not a colour, uses the normal colour, and the current row keeps the highlight bar.
 
 ```basic
 BROWSE (SELECT name, city, phone, email, balance,
@@ -694,6 +694,7 @@ BROWSE (SELECT id, customer, placed FROM orders ORDER BY id) INTO o TITLE "Order
 ```
 
 - **Layout.** The `AT` area (the whole screen without it) is split: the master gets a little under half, the detail the rest. The area must be at least 12 rows high. `AT` and `INTO` belong to the master, before `DETAIL`; the other clauses can be given to each grid.
+- **Status lines.** Only the grid with the keys shows key hints; the other shows just its position (`1 of 4`). The master keeps its bar on the row whose details are shown.
 - **Keys.** The master has the keys first. Enter on it (or Tab) goes to the detail grid; in an `EDIT` grid, where Enter edits and Tab moves between cells, F6 does it. A click on the other grid switches too. In the detail grid, Esc, Tab/F6 or (without `EDIT`) Enter goes back to the master. Esc on the master ends the screen, and `INTO var` keeps the row its bar is on, so the program knows which one the user was looking at (`LASTKEY$` is Esc; a master with no rows gives an empty hash). Unlike a plain `BROWSE`, a master-detail screen is for working through rows, not for picking one.
 - **Editing.** Either grid can have `EDIT`. A line added with Ins in the detail grid is linked to the master row: for each `column = :var.field` in the `DETAIL` query, the new row gets the master's value, and the form doesn't ask for it. When the keys come back from an `EDIT` detail grid, the master is fetched again, so a total it shows stays current.
 - A column worked out by the query (`qty * price AS total`) is shown but can't be edited, in any `BROWSE ... EDIT`, and the Ins form leaves it out.

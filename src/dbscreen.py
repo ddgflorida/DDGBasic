@@ -2026,6 +2026,8 @@ class Screen:
                     status = status.replace('  F3=sort', '  F3=sort  ' + ('F6' if save else 'Tab') + '=switch')
                     if keys_hint == 'back':        # a detail grid: Esc (and Enter) go back to the master
                         status = status.replace('Esc=done', 'Esc=back')
+                if draw_only:                      # the grid without the keys shows no key hints
+                    status = f' {current + 1 if cells else 0} of {len(cells)}'
                 message = ''
                 out.append(self._put(r2 - 1, c1 + 1, status[:inner].ljust(inner), self.fg, self.bg))
                 self._w(''.join(out) + self._normal())

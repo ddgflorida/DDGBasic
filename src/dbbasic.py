@@ -4676,6 +4676,9 @@ class Interpreter:
                 g = current_detail['grid']
                 if g is None:                          # no master row, so no detail grid to go to
                     continue
+                # The master keeps its bar (the row whose details these are) but no key hints
+                SCREEN.browse(grid['columns'], grid['rows'], master_area, spec['title'], draw_only=True,
+                              switch=True, state=state_master, **grid['options'])
                 SCREEN.browse(g['columns'], g['rows'], detail_area, detail['title'], switch=True, keep=True,
                               state=state_detail, keys_hint='back', **g['options'])
                 draw_detail()                          # without its bar while the master has the keys

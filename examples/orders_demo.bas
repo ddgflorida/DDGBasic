@@ -2,6 +2,7 @@ REM Orders demo: a master-detail screen. The orders are on top; the lines of the
 REM under the bar are shown below and follow it as it moves. Enter (or Tab) goes to the
 REM lines, where Enter edits a cell, Ins adds a line (its order_id is filled in) and Del
 REM deletes one; F6 or Esc goes back to the orders. Esc on the orders ends.
+REM Open orders are green and cancelled ones red: the colour comes from the query (COLOR).
 DATABASE OPEN ":memory:"
 CREATE TABLE orders (id INTEGER PRIMARY KEY, customer TEXT, placed TEXT, status TEXT);
 CREATE TABLE order_lines (line_id INTEGER PRIMARY KEY, order_id INTEGER REFERENCES orders(id),
@@ -16,7 +17,7 @@ COLOR 15, 1, 0, 3
 CLS
 BROWSE (SELECT o.id, o.customer, o.placed, o.status,
                (SELECT SUM(qty * price) FROM order_lines WHERE order_id = o.id) AS amount,
-               CASE o.status WHEN 'cancelled' THEN 7 WHEN 'open' THEN 14 END AS shade
+               CASE o.status WHEN 'cancelled' THEN 12 WHEN 'open' THEN 10 END AS shade
           FROM orders o ORDER BY o.id) INTO o TITLE "Orders" _
     FORMAT amount "#,##0.00" COLOR "shade" _
     DETAIL (SELECT line_id, product, qty, price, qty * price AS total
