@@ -354,9 +354,9 @@ class HelpRegistry:
             "examples": ['choice = MENU(5, 10, "Add", "Edit", "Quit")']
         },
         "BROWSE": {
-            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [INTO var]',
-            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown.",
-            "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"', 'BROWSE (SELECT name, city, balance, CASE WHEN balance < 0 THEN 12 END AS shade FROM customers) FREEZE 1 FORMAT balance "#,##0.00" COLOR "shade"']
+            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [INTO var] [DETAIL (SELECT ... WHERE col = :var.col) [EDIT [KEY key$]] [TITLE t$] ...]',
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown. DETAIL adds a second grid below for the rows of the master's current row (INTO var holds it, so the DETAIL query uses :var.col); Tab (F6 in an EDIT grid) or a click switches grids, and lines added with Ins are linked to the master row.",
+            "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"', 'BROWSE (SELECT name, city, balance, CASE WHEN balance < 0 THEN 12 END AS shade FROM customers) FREEZE 1 FORMAT balance "#,##0.00" COLOR "shade"', 'BROWSE (SELECT id, customer FROM orders) INTO o DETAIL (SELECT * FROM order_lines WHERE order_id = :o.id) EDIT KEY "line_id"']
         },
         "EDIT": {
             "syntax": 'EDIT RECORD (SELECT ... FROM table WHERE ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]\nEDIT TEXT target [AT top, left, bottom, right] [TITLE title$]',
@@ -4419,7 +4419,31 @@ class Interpreter:
 
     def _parse_browse_statement(self):
         """BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY col$]] [AT r1, c1, r2, c2] [TITLE t$]
-                  [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [INTO var]"""
+                  [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [INTO var]
+                  [DETAIL (SELECT ... WHERE col = :var.col) [EDIT [KEY col$]] [TITLE t$] [FREEZE n]
+                          [FORMAT ...] [COLOR col$]]
+
+        With DETAIL, the area is shared by two grids: as the master's bar moves, INTO var
+        holds its row and the DETAIL query is run again with it."""
+        spec = self._parse_browse_spec()
+        detail = None
+        tok = self._current_token()
+        if tok and tok[0] == 'ID' and tok[1].upper() == 'DETAIL':
+            self._next_token()
+            detail = self._parse_browse_spec(detail=True)
+            if not spec['into']:
+                self._error("BROWSE ... DETAIL needs INTO var on the master grid, so the DETAIL query "
+                            "can use its row: DETAIL (SELECT ... WHERE order_id = :var.id)")
+        grid = self._browse_grid(spec)
+        if detail:
+            chosen = self._browse_master_detail(spec, grid, detail)
+        else:
+            chosen = SCREEN.browse(grid['columns'], grid['rows'], spec['area'], spec['title'], **grid['options'])
+        if spec['into']:
+            self.variables[spec['into']] = self._browse_record(grid, chosen)
+
+    def _parse_browse_spec(self, detail=False):
+        """One grid of BROWSE: its query (or table) and clauses, up to DETAIL or the end."""
         tok, nxt = self._current_token(), self._peek_token()
         table = None
         if tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING':
@@ -4431,65 +4455,77 @@ class Interpreter:
             else:
                 table = source
                 sql = f"SELECT * FROM {self._quote_identifier(source)}"
-        area, title, into = None, '', None
-        edit, key_column = False, None
-        frozen, formats, color_column = 0, {}, None
+        spec = dict(sql=sql, table=table, area=None, title='', into=None, edit=False, key=None,
+                    frozen=0, formats={}, color=None)
         while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
             tok = self._current_token()
             word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
-            if word == 'AT':
+            if word == 'DETAIL' and not detail:
+                break
+            if word == 'AT' and not detail:
                 self._next_token()
-                area = tuple(self._screen_ints(4))
+                spec['area'] = tuple(self._screen_ints(4))
             elif word == 'TITLE':
                 self._next_token()
-                title = self._to_string(self._parse_expression())
+                spec['title'] = self._to_string(self._parse_expression())
             elif word == 'EDIT':
                 self._next_token()
-                edit = True
+                spec['edit'] = True
             elif word == 'KEY':
                 self._next_token()
-                key_column = self._to_string(self._parse_expression())
+                spec['key'] = self._to_string(self._parse_expression())
             elif word == 'FREEZE':
                 self._next_token()
-                frozen = int(self._parse_expression())
+                spec['frozen'] = int(self._parse_expression())
             elif word == 'FORMAT':
                 self._next_token()
-                formats = self._parse_format_list()
+                spec['formats'] = self._parse_format_list()
             elif word == 'COLOR':
                 self._next_token()
-                color_column = self._to_string(self._parse_expression())
-            elif tok[0] == 'INTO':
+                spec['color'] = self._to_string(self._parse_expression())
+            elif tok[0] == 'INTO' and not detail:
                 self._next_token()
-                into = self._expect('ID')[1]
+                spec['into'] = self._expect('ID')[1]
+            elif detail and word in ('AT', 'INTO', 'DETAIL'):
+                self._error(f"{word} belongs to the master grid: put it before DETAIL")
             else:
                 self._error(f"Unexpected '{tok[1]}' in BROWSE")
-        hidden, locked, save = set(), set(), None
-        if key_column and not edit:
+        if spec['key'] and not spec['edit']:
             self._error("KEY is only used with BROWSE ... EDIT")
-        if edit:
-            if table and not key_column:
+        if spec['edit']:
+            if spec['table'] and not spec['key']:
                 # A table can be edited by its rowid, which is fetched but not shown
-                sql = f"SELECT rowid AS __dbbasic_rowid, * FROM {self._quote_identifier(table)}"
-            elif not table:
-                table = self._extract_table_from_select(sql)
-                if not table:
+                spec['sql'] = f"SELECT rowid AS __dbbasic_rowid, * FROM {self._quote_identifier(spec['table'])}"
+            elif not spec['table']:
+                spec['table'] = self._extract_table_from_select(spec['sql'])
+                if not spec['table']:
                     self._error("BROWSE ... EDIT needs a query that reads FROM one table.")
-                if not key_column:
+                if not spec['key']:
                     self._error("BROWSE (SELECT ...) EDIT needs KEY \"column\" to know which row to update.")
+        return spec
+
+    def _browse_grid(self, spec, fixed=None):
+        """Runs a grid's query and prepares what SCREEN.browse needs: {'columns', 'rows',
+        'hidden', 'options'}. fixed ({column: value}) is given to rows added with Ins: the
+        link to the master row of a DETAIL grid."""
+        sql, table, key_column = spec['sql'], spec['table'], spec['key']
         results = self._browse_rows(sql)
         columns = results.columns if isinstance(results, PagedRows) else \
             ([d[0] for d in self.db_cursor.description] if self.db_cursor.description else [])
+
         def column_index(name, clause):
             matches = [i for i, c in enumerate(columns) if c.upper() == name.upper()]
             if not matches:
                 self._error(f"BROWSE ... {clause}: there is no column '{name}' in the query.")
             return matches[0]
 
+        hidden, locked = set(), set()
+        save = add = delete = None
         color_index = None
-        if color_column:                  # hidden before EDIT works out the columns of its forms
-            color_index = column_index(color_column, 'COLOR')
+        if spec['color']:                 # hidden before EDIT works out the columns of its forms
+            color_index = column_index(spec['color'], 'COLOR')
             hidden.add(color_index)
-        if edit:
+        if spec['edit']:
             if key_column:
                 matches = [i for i, c in enumerate(columns) if c.upper() == key_column.upper()]
                 if not matches:
@@ -4498,17 +4534,24 @@ class Interpreter:
             else:
                 key_index, key_sql = 0, 'rowid'
                 hidden.add(0)
-            locked.add(key_index)
-
-            # The form for Ins: every visible column, keyed by the table's primary key
+            locked = {key_index: f'{columns[key_index]} is the key and cannot be changed.'}
             info = self._table_column_info(table)
-            form_columns = [c for i, c in enumerate(columns) if i not in hidden]
+            for i, c in enumerate(columns):    # a computed column (qty * price AS total) is shown only
+                if i not in hidden and c.lower() not in info and i not in locked:
+                    locked[i] = f'{c} is worked out by the query and cannot be changed.'
+
+            # The form for Ins: every visible column of the table (but the link to a master
+            # row), keyed by the table's primary key
+            fixed = {k.lower(): v for k, v in (fixed or {}).items()}
+            form_columns = [c for i, c in enumerate(columns)
+                            if i not in hidden and c.lower() not in fixed and c.lower() in info]
             pk = [c for c, (_, is_pk) in info.items() if is_pk]
             form_key = key_column or (pk[0] if len(pk) == 1 else None)
             form_key_index = next((i for i, c in enumerate(form_columns) if form_key and c.lower() == form_key.lower()), None)
 
             def add():
-                record = self._record_form(table, form_columns, None, form_key_index, info, f'New {table} row')
+                record = self._record_form(table, form_columns, None, form_key_index, info, f'New {table} row',
+                                           fixed=fixed)
                 if record is None:
                     return False
                 new_rowid = getattr(self.db_cursor, 'lastrowid', None) if self.db_engine != 'duckdb' else None
@@ -4516,7 +4559,7 @@ class Interpreter:
                     results.reload()
                 else:
                     results[:] = [list(r) for r in (self._execute_sql(sql, is_query=True) or [])]
-                if hidden and new_rowid:          # table mode: find the new rowid
+                if not key_column and new_rowid:  # table mode: find the new rowid
                     return next((i for i, r in enumerate(results) if r[0] == new_rowid), None)
                 if form_key_index is not None:
                     wanted = record.get(form_columns[form_key_index].upper())
@@ -4544,23 +4587,87 @@ class Interpreter:
                 return None
 
         format_fns = {column_index(name, 'FORMAT'): (lambda mask: lambda v: Formatter.format(mask, [v]).strip())(mask)
-                      for name, mask in formats.items()}
-        chosen = SCREEN.browse(columns, results, area, title, save=save, hidden=hidden, locked=locked,
-                               add=add if edit else None, delete=delete if edit else None,
-                               frozen=frozen, formats=format_fns, color_col=color_index)
-        if into:
-            record = {}
-            if chosen >= 0:
-                number = 0
-                for i, cell in enumerate(results[chosen]):
-                    if i in hidden:
-                        continue
-                    number += 1
-                    value = "" if cell is None else cell
-                    record[str(number)] = value
-                    if i < len(columns):
-                        record[columns[i].upper()] = value
+                      for name, mask in spec['formats'].items()}
+        options = dict(save=save, hidden=hidden, locked=locked, add=add, delete=delete,
+                       frozen=spec['frozen'], formats=format_fns, color_col=color_index)
+        return dict(columns=columns, rows=results, hidden=hidden, options=options)
+
+    @staticmethod
+    def _browse_record(grid, index):
+        """A grid row as INTO gives it: keyed by upper-case column name and by column
+        number (hidden columns left out); an empty hash for index -1."""
+        record = {}
+        if index is None or index < 0 or index >= len(grid['rows']):
+            return record
+        number = 0
+        for i, cell in enumerate(grid['rows'][index]):
+            if i in grid['hidden']:
+                continue
+            number += 1
+            value = "" if cell is None else cell
+            record[str(number)] = value
+            if i < len(grid['columns']):
+                record[grid['columns'][i].upper()] = value
+        return record
+
+    def _browse_master_detail(self, spec, grid, detail):
+        """BROWSE ... DETAIL: the master grid on top, the detail grid under it. Moving the
+        master's bar puts its row in INTO var and runs the DETAIL query again. Tab (F6 in an
+        EDIT grid) or a click switches grids; Esc or Enter in the detail grid goes back to the
+        master. Returns the master row chosen with Enter, or -1."""
+        into = spec['into']
+        screen_rows, screen_cols = SCREEN.size()
+        r1, c1, r2, c2 = spec['area'] or (1, 1, screen_rows, screen_cols)
+        if r2 - r1 < 11:
+            self._error("BROWSE ... DETAIL needs an area at least 12 rows high.")
+        middle = r1 + max(5, (r2 - r1 + 1) * 9 // 20) - 1      # the master gets a bit under half
+        master_area, detail_area = (r1, c1, middle, c2), (middle + 1, c1, r2, c2)
+        # Ins in an editable detail grid fills in the link to the master row:
+        # WHERE order_id = :o.id gives order_id the master's id
+        links = re.findall(r'(?i)([A-Za-z_][\w.]*)\s*=\s*:' + re.escape(into) + r'\.([A-Za-z_]\w*)', detail['sql'])
+        state_master, state_detail = {}, {}
+        current_detail = {}
+
+        def show_detail(index):
+            record = self._browse_record(grid, index)
             self.variables[into] = record
+            fixed = {column.split('.')[-1]: record.get(field.upper()) for column, field in links} if record else {}
+            current_detail['grid'] = self._browse_grid(detail, fixed)
+            state_detail.clear()
+            draw_detail()
+
+        def draw_detail():
+            g = current_detail['grid']
+            SCREEN.browse(g['columns'], g['rows'], detail_area, detail['title'], draw_only=True, bar=False,
+                          switch=True, state=state_detail, **g['options'])
+
+        def inside(area):
+            a1, b1, a2, b2 = area
+            return a1 <= SCREEN.keys.mouse_row <= a2 and b1 <= SCREEN.keys.mouse_col <= b2
+
+        underneath = SCREEN.save(r1, c1, r2, c2)
+        try:
+            while True:
+                chosen = SCREEN.browse(grid['columns'], grid['rows'], master_area, spec['title'], on_move=show_detail,
+                                       switch=True, keep=True, state=state_master, **grid['options'])
+                key = SCREEN.last_key
+                if key not in ('F6', '\t', 'CLICK'):
+                    return chosen if key == '\r' else -1
+                if key == 'CLICK' and not inside(detail_area):
+                    continue
+                g = current_detail['grid']
+                SCREEN.browse(g['columns'], g['rows'], detail_area, detail['title'], switch=True, keep=True,
+                              state=state_detail, **g['options'])
+                draw_detail()                          # without its bar while the master has the keys
+                if detail['edit']:
+                    # The lines may have changed what the master shows (a total): fetch it again
+                    if isinstance(grid['rows'], PagedRows):
+                        grid['rows'].reload()
+                    else:
+                        grid['rows'][:] = [list(r) for r in (self._execute_sql(spec['sql'], is_query=True) or [])]
+                        state_master['sort_col'] = None    # the fresh rows are in the query's order
+        finally:
+            SCREEN.restore_saved(underneath)
 
     def _parse_format_list(self):
         """The list after FORMAT in REPORT and BROWSE: col mask$, col mask$, ... as {name: mask}."""
@@ -4934,10 +5041,11 @@ class Interpreter:
     def _is_numeric_type(dtype):
         return re.search(r'INT|REAL|FLOA|DOUB|NUM|DEC', str(dtype).upper()) is not None
 
-    def _record_form(self, table, columns, row, key_index, info, title='', at=None):
+    def _record_form(self, table, columns, row, key_index, info, title='', at=None, fixed=None):
         """The EDIT RECORD form: one labelled field per column of row (None for a new, blank
         record), saved with UPDATE or INSERT. Returns the saved record as a hash keyed by
-        upper-case column name, or None when the user pressed Esc."""
+        upper-case column name, or None when the user pressed Esc. fixed ({column: value})
+        is added to an INSERT without being shown: a detail row's link to its master."""
         new_record = row is None
 
         values = []
@@ -4986,7 +5094,7 @@ class Interpreter:
                 self._run_read()
                 if SCREEN.last_key == '\x1b':
                     return None
-                error = self._save_edit_record(table, columns, values, record, key_index, new_record)
+                error = self._save_edit_record(table, columns, values, record, key_index, new_record, fixed)
                 if error is None:
                     break
                 message = 'Not saved: ' + error + '  (press a key)'
@@ -4999,7 +5107,7 @@ class Interpreter:
             self.variables.pop(holder, None)
             SCREEN.restore_saved(underneath)
 
-    def _save_edit_record(self, table, columns, old_values, record, key_index, new_record):
+    def _save_edit_record(self, table, columns, old_values, record, key_index, new_record, fixed=None):
         """Writes an EDIT RECORD form back with UPDATE (changed columns only) or INSERT.
         Returns None, or the database's error message."""
         new_values = [record[c.upper()] for c in columns]
@@ -5009,13 +5117,14 @@ class Interpreter:
             if new_record:
                 pairs = [(c, v) for i, (c, v) in enumerate(zip(columns, new_values))
                          if not (i == key_index and (v is None or v == '' or v == 0))]
+                pairs += [(c, v) for c, v in (fixed or {}).items()]
                 if not pairs:
                     return None
                 self.db_cursor.execute(
                     f"INSERT INTO {self._quote_identifier(table)} ({', '.join(self._quote_identifier(c) for c, _ in pairs)}) "
                     f"VALUES ({', '.join('?' * len(pairs))})", [v for _, v in pairs])
                 # Give the record the key the database chose (SQLite reports it)
-                if key_index is not None and len(pairs) < len(columns) and self.db_engine != 'duckdb':
+                if key_index is not None and len(pairs) - len(fixed or {}) < len(columns) and self.db_engine != 'duckdb':
                     new_id = getattr(self.db_cursor, 'lastrowid', None)
                     if new_id:
                         record[columns[key_index].upper()] = new_id

@@ -11,6 +11,7 @@ Example programs in `examples/`, each short enough to read in a minute:
 | `form_demo.bas` | An order form: `GET` with `PICTURE`, a `LOOKUP` list, a date (`@D`), number masks, `@R` phone, `CHECKBOX`, a drop-down `LIST`, `VALID ... MESSAGE`, `WHEN`, Save/Cancel buttons, and F1 help with `ON KEY` |
 | `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
 | `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows, with sorting, type-ahead, `FREEZE`, `FORMAT` and row colours (`COLOR`) |
+| `orders_demo.bas` | A master-detail screen: orders on top, their lines below (`BROWSE ... DETAIL`), editable, with totals that follow |
 | `progress_demo.bas` | A `PROGRESS` bar while a table loads, a `MENU` longer than the screen that scrolls, and drop shadows |
 | `report_demo.bas` | `REPORT` with nested groups and totals, on the screen, in the viewer and in a paged file |
 | `notes_demo.bas` | `EDIT TEXT` and `VIEW`, including `VIEW FILE` |
@@ -606,6 +607,8 @@ IF ALERT("Save changes?;They can't be undone.", "Yes", "No", "Cancel") = 1 THEN 
 ```
 BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE title$]
         [FREEZE n] [FORMAT column mask$, ...] [COLOR column$] [INTO var]
+        [DETAIL (SELECT ... WHERE column = :var.column) [EDIT [KEY key$]] [TITLE title$]
+                [FREEZE n] [FORMAT column mask$, ...] [COLOR column$]]
 ```
 
 `BROWSE` runs the query and shows the rows in a box: a header line, the rows, and a status line (`2 of 3   Enter=select  Esc=cancel`). Without `AT`, it fills the terminal. A string that does not start with `SELECT` or `WITH` is taken as a table name. Bind variables (`:id`) work as in any query.
@@ -639,6 +642,42 @@ BROWSE (SELECT name, city, phone, email, balance,
 ```
 
 This is after scrolling right past `city`, `phone` and `email` and clicking the `balance` heading.
+
+**Master and detail.** `DETAIL` adds a second grid under the first, for rows that belong to the row under the bar: the lines of an order, the payments of an invoice. While the bar moves, `INTO var` holds the master's current row, and the `DETAIL` query is run again with it, so it names the master's columns as bind variables (`:o.id`):
+
+```basic
+BROWSE (SELECT id, customer, placed FROM orders ORDER BY id) INTO o TITLE "Orders" _
+    DETAIL (SELECT line_id, product, qty, price, qty * price AS total
+              FROM order_lines WHERE order_id = :o.id ORDER BY line_id) _
+    EDIT KEY "line_id" TITLE "Lines" FORMAT total "#,##0.00"
+```
+
+```
+┌─────────────────────────────────── Orders ───────────────────────────────────┐
+│ id │ customer  │ placed                                                      │
+│──────────────────────────────────────────────────────────────────────────────│
+│ 1  │ Acme Corp │ 2026-01-05                                                  │
+│ 2  │ Globex    │ 2026-01-09                                                  │
+│ 3  │ Initech   │ 2026-02-01                                                  │
+│ 4  │ Hooli     │ 2026-02-11                                                  │
+│                                                                              │
+│ 3 of 4   Enter=select  Esc=cancel  ←→=columns  F3=sort  Tab=switch           │
+└──────────────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────── Lines ────────────────────────────────────┐
+│ line_id │ product  │ qty │ price │ total                                     │
+│──────────────────────────────────────────────────────────────────────────────│
+│ 4       │ Widget   │ 100 │ 2.25  │ 225.00                                    │
+│ 5       │ Sprocket │ 7   │ 4     │  28.00                                    │
+│                                                                              │
+...
+```
+
+- **Layout.** The `AT` area (the whole screen without it) is split: the master gets a little under half, the detail the rest. The area must be at least 12 rows high. `AT` and `INTO` belong to the master, before `DETAIL`; the other clauses can be given to each grid.
+- **Keys.** The master has the keys first. Tab goes to the detail grid and back; in an `EDIT` grid, where Tab moves between cells, F6 does it. A click on the other grid switches too. Esc (or Enter, without `EDIT`) in the detail grid goes back to the master. Enter on the master chooses its row, as in a plain `BROWSE`, and Esc there ends with an empty hash.
+- **Editing.** Either grid can have `EDIT`. A line added with Ins in the detail grid is linked to the master row: for each `column = :var.field` in the `DETAIL` query, the new row gets the master's value, and the form doesn't ask for it. When the keys come back from an `EDIT` detail grid, the master is fetched again, so a total it shows stays current.
+- A column worked out by the query (`qty * price AS total`) is shown but can't be edited, in any `BROWSE ... EDIT`, and the Ins form leaves it out.
+
+`examples/orders_demo.bas` is an orders screen built this way.
 
 **Large tables.** `BROWSE` does not read the whole result. It fetches 500 rows at a time as you scroll, by adding `LIMIT`/`OFFSET` to the query (so its `ORDER BY` is kept exactly), and counts the rows once with `COUNT(*)` for the status line. A million-row table opens as fast as a small one. A query that already ends in its own `LIMIT` (or `OFFSET`, `FETCH FIRST`) is read whole. After a row is added with Ins, the grid fetches again; finding the new row then reads through the result, which takes a moment on a very large table.
 

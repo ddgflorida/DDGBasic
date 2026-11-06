@@ -37,7 +37,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * **Composition:** Pipelines like `REDUCE(MAP(FILTER(nums, is_even), square), add, 0)` work cleanly.
 
 * ### 1990s-Style Text Screens
-    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `progress_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
+    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `progress_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
@@ -163,7 +163,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | ANALYZE XML             | Analyzes an XML file to determine its structure, infer the primary record tag, and list its fields. |
 | BELL                    | Emits an audible system beep sound. |
 | BOX                     | Draws a single- or double-line box with an optional title and `SHADOW` on the text screen. Pop-ups have drop shadows unless `SET SHADOW OFF`. |
-| BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. With `EDIT`, cells are edited in place and saved to the table, Ins adds a row and Del deletes one. Click a heading (or F3) to sort, type to jump to a row; `FREEZE`, `FORMAT` and `COLOR` set frozen columns, number masks and row colours. |
+| BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. With `EDIT`, cells are edited in place and saved to the table, Ins adds a row and Del deletes one. Click a heading (or F3) to sort, type to jump to a row; `FREEZE`, `FORMAT` and `COLOR` set frozen columns, number masks and row colours. `DETAIL` adds a second grid for the rows of the current one (an order's lines). |
 | BROWSER                 | Opens a specified URL in the system's default web browser. |
 | CHAIN                   | Transfers program execution to a different DbBasic script, optionally preserving variables. |
 | CHDIR                   | Changes the current working directory. |

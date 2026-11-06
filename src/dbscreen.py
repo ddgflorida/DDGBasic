@@ -1698,7 +1698,8 @@ class Screen:
 
     # --- BROWSE --------------------------------------------------------
     def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None,
-               start=0, frozen=0, formats=None, color_col=None, shadow=False):
+               start=0, frozen=0, formats=None, color_col=None, shadow=False,
+               on_move=None, switch=False, keep=False, draw_only=False, bar=True, state=None):
         """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
 
         With save, the grid is editable: Left/Right move between cells, Enter (or typing)
@@ -1715,7 +1716,13 @@ class Screen:
         Without save, typing jumps to the next row whose sort column (or first column) starts
         with what was typed. frozen columns stay at the left when the others scroll. formats
         maps a column index to a function giving its text (shown right-aligned). color_col is
-        the index of a column holding each row's text colour (0-15)."""
+        the index of a column holding each row's text colour (0-15).
+
+        For a master-detail screen (two grids taking turns): on_move(index) is called when the
+        current row changes; with switch, F6 (and Tab when not editing) or a click outside the
+        grid ends it with last_key set to that key; keep leaves the grid drawn instead of
+        putting back what it covered; draw_only draws it and returns; bar=False draws no bar;
+        state, a dict, keeps the position and sort between turns."""
         screen_rows, screen_cols = self.size()
         r1, c1, r2, c2 = area or (1, 1, screen_rows, screen_cols)
         if r2 - r1 < 4 or c2 - c1 < 10:
@@ -1769,6 +1776,9 @@ class Screen:
             return cells, widths
 
         sort_col, sort_desc = None, False      # column index of the sort, if any
+        state = {} if state is None else state
+        if state:
+            sort_col, sort_desc = state.get('sort_col'), state.get('sort_desc', False)
         cells, widths = layout()
         page = r2 - r1 - 4                     # rows between the header line and the status line
         inner = c2 - c1 - 1
@@ -1778,8 +1788,17 @@ class Screen:
         if 0 < start < len(rows):
             current = start
             top = max(0, start - (page - 1))
+        if state:
+            top, current = state.get('top', 0), state.get('current', 0)
+            cur_col, first_col = state.get('cur_col', 0), state.get('first_col', frozen)
+            current = max(0, min(current, len(rows) - 1))
+        notified = None                        # the row on_move last heard about
         message = ''
-        underneath = self.popup(r1, c1, r2, c2, title, shadow=shadow and self.shadows)
+        if keep or draw_only:
+            underneath = None
+            self.box(r1, c1, r2, c2, title)
+        else:
+            underneath = self.popup(r1, c1, r2, c2, title, shadow=shadow and self.shadows)
         self._w('\x1b[?25l')
 
         def shown():
@@ -1943,10 +1962,10 @@ class Screen:
                         widen(top + n)
                 for n in range(page):
                     i = top + n
-                    fg, bg = (self.field_fg, self.field_bg) if i == current else (row_colour(i), self.bg)
+                    fg, bg = (self.field_fg, self.field_bg) if i == current and bar else (row_colour(i), self.bg)
                     text = line(cells[i]) if i < len(cells) else ' ' * inner
                     out.append(self._put(r1 + 3 + n, c1 + 1, text, fg, bg))
-                    if save and i == current:   # the current cell in reverse
+                    if save and bar and i == current:   # the current cell in reverse
                         off = cell_offset(cur_col)
                         ci = visible[cur_col]
                         cell_text = text[off:off + widths[ci]]
@@ -1960,13 +1979,26 @@ class Screen:
                     status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=edit{extra}  F3=sort  Esc=done'
                 else:
                     status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns  F3=sort'
+                if switch and not message and not typed:
+                    status = status.replace('  F3=sort', '  F3=sort  ' + ('F6' if save else 'Tab') + '=switch')
                 message = ''
                 out.append(self._put(r2 - 1, c1 + 1, status[:inner].ljust(inner), self.fg, self.bg))
                 self._w(''.join(out) + self._normal())
+                state.update(top=top, current=current, cur_col=cur_col, first_col=first_col,
+                             sort_col=sort_col, sort_desc=sort_desc)
+                if on_move and current != notified and not draw_only:
+                    notified = current
+                    on_move(current if cells else -1)
+                if draw_only:
+                    return current
                 key = self.keys.read_key()
                 if key is None:
                     key = ESC
                 self.last_key = key
+                if switch and (key == 'F6' or (key == TAB and not save) or
+                               (key == 'CLICK' and not (r1 <= self.keys.mouse_row <= r2 and
+                                                        c1 <= self.keys.mouse_col <= c2))):
+                    return current             # the other grid's turn
 
                 # type-ahead (when not editing): printable keys search, Backspace takes one back
                 if not save and ((len(key) == 1 and key.isprintable()) or (key == BACKSPACE and typed)):
@@ -2043,7 +2075,8 @@ class Screen:
                     ci = visible[cur_col]
                     if ci in locked:
                         bell()
-                        message = f'{columns[ci]} is the key and cannot be changed.'
+                        message = locked[ci] if isinstance(locked, dict) else \
+                            f'{columns[ci]} is the key and cannot be changed.'
                         continue
                     result, end_key = edit_cell(r1 + 3 + current - top, cur_col, None if key in (ENTER, 'F2') else key)
                     if result is not None:
@@ -2075,7 +2108,8 @@ class Screen:
                 if current < top: top = current
                 elif current >= top + page: top = current - page + 1
         finally:
-            self.restore_saved(underneath)       # put back what the grid covered
+            if underneath:
+                self.restore_saved(underneath)   # put back what the grid covered
             self._w('\x1b[?25h')
 
     # --- INKEY$ --------------------------------------------------------
