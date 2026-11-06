@@ -91,6 +91,10 @@ STDIN = {
     'tests/browse_paging': ('\x1b[F\r' + '\x1b[6~' * 40 + '\r' + '\x1b[F\x1b[C\r\x19last\r\x1b[A\x1b[3~y\x1b' + '\x1b[F\r') * 2,   # SQLite, then DuckDB
     'tests/visual_polish': '\x1b[B' * 25 + '\r' '\x1b[F\r' '\x1b[6~\x1b[5~\r' '\x1b[C\r' + '\x1b[B' * 28 + '\r' '\r',
     'tests/get_hints': '\x1b[15~Ann\r\x1b[15~5551234567\r\x1b[15~Boston\r',
+    'tests/make_form': ('ca' 'Bob\tbob@example.com\tn\t20250101\t-5\t \t7\r\r' '\r' '\t\t\t\t5\r\r\r\r'   # SQLite: add, refused, fixed
+                        'ce\x1b[B\r' + '\t' * 6 + '9\r\r' 'cd\ry' 'fq'
+                        'ca2\tBob\tbob@example.com\tn\t20250101\t-5\t \t7\r\r' '\r' '\t\t\t\t\t5\r\r\r\r'   # DuckDB: the id is typed
+                        'ce\x1b[B\r' + '\t' * 7 + '9\r\r' 'cd\ry' 'fq'),
     'tests/browse_power': ('\x1bOR\x1bOR\r' '\x1b[C\x1bORc\r' 'b\r' 'a\x08d\r' '\x1b[C\x1bORc11234\r' '\x1b[C\x1bORc1123\r' '\x1b[C\x1bOR\x1bOR\r\x19Zed\r\x1b' '\x1b[2~9\tEve\r\x1b') * 2,   # SQLite, then DuckDB
     'tests/browse_edit': '\x1b[C\r\x19Apricot\r\x1b[C7\r-1\r\x1b[B\x1b[C\r\x19\r\x1b[D\x1b[DBanana2\t\x1b' '\r\x1b[CCherry\r\x1b' * 2,   # SQLite, then DuckDB
     'tests/edit_record': ('\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'     # SQLite

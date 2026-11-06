@@ -200,6 +200,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | LINE INPUT              | Reads a single line of text from an open file into a variable. |
 | LOAD                    | Loads data from a file (CSV, JSON, JSONL, XML, HTML, FIXED, EXCEL, PARQUET, TEXT) into a database table. Supports first-class `TRANSFORM col WITH fn`, `VALIDATE col WITH fn`, `TRANSFORM ROW WITH fn`, `VALIDATE ROW WITH fn` clauses. |
 | LOCATE                  | Moves the cursor to a row and column. |
+| MAKE FORM               | Writes a complete data-entry program for a table: menu bar, editable grid, and an entry form with fields chosen from the column types (dates, number masks, check boxes, drop-downs for foreign keys). |
 | MKDIR                   | Creates a new directory. |
 | NAME ... AS             | Renames a file. |
 | ON ERROR GOTO           | Specifies a label to jump to when a runtime error occurs. |

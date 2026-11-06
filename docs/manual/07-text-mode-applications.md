@@ -7,6 +7,7 @@ Example programs in `examples/`, each short enough to read in a minute:
 | Example | Shows |
 |---|---|
 | `contact.bas` | The simplest useful form: a contact screen with `GET` into a hash, an `@R` phone, a `LIST`, a `CHECKBOX` and Save/Cancel buttons, saved with one `INSERT` |
+| `make_form_demo.bas` | `MAKE FORM`: writes a complete data-entry program for a table |
 | `form_demo.bas` | An order form: `GET` with `PICTURE`, a `LOOKUP` list, a date (`@D`), number masks, `@R` phone, `CHECKBOX`, a drop-down `LIST`, `VALID ... MESSAGE`, `WHEN`, Save/Cancel buttons, and F1 help with `ON KEY` |
 | `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
 | `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows, with sorting, type-ahead, `FREEZE`, `FORMAT` and row colours (`COLOR`) |
@@ -34,7 +35,7 @@ Related material in other chapters:
 4. [Menus and message boxes](#74-menus-and-message-boxes)
    * [MENUBAR$()](#menubar) · [MENU()](#menu) · [ALERT()](#alert)
 5. [Working with tables](#75-working-with-tables)
-   * [BROWSE](#browse) · [EDIT RECORD](#edit-record)
+   * [BROWSE](#browse) · [EDIT RECORD](#edit-record) · [MAKE FORM](#make-form)
 6. [Editing and viewing text](#76-editing-and-viewing-text)
    * [EDIT TEXT](#edit-text) · [VIEW](#view)
 7. [The keyboard and mouse](#77-the-keyboard-and-mouse)
@@ -694,6 +695,68 @@ EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact" INTO rec
 - **Rules:** the query must read `FROM` one table and find at most one row, and its columns must be plain column names of that table. Numbers are edited as numbers, and an emptied text field follows `SET NULL_HANDLING`. What the form covered is put back when it closes.
 
 Use `@ ... SAY ... GET` and `READ` when you want your own layout, pictures or `VALID` checks.
+
+### MAKE FORM
+
+```
+MAKE FORM table$ TO file$ [KEY column$] [TITLE title$]
+```
+
+`MAKE FORM` writes a complete data-entry program for a table: point it at a table and get an application, then change the program as you like. It is ordinary DbBasic, about a hundred lines, built from the statements in this chapter:
+
+- a menu bar with Browse, Add, Edit and Delete, and F1 help from anywhere (`ON KEY`);
+- **Browse:** the table in an editable, sortable grid (`BROWSE ... EDIT`);
+- **Add** and **Edit:** an entry form with a field for each column, with Save and Cancel buttons; **Edit** and **Delete** first show a pick list with type-ahead;
+- a change the database refuses (a `CHECK`, `NOT NULL` or `UNIQUE` constraint) is shown in an `ALERT` and the form opens again with what was typed (the program uses `SET SQL_FATAL_ERRORS OFF` and checks `ERR`).
+
+```basic
+DATABASE OPEN "shop.db"
+MAKE FORM "customers" TO "customers_form.bas"
+```
+
+```
+Wrote customers_form.bas: a program for customers with 7 fields. Run it with: dbbasic customers_form.bas
+```
+
+Each field is chosen from its column:
+
+| Column | Field |
+|---|---|
+| Text, `VARCHAR(n)` | A text field (`@S`), as wide as `n`, or as the longest value in the table (20 to 40) |
+| An integer type | A number field, `PICTURE "9999999999"` |
+| `REAL`, `DOUBLE`, `DECIMAL(p, s)` | A calculator-style number mask with commas and `s` decimals (2 by default), such as `"99,999,999.99"` |
+| `DATE` | A date field, `@D` |
+| `BOOLEAN` | A `CHECKBOX`, saved as true or false |
+| `REFERENCES other(col)` | A drop-down `LIST` of the values in `other` |
+| `NOT NULL` text, date or list | Required: `VALID ... MESSAGE "Name is required"` |
+| SQLite's `INTEGER PRIMARY KEY` | Left out of the form, since SQLite numbers new rows |
+
+Every field gets a `HINT` (`A date: YYYY-MM-DD`, `Text, up to 40 characters (required)`). Labels come from the column names (`joined_on` becomes `Joined On`). A form holds up to 26 fields, in two columns when there are more than 13.
+
+```
+┌─────────────────────────── New customer ───────────────────────────┐
+│                                                                    │
+│  Name   :                                                          │
+│  Email  :                                                          │
+│  State  :    ▼                                                     │
+│  Joined :     -  -                                                 │
+│  Credit :          0.00                                            │
+│  Active : [ ]                                                      │
+│  Visits :          0                                               │
+│                                                                    │
+│                                                                    │
+│  [ Save ]  [ Cancel ]                                              │
+│                                                                    │
+└────────────────────────────────────────────────────────────────────┘
+ Text, up to 20 characters (required)
+```
+
+- **The database.** The program opens the database that is open when `MAKE FORM` runs, with the same engine, so open a file first; an in-memory database is refused. The path is written as it was given to `DATABASE OPEN`, so run the program from the same folder, or edit the `DATABASE OPEN` line.
+- **The key.** Edit and Delete find a row by the table's primary key. `KEY "column"` names another column. A SQLite table without one uses its `rowid`; on DuckDB, a table without a single-column primary key needs `KEY`.
+- **The file** must not exist yet, so a program you have changed is never overwritten. `KILL` it first to make it again.
+- `TITLE` names the program, the menu and the forms; it defaults to the table name (`customers` becomes `Customers`, and a form for one row is a `customer`).
+
+`examples/make_form_demo.bas` makes a small shop database and a program for its customers.
 
 ---
 

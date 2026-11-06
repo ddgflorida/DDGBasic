@@ -34,6 +34,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from bs4 import BeautifulSoup
 from dbscreen import SCREEN, ScreenError, bell as dbscreen_bell, key_from_name
 from dbreport import build_report
+from dbformgen import FormColumn, build_form_program, column_kind, decimal_places
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, quote_plus, unquote_plus, urljoin
 import xmltodict
@@ -391,6 +392,11 @@ class HelpRegistry:
             "syntax": 'MOUSEROW | MOUSECOL',
             "desc": "The row and column (from 1) of the last mouse click or wheel turn. INKEY$ returns CLICK, RCLICK, MCLICK, WHEELUP or WHEELDOWN for them. The screen statements (READ, MENU, ALERT, MENUBAR$, BROWSE, EDIT TEXT, VIEW) take clicks themselves. SET MOUSE OFF turns the mouse off.",
             "examples": ['k$ = INKEY$(0)\nIF k$ = "CLICK" THEN @ MOUSEROW, MOUSECOL SAY "*"']
+        },
+        "MAKE FORM": {
+            "syntax": 'MAKE FORM table$ TO file$ [KEY column$] [TITLE title$]',
+            "desc": "Writes a complete data-entry program for a table, to edit as you like: a menu bar (Browse, Add, Edit, Delete), an editable grid, and an entry form with a field for each column chosen from its type (text widths, number masks, @D dates, CHECKBOX for BOOLEAN, a drop-down LIST for a foreign key, required NOT NULL fields), hints, F1 help, and ALERTs for changes the database refuses. The program opens the current database file, so open one first. KEY names the column that identifies a row (default: the primary key, or SQLite's rowid). The file must not exist yet.",
+            "examples": ['DATABASE OPEN "shop.db"\nMAKE FORM "customers" TO "customers_form.bas"', 'MAKE FORM "orders" TO "orders.bas" KEY "order_no" TITLE "Orders"']
         },
         "ON KEY": {
             "syntax": 'ON KEY key$ CALL function | ON KEY key$ OFF',
@@ -2779,6 +2785,7 @@ class Interpreter:
     def _init_db(self, filename=":memory:"):
         if self.db_connection: 
             self.db_connection.close()
+        self.db_filename = str(filename)      # MAKE FORM writes it into the program it makes
         #print(f"(Connecting using {self.db_engine} engine...)") # Optional debug message
         if self.db_engine == 'duckdb':
             self.db_connection = duckdb.connect(database=filename, read_only=False)
@@ -3595,6 +3602,12 @@ class Interpreter:
             i += 1
         return spans
 
+    def _report_sql_errors(self):
+        """Whether a failed statement is printed to stderr. Not while the text screen is in use
+        and SQL_FATAL_ERRORS is OFF: the program shows ERRMSG$ itself, and the dump would
+        scribble over the screen."""
+        return self.sql_fatal_errors or not SCREEN.used
+
     def _execute_sql(self, sql_string, is_query=False, params=None):
         self.variables.update({'ERR': 0.0, 'ERRMSG$': "", 'SQL_ROWCOUNT': 0.0, 'SQL_FOUND': 0.0, 'SQL_NOTFOUND': -1.0})
 
@@ -3613,11 +3626,12 @@ class Interpreter:
                     return self.db_cursor.fetchall()
                 return None
             except (sqlite3.Error, duckdb.Error) as e:
-                print(f"\n--- FAILED SQL ---", file=sys.stderr)
-                print(f"SQL    : {sql_string}", file=sys.stderr)
-                if params is not None:
-                    print(f"PARAMS : {params}", file=sys.stderr)
-                print(f"------------------\n", file=sys.stderr)
+                if self._report_sql_errors():
+                    print(f"\n--- FAILED SQL ---", file=sys.stderr)
+                    print(f"SQL    : {sql_string}", file=sys.stderr)
+                    if params is not None:
+                        print(f"PARAMS : {params}", file=sys.stderr)
+                    print(f"------------------\n", file=sys.stderr)
                 self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
                 if self.sql_fatal_errors: self._error(f"Fatal DB Error: {e}")
                 return None
@@ -3678,10 +3692,11 @@ class Interpreter:
                 return result.fetchall() if self.db_engine == 'duckdb' else self.db_cursor.fetchall()
             return None
         except (sqlite3.Error, duckdb.Error) as e: # Catch errors from either library
-            print(f"\n--- FAILED SQL ---", file=sys.stderr)
-            print(f"SQL    : {final_sql}", file=sys.stderr)
-            print(f"PARAMS : {resolved_params}", file=sys.stderr)
-            print(f"------------------\n", file=sys.stderr)
+            if self._report_sql_errors():
+                print(f"\n--- FAILED SQL ---", file=sys.stderr)
+                print(f"SQL    : {final_sql}", file=sys.stderr)
+                print(f"PARAMS : {resolved_params}", file=sys.stderr)
+                print(f"------------------\n", file=sys.stderr)
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             if self.sql_fatal_errors:
                 self._error(f"Fatal DB Error: {e}")
@@ -3987,6 +4002,9 @@ class Interpreter:
         elif token[0] == 'ID' and token[1].upper() == 'ON' and self._peek_token() and \
                 str(self._peek_token()[1]).upper() == 'KEY':      # ON KEY key$ CALL fn | OFF
             self._parse_on_key_statement()
+        elif token[0] == 'ID' and token[1].upper() == 'MAKE' and self._peek_token() and \
+                str(self._peek_token()[1]).upper() == 'FORM':     # MAKE FORM table$ TO file$
+            self._parse_make_form_statement()
         elif token[0] == 'AT_SYM':                                # @ row, col SAY ... GET ...
             self._parse_at_statement()
         elif self._is_email_statement(token):                     # EMAIL TO ... SUBJECT ... BODY ...
@@ -4224,6 +4242,8 @@ class Interpreter:
             value = self._get_target_value(target)
             if isinstance(value, (list, dict)):
                 self._error(f"GET {var_name}: a whole array or hash can't be edited; GET one of its fields.")
+            if isinstance(value, Decimal):
+                value = float(value)        # DuckDB's DECIMAL columns: edited as numbers
             last = target[1][-1][1] if target[1] else target[0]
             numeric = not str(last).endswith('$') and isinstance(value, (int, float)) and not isinstance(value, bool)
             picture = valid = message = when = lookup = None
@@ -4739,6 +4759,119 @@ class Interpreter:
             for row in self.db_cursor.execute(f"PRAGMA table_info({self._quote_identifier(table)})").fetchall():
                 info[row[1].lower()] = (str(row[2] or ''), bool(row[5]))
         return info
+
+    def _parse_make_form_statement(self):
+        """MAKE FORM table$ TO file$ [KEY col$] [TITLE t$]
+
+        Writes a data-entry program for the table (see dbformgen.py): a menu bar, an
+        editable grid, an entry form with a field for each column chosen from its type,
+        drop-down lists for foreign keys, F1 help. It opens the current database file."""
+        self._next_token(); self._next_token()            # MAKE FORM
+        table = self._to_string(self._parse_expression()).strip()
+        tok = self._current_token()
+        if not (tok and str(tok[1]).upper() == 'TO'):
+            self._error('MAKE FORM needs TO and a file name: MAKE FORM "customers" TO "customers_form.bas"')
+        self._next_token()
+        path = os.path.expanduser(self._to_string(self._parse_expression()))
+        key, title = None, ''
+        while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+            word = str(self._current_token()[1]).upper()
+            self._next_token()
+            if word == 'KEY':
+                key = self._to_string(self._parse_expression())
+            elif word == 'TITLE':
+                title = self._to_string(self._parse_expression())
+            else:
+                self._error(f"Unexpected '{word}' in MAKE FORM; expected KEY or TITLE")
+        database = getattr(self, 'db_filename', ':memory:')
+        if database in (':memory:', ''):
+            self._error('MAKE FORM writes a program that opens the database, so open a database file first: '
+                        'DATABASE OPEN "shop.db"')
+        if os.path.exists(path):
+            self._error(f"MAKE FORM: {path} already exists. Delete it (KILL) or choose another name.")
+        info = self._table_column_info(table)
+        if not info:
+            self._error(f"MAKE FORM: there is no table called {table}.")
+        cursor, duck = self.db_cursor, self.db_engine == 'duckdb'
+
+        # Column names as declared, NOT NULL, and foreign keys
+        if duck:
+            rows = cursor.execute("SELECT column_name, is_nullable FROM information_schema.columns "
+                                  "WHERE lower(table_name) = lower(?) ORDER BY ordinal_position", [table]).fetchall()
+            names = [r[0] for r in rows]
+            not_null = {r[0].lower() for r in rows if str(r[1]).upper() == 'NO'}
+            fks = {}
+            try:
+                for cols, ref_table, ref_cols in cursor.execute(
+                        "SELECT constraint_column_names, referenced_table, referenced_column_names "
+                        "FROM duckdb_constraints() WHERE lower(table_name) = lower(?) "
+                        "AND constraint_type = 'FOREIGN KEY'", [table]).fetchall():
+                    if len(cols) == 1:
+                        fks[cols[0].lower()] = (ref_table, ref_cols[0])
+            except duckdb.Error:
+                pass
+        else:
+            rows = cursor.execute(f"PRAGMA table_info({self._quote_identifier(table)})").fetchall()
+            names = [r[1] for r in rows]
+            not_null = {r[1].lower() for r in rows if r[3]}
+            fks = {}
+            for fk in cursor.execute(f"PRAGMA foreign_key_list({self._quote_identifier(table)})").fetchall():
+                ref_table, from_col, to_col = fk[2], fk[3], fk[4]
+                if not to_col:                   # REFERENCES t: its primary key
+                    to_col = next((c for c, (_, is_pk) in self._table_column_info(ref_table).items() if is_pk), None)
+                if to_col:
+                    fks[from_col.lower()] = (ref_table, to_col)
+        bad = [n for n in names if not re.fullmatch(r'[A-Za-z_][A-Za-z0-9_]*', n)]
+        if bad:
+            self._error(f"MAKE FORM: the column name '{bad[0]}' can't be a field name; "
+                        "rename it or make a view with plain names.")
+
+        pk = [n for n in names if info[n.lower()][1]]
+        if key is None:
+            if len(pk) == 1:
+                key = pk[0]
+            elif duck:
+                self._error(f"MAKE FORM: {table} has no single-column primary key; name one with KEY \"column\".")
+            else:
+                key = 'rowid'
+        elif key.lower() not in info:
+            self._error(f"MAKE FORM: there is no column {key} in {table}.")
+        else:
+            key = next(n for n in names if n.lower() == key.lower())
+
+        columns = []
+        for name in names:
+            declared = info[name.lower()][0]
+            kind = column_kind(declared)
+            # SQLite numbers an INTEGER PRIMARY KEY itself, so the form leaves it out
+            auto = not duck and name == key and declared.upper() == 'INTEGER' and len(pk) == 1
+            width = 20
+            m = re.search(r'CHAR\s*\(\s*(\d+)\s*\)', declared, re.I)
+            if m:
+                width = int(m.group(1))
+            elif kind == 'text':
+                longest = cursor.execute(f"SELECT MAX(LENGTH(CAST({self._quote_identifier(name)} AS VARCHAR))) "
+                                         f"FROM {self._quote_identifier(table)}").fetchone()[0] or 0
+                width = max(20, min(40, int(longest) + 5))
+            digits, decimals = decimal_places(declared)
+            col = FormColumn(name, kind, width, name.lower() in not_null and not auto, auto=auto,
+                             digits=digits, decimals=decimals)
+            if name.lower() in fks:
+                ref_table, ref_col = fks[name.lower()]
+                col.kind = 'list'
+                col.items_sql = (f"SELECT {self._quote_identifier(ref_col)} FROM {self._quote_identifier(ref_table)} "
+                                 f"ORDER BY 1")
+                col.hint_ref = ref_table
+            columns.append(col)
+        try:
+            text = build_form_program(table, columns, key, self.db_engine, database, title,
+                                      datetime.now().strftime('%Y-%m-%d'), quote=self._quote_identifier)
+        except ValueError as e:
+            self._error(str(e))
+        with open(path, 'w', encoding='utf-8', newline='') as f:
+            f.write(text.replace('\n', os.linesep) if os.name == 'nt' else text)
+        fields = sum(1 for c in columns if not c.auto)
+        print(f"Wrote {path}: a program for {table} with {fields} fields. Run it with: dbbasic {path}")
 
     def _parse_edit_record_statement(self):
         """EDIT RECORD (SELECT ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]
@@ -8711,7 +8844,8 @@ class Interpreter:
                         'IN', 'OUTPUT', 'EMAIL', 'USING',  # Keywords
                         'ENGINE', 'OPEN', 'TABLES', 'VARIABLES', 'INDEXES', 'BROWSER', # IDs
                         'CREATE', 'TABLE', # SQL Keywords
-                        'KEY', 'ERROR' # ON KEY, ON ERROR
+                        'KEY', 'ERROR', # ON KEY, ON ERROR
+                        'FORM' # MAKE FORM
                     ]
 
                     if sub_word in valid_sub_words:
