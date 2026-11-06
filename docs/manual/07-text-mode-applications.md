@@ -6,6 +6,7 @@ Example programs in `examples/`, each short enough to read in a minute:
 
 | Example | Shows |
 |---|---|
+| `contact.bas` | The simplest useful form: a contact screen with `GET` into a hash, an `@R` phone, a `LIST`, a `CHECKBOX` and Save/Cancel buttons, saved with one `INSERT` |
 | `form_demo.bas` | An order form: `GET` with `PICTURE`, a `LOOKUP` list, a date (`@D`), number masks, `@R` phone, `CHECKBOX`, a drop-down `LIST`, `VALID ... MESSAGE`, `WHEN`, Save/Cancel buttons, and F1 help with `ON KEY` |
 | `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
 | `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows, with sorting, type-ahead, `FREEZE`, `FORMAT` and row colours (`COLOR`) |
