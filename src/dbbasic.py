@@ -14391,6 +14391,13 @@ def use_utf8_streams():
 
 def main():
     use_utf8_streams()
+    # dbbasic --ide [file.bas]: the full-screen editor (see dbide.py)
+    if len(sys.argv) >= 2 and sys.argv[1] == '--ide':
+        from dbide import run_ide
+        # How the IDE runs a program: this same executable, or this script with this Python
+        runner = [sys.argv[0]] if '__compiled__' in globals() else [sys.executable, os.path.abspath(__file__)]
+        sys.exit(run_ide(sys.argv[2] if len(sys.argv) > 2 else None, runner,
+                         HelpRegistry.list_topics(), HelpRegistry.get_help))
     # If no args (or explicit flag), run REPL
     if len(sys.argv) < 2 or (len(sys.argv) == 2 and sys.argv[1] == '--repl'):
         run_repl(debug="--debug" in sys.argv)

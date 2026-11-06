@@ -31,13 +31,15 @@ _CSI_KEYS = {
     '5~': 'PGUP', '6~': 'PGDN',
     '11~': 'F1', '12~': 'F2', '13~': 'F3', '14~': 'F4', '15~': 'F5', '17~': 'F6',
     '18~': 'F7', '19~': 'F8', '20~': 'F9', '21~': 'F10', '23~': 'F11', '24~': 'F12',
+    '1;5H': 'CTRL-HOME', '1;5F': 'CTRL-END', '1;5C': 'CTRL-RIGHT', '1;5D': 'CTRL-LEFT', '1;2P': 'SHIFT-F1',
 }
 _SS3_KEYS = {'P': 'F1', 'Q': 'F2', 'R': 'F3', 'S': 'F4', 'A': 'UP', 'B': 'DOWN',
              'C': 'RIGHT', 'D': 'LEFT', 'H': 'HOME', 'F': 'END'}
 _WIN_KEYS = {'H': 'UP', 'P': 'DOWN', 'K': 'LEFT', 'M': 'RIGHT', 'G': 'HOME', 'O': 'END',
              'R': 'INS', 'S': 'DEL', 'I': 'PGUP', 'Q': 'PGDN', '\x0f': 'BTAB',
              ';': 'F1', '<': 'F2', '=': 'F3', '>': 'F4', '?': 'F5', '@': 'F6',
-             'A': 'F7', 'B': 'F8', 'C': 'F9', 'D': 'F10', '\x85': 'F11', '\x86': 'F12'}
+             'A': 'F7', 'B': 'F8', 'C': 'F9', 'D': 'F10', '\x85': 'F11', '\x86': 'F12',
+             'w': 'CTRL-HOME', 'u': 'CTRL-END', 't': 'CTRL-RIGHT', 's': 'CTRL-LEFT', 'T': 'SHIFT-F1'}
 
 ENTER, ESC, TAB, BACKSPACE = '\r', '\x1b', '\t', '\x08'
 
@@ -61,7 +63,8 @@ class ScreenError(Exception):
 
 _KEY_NAMES = {'ENTER': '\r', 'ESC': '\x1b', 'TAB': '\t', 'BACKSPACE': '\x08', 'SPACE': ' '}
 _NAMED_KEYS = {'UP', 'DOWN', 'LEFT', 'RIGHT', 'HOME', 'END', 'PGUP', 'PGDN', 'INS', 'DEL', 'BTAB',
-               'CLICK', 'RCLICK', 'MCLICK', 'WHEELUP', 'WHEELDOWN'} | {f'F{n}' for n in range(1, 13)}
+               'CLICK', 'RCLICK', 'MCLICK', 'WHEELUP', 'WHEELDOWN',
+               'CTRL-HOME', 'CTRL-END', 'CTRL-LEFT', 'CTRL-RIGHT', 'SHIFT-F1'} | {f'F{n}' for n in range(1, 13)}
 
 
 def key_from_name(name):
@@ -106,6 +109,7 @@ class KeyReader:
         # Terminal resize: on_resize() redraws; it runs while waiting for a key (SIGWINCH on
         # macOS/Linux, a size check while polling on Windows), never in the middle of output
         self.on_resize = None
+        self.block_suspend = False   # True: Ctrl-Z reaches the program instead of suspending it
         self.waiting = False
         self.resized = False
         self._win_size = None
@@ -160,7 +164,8 @@ class KeyReader:
                 disabled = os.fpathconf(fd, 'PC_VDISABLE')
             except (OSError, ValueError):
                 disabled = 0
-            slots = [getattr(termios, n) for n in ('VDSUSP', 'VLNEXT', 'VDISCARD') if hasattr(termios, n)]
+            names = ('VDSUSP', 'VLNEXT', 'VDISCARD') + (('VSUSP',) if self.block_suspend else ())
+            slots = [getattr(termios, n) for n in names if hasattr(termios, n)]
             if sys.platform == 'darwin' and not hasattr(termios, 'VDSUSP'):
                 slots.append(11)                            # VDSUSP in <sys/termios.h>
             for slot in slots:
