@@ -318,9 +318,14 @@ class HelpRegistry:
             "examples": ['COLOR 14, 1', 'COLOR 15, 1, 0, 3', 'COLOR , 4']
         },
         "BOX": {
-            "syntax": 'BOX top, left, bottom, right [, title$] [DOUBLE]',
-            "desc": "Draws a box with line characters and clears its inside in the current COLOR. The title is centred in the top line.",
-            "examples": ['BOX 2, 5, 10, 60, "Customer" DOUBLE']
+            "syntax": 'BOX top, left, bottom, right [, title$] [DOUBLE] [SHADOW]',
+            "desc": "Draws a box with line characters and clears its inside in the current COLOR. The title is centred in the top line. SHADOW darkens the two columns to its right and the row below. Pop-ups (MENU, ALERT, pull-downs, pickers, EDIT RECORD, PROGRESS) have shadows unless SET SHADOW OFF.",
+            "examples": ['BOX 2, 5, 10, 60, "Customer" DOUBLE SHADOW', 'SET SHADOW OFF']
+        },
+        "PROGRESS": {
+            "syntax": 'PROGRESS done, total [TITLE t$] | PROGRESS OFF',
+            "desc": "Shows a centred box with a progress bar and a percentage; later calls update it in place (drawing only what changed). PROGRESS OFF removes it and puts back what it covered.",
+            "examples": ['FOR i = 1 TO n\n    PROGRESS i, n TITLE "Copying"\nNEXT i\nPROGRESS OFF']
         },
         "@": {
             "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [WHEN condition] [LOOKUP (SELECT ...)]]\n@ row, col BUTTON label$ [CANCEL]\nGET ... CHECKBOX | GET ... LIST "a,b,c" | GET ... LIST (SELECT ...)',
@@ -344,7 +349,7 @@ class HelpRegistry:
         },
         "MENU": {
             "syntax": 'choice = MENU(row, col, item1$, item2$, ... | items_array)',
-            "desc": "Shows a boxed light-bar menu. Arrows move, Enter chooses, the first letter of an item chooses it directly. Returns the item number from 1, or 0 for Esc. What the menu covered is put back when it returns.",
+            "desc": "Shows a boxed light-bar menu. Arrows move, Enter chooses, the first letter of an item chooses it directly. Returns the item number from 1, or 0 for Esc. What the menu covered is put back when it returns. A menu longer than the screen scrolls (PgUp/PgDn move a page).",
             "examples": ['choice = MENU(5, 10, "Add", "Edit", "Quit")']
         },
         "BROWSE": {
@@ -843,7 +848,7 @@ class HelpRegistry:
         
         # --- CONFIGURATION (SET) ---
         "SET": {
-            "syntax": 'SET [OUTPUT|EMAIL|NULL_HANDLING|SQL_FATAL_ERRORS|HASH_KEYS|AUTOADVANCE|CONFIRM|MOUSE] ...',
+            "syntax": 'SET [OUTPUT|EMAIL|NULL_HANDLING|SQL_FATAL_ERRORS|HASH_KEYS|AUTOADVANCE|CONFIRM|MOUSE|SHADOW] ...',
             "desc": "Configures system behavior. Type HELP SET OUTPUT or HELP SET EMAIL for details.",
             "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE', 'SET AUTOADVANCE ON']
         },
@@ -4061,7 +4066,8 @@ class Interpreter:
             self._error(f"Unknown statement: {token[0]}")
 
     # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see dbscreen.py) ---
-    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT', 'VIEW', 'REPORT'}
+    SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT', 'VIEW', 'REPORT',
+                         'PROGRESS'}
 
     def _is_screen_statement(self, token):
         """True for CLS, LOCATE, COLOR, BOX, READ or BROWSE used as a statement rather than as
@@ -4136,10 +4142,17 @@ class Interpreter:
                 if self._current_token() and self._current_token()[0] == 'COMMA':
                     self._next_token()
                     title = self._to_string(self._parse_expression())
-                if self._current_token() and str(self._current_token()[1]).upper() == 'DOUBLE':
+                shadow = False
+                while self._current_token() and str(self._current_token()[1]).upper() in ('DOUBLE', 'SHADOW') \
+                        and self._current_token()[0] not in ('STRING', 'NUMBER'):
+                    if str(self._current_token()[1]).upper() == 'DOUBLE':
+                        double = True
+                    else:
+                        shadow = True
                     self._next_token()
-                    double = True
                 SCREEN.box(r1, c1, r2, c2, title, double)
+                if shadow:
+                    SCREEN.shadow(r1, c1, r2, c2)
             elif word == 'READ':
                 self._run_read()
             elif word == 'BROWSE':
@@ -4150,6 +4163,24 @@ class Interpreter:
                 self._parse_view_statement()
             elif word == 'REPORT':
                 self._parse_report_statement()
+            elif word == 'PROGRESS':
+                # PROGRESS done, total [TITLE t$] | PROGRESS OFF
+                tok = self._current_token()
+                if tok and tok[0] == 'ID' and tok[1].upper() == 'OFF':
+                    self._next_token()
+                    SCREEN.progress_off()
+                else:
+                    done = self._parse_expression()
+                    self._expect('COMMA')
+                    total = self._parse_expression()
+                    title = ''
+                    tok = self._current_token()
+                    if tok and tok[0] not in ('STRING', 'NUMBER') and str(tok[1]).upper() == 'TITLE':
+                        self._next_token()
+                        title = self._to_string(self._parse_expression())
+                    if not isinstance(done, (int, float)) or not isinstance(total, (int, float)):
+                        self._error("PROGRESS needs two numbers: PROGRESS done, total")
+                    SCREEN.progress(float(done), float(total), title)
             elif word == 'EDIT':
                 tok = self._current_token()
                 if tok and str(tok[1]).upper() == 'TEXT' and tok[0] == 'ID':
@@ -4803,6 +4834,8 @@ class Interpreter:
         try:
             while True:
                 SCREEN.box(top, left, bottom, right, title or table.title())
+                if SCREEN.shadows:
+                    SCREEN.shadow(top, left, bottom, right)
                 for n, (column, label) in enumerate(zip(columns, labels)):
                     row = top + 2 + n
                     SCREEN.say(row, left + 2, label.rjust(label_width) + ' : ')
@@ -6217,6 +6250,13 @@ class Interpreter:
                 self._error("Expected ON or OFF after SET MOUSE")
             SCREEN.keys.set_mouse(setting_token[1].upper() == 'ON')
             self._next_token()
+        elif token[0] == 'ID' and token[1].upper() == 'SHADOW':
+            self._next_token()
+            setting_token = self._current_token()
+            if not setting_token or setting_token[0] != 'ID' or setting_token[1].upper() not in ['ON', 'OFF']:
+                self._error("Expected ON or OFF after SET SHADOW")
+            SCREEN.shadows = setting_token[1].upper() == 'ON'
+            self._next_token()
         elif token[0] == 'ID' and token[1].upper() in ('AUTOADVANCE', 'CONFIRM'):
             # SET CONFIRM is Clipper's name for the opposite setting: CONFIRM ON means a
             # full field waits for Enter, so it is AUTOADVANCE OFF.
@@ -6315,7 +6355,7 @@ class Interpreter:
         else:
             option = token[1] if token and token[0] not in ('NEWLINE', 'COLON') else '(nothing)'
             self._error(f"Unknown SET option '{option}'. Expected OUTPUT, EMAIL, NULL_HANDLING, "
-                        "SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE, CONFIRM or MOUSE.")
+                        "SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE, CONFIRM, MOUSE or SHADOW.")
 
 
     def _handle_output(self, results, column_names):

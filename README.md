@@ -162,7 +162,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | ANALYZE TEXT            | Provides a statistical analysis of a plain text file, including character, word, and line counts, encoding, and newline style. |
 | ANALYZE XML             | Analyzes an XML file to determine its structure, infer the primary record tag, and list its fields. |
 | BELL                    | Emits an audible system beep sound. |
-| BOX                     | Draws a single- or double-line box with an optional title on the text screen. |
+| BOX                     | Draws a single- or double-line box with an optional title and `SHADOW` on the text screen. Pop-ups have drop shadows unless `SET SHADOW OFF`. |
 | BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. With `EDIT`, cells are edited in place and saved to the table, Ins adds a row and Del deletes one. Click a heading (or F3) to sort, type to jump to a row; `FREEZE`, `FORMAT` and `COLOR` set frozen columns, number masks and row colours. |
 | BROWSER                 | Opens a specified URL in the system's default web browser. |
 | CHAIN                   | Transfers program execution to a different DbBasic script, optionally preserving variables. |
@@ -207,6 +207,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | OPEN                    | Opens a file for reading, writing, or appending, assigning it a file handle. |
 | POP                     | Removes the last element from an array, optionally storing it in a variable. |
 | PRINT                   | Outputs text, variables, or expressions to the console or an open file. |
+| PROGRESS                | Shows a centred box with a progress bar and percentage for a long job; `PROGRESS OFF` removes it. |
 | PUSH                    | Adds a new element to the end of an array. |
 | READ                    | Edits the pending `@ ... GET` fields; Esc restores the original values. |
 | REPORT                  | Turns a query into a report with a title, group headings, subtotals, totals and pages, to the screen, a file, `VIEW` or a string. |

@@ -17,6 +17,7 @@ from datetime import datetime
 import os
 import re
 import shutil
+import signal
 import sys
 import time
 
@@ -91,6 +92,12 @@ class KeyReader:
         self.hotkeys = {}
         self.on_hotkey = None
         self._in_hotkey = False
+        # Terminal resize: on_resize() redraws; it runs while waiting for a key (SIGWINCH on
+        # macOS/Linux, a size check while polling on Windows), never in the middle of output
+        self.on_resize = None
+        self.waiting = False
+        self.resized = False
+        self._win_size = None
 
     # --- mouse -----------------------------------------------------------
     _MOUSE_ON, _MOUSE_OFF = '\x1b[?1000h\x1b[?1006h', '\x1b[?1000l\x1b[?1006l'
@@ -170,17 +177,30 @@ class KeyReader:
             import msvcrt
             if self.mouse_wanted:
                 self._mouse_reporting(True)
-            if timeout is not None:
-                deadline = time.time() + timeout
-                while not msvcrt.kbhit():
-                    if time.time() >= deadline:
-                        return None
-                    time.sleep(0.01)
+            deadline = None if timeout is None else time.time() + timeout
+            checked = 0.0
+            while not msvcrt.kbhit():
+                if deadline is not None and time.time() >= deadline:
+                    return None
+                if self.on_resize and time.time() - checked > 0.25:   # no SIGWINCH on Windows
+                    checked = time.time()
+                    size = shutil.get_terminal_size((80, 24))
+                    if self._win_size is not None and size != self._win_size:
+                        self.on_resize()
+                    self._win_size = size
+                time.sleep(0.01)
             return msvcrt.getwch()
         import select
         self.raw_on()
         fd = sys.stdin.fileno()
-        ready, _, _ = select.select([fd], [], [], timeout)
+        if self.resized and self.on_resize:
+            self.resized = False
+            self.on_resize()
+        self.waiting = True
+        try:
+            ready, _, _ = select.select([fd], [], [], timeout)
+        finally:
+            self.waiting = False
         if not ready:
             return None
         first = os.read(fd, 1)
@@ -595,11 +615,40 @@ class Screen:
         self.last_button = ''       # BUTTON$: the label of the button that ended the last READ
         self.hotkey_call = None     # set by the interpreter: runs the function bound to a key
         self.keys.on_hotkey = self._run_hotkey
+        self.shadows = True         # SET SHADOW OFF: pop-ups without a drop shadow
+        self.progress_box = None    # PROGRESS: (area, what it covered, last drawn bar)
+        self.keys.on_resize = self._resized
+        if hasattr(signal, 'SIGWINCH') and self.keys.is_tty:
+            try:
+                signal.signal(signal.SIGWINCH, self._on_sigwinch)
+            except ValueError:      # not the main thread
+                pass
         # A copy of what is on the screen, one (char, fg, bg) cell per position, so that
         # SAVESCREEN, MENU and BROWSE can put back what they cover (ANSI can't read it back)
         self.rows, self.cols = self.size()
         self.cells = self._blank(self.rows, self.cols, 7, 0)
         self.cur_row, self.cur_col = 1, 1
+
+    def _on_sigwinch(self, signum, frame):
+        if self.keys.waiting:       # blocked reading a key: safe to redraw now
+            self._resized()
+        else:
+            self.keys.resized = True
+
+    def _resized(self):
+        """The terminal changed size: keep the screen copy that still fits, and redraw it all,
+        since terminals shuffle or wrap what was there."""
+        rows, cols = self.size()
+        if not self.used or (rows, cols) == (self.rows, self.cols):
+            self.rows, self.cols = rows, cols
+            return
+        cells = self._blank(rows, cols, self.fg, self.bg)
+        for r in range(min(rows, self.rows)):
+            cells[r][:min(cols, self.cols)] = self.cells[r][:min(cols, self.cols)]
+        self.rows, self.cols = rows, cols
+        self.cells = [[(' ', self.fg, self.bg)] * cols for _ in range(rows)]
+        row, col = min(self.cur_row, rows), min(self.cur_col, cols)
+        self._w('\x1b[0m\x1b[2J' + self._draw_cells(1, 1, cells) + self._normal() + f'\x1b[{row};{col}H')
 
     def _run_hotkey(self, key):
         """Runs an ON KEY handler, then puts back the screen it may have drawn over."""
@@ -788,6 +837,63 @@ class Screen:
             out.append(self._put(r, c1, v + ' ' * inner + v, self.fg, self.bg))
         out.append(self._put(r2, c1, bl + h * inner + br, self.fg, self.bg))
         self._w(''.join(out))
+
+    def shadow(self, r1, c1, r2, c2):
+        """Darkens what is under the box's drop shadow: two columns to its right and the row
+        below it, offset by one row and two columns, as a light falls from the top left."""
+        out = []
+        for r in range(r1 + 1, r2 + 2):
+            first = c2 + 1 if r <= r2 else c1 + 2
+            for c in range(first, c2 + 3):
+                if 1 <= r <= self.rows and 1 <= c <= self.cols:
+                    ch = self.cells[r - 1][c - 1][0]
+                    out.append(self._put(r, c, ch, 8, 0))
+        self._w(''.join(out) + self._normal())
+
+    def popup(self, r1, c1, r2, c2, title='', double=False, shadow=None):
+        """Draws a pop-up box, with a shadow unless SET SHADOW OFF, and returns what it
+        covered (shadow included) for restore_saved."""
+        shadow = self.shadows if shadow is None else shadow
+        under = self.save(r1, c1, min(r2 + (1 if shadow else 0), self.rows), min(c2 + (2 if shadow else 0), self.cols))
+        self.box(r1, c1, r2, c2, title, double)
+        if shadow:
+            self.shadow(r1, c1, r2, c2)
+        return under
+
+    # --- PROGRESS ------------------------------------------------------
+    def progress(self, done, total, title=''):
+        """PROGRESS: a centred box with a bar and a percentage, drawn when first used and
+        updated in place (only when what it shows changes, so a tight loop stays fast)."""
+        fraction = 0.0 if not total else max(0.0, min(1.0, done / total))
+        cursor = (self.cur_row, self.cur_col)     # PRINT carries on where it was
+        if self.progress_box is None:
+            inner = max(20, min(50, self.cols - 6))
+            top = max(1, (self.rows - 5) // 2 + 1)
+            left = max(1, (self.cols - inner - 2) // 2 + 1)
+            area = (top, left, top + 4, left + inner + 1)
+            self.progress_box = [area, self.popup(*area, title=title), None]
+        area, under, last = self.progress_box
+        top, left, bottom, right = area
+        width = right - left - 8                  # room for ' 100% '
+        filled = int(fraction * width + 1e-9)
+        shown = (filled, int(fraction * 100 + 1e-9), title)
+        if shown != last:
+            self.progress_box[2] = shown
+            if last and last[2] != title:
+                self.box(top, left, bottom, right, title)
+            bar = ' ' + '█' * filled + '░' * (width - filled) + f'{shown[1]:4d}%'
+            self._w(self._put(top + 2, left + 1, bar.ljust(right - left - 1), self.fg, self.bg) + self._normal())
+        self.cur_row, self.cur_col = cursor
+        self._w(f'\x1b[{cursor[0]};{cursor[1]}H')
+
+    def progress_off(self):
+        """PROGRESS OFF: removes the box and puts back what it covered."""
+        if self.progress_box:
+            row, col = self.cur_row, self.cur_col
+            self.restore_saved(self.progress_box[1])
+            self.progress_box = None
+            self.cur_row, self.cur_col = row, col
+            self._w(f'\x1b[{row};{col}H')
 
     # --- GET / READ ----------------------------------------------------
     def add_get(self, row, col, var_name, value, picture, valid, numeric, target=None,
@@ -1058,7 +1164,7 @@ class Screen:
         top = field.row + 1 if field.row + height <= self.rows else max(1, field.row - height)
         left = max(1, min(field.col, self.cols - width + 1))
         chosen = self.browse(columns, [list(r) for r in rows], (top, left, top + height - 1, left + width - 1),
-                             'Choose', start=start)
+                             'Choose', start=start, shadow=True)
         if chosen < 0:
             return None
         value = rows[chosen][0]
@@ -1299,7 +1405,7 @@ class Screen:
         for title, _ in menus:
             positions.append(x)
             x += len(title) + 3
-        current, opened, item = 0, False, 0
+        current, opened, item, first = 0, False, 0, 0   # first: the top item of a scrolled pull-down
         underneath = None
         cursor = (self.cur_row, self.cur_col)   # put back afterwards, so PRINT carries on where it was
 
@@ -1320,28 +1426,40 @@ class Screen:
             items = menus[n][1]
             width = max(len(i) for i in items) + 2
             left = max(1, min(positions[n] - 1, self.cols - width - 1))
-            return row + 1, left, row + 2 + len(items), left + width + 1
+            height = max(1, min(len(items), self.rows - row - 2 - (1 if self.shadows else 0)))
+            return row + 1, left, row + 2 + height, left + width + 1
 
         def draw_dropdown():
+            nonlocal first
             items = menus[current][1]
             top, left, bottom, right = dropdown_area(current)
+            height = bottom - top - 1
+            first = min(max(first, item - height + 1), item)
             self.box(top, left, bottom, right)
+            if self.shadows:
+                self.shadow(top, left, bottom, right)
             width = right - left - 1
             out = []
-            for n, text in enumerate(items):
+            for n in range(first, first + height):
+                text = items[n]
                 if not selectable(items, n):
-                    out.append(self._put(top + 1 + n, left, '├' + '─' * width + '┤', self.fg, self.bg))
+                    out.append(self._put(top + 1 + n - first, left, '├' + '─' * width + '┤', self.fg, self.bg))
                     continue
                 fg, bg = (self.field_fg, self.field_bg) if n == item else (self.fg, self.bg)
-                out.append(self._put(top + 1 + n, left + 1, (' ' + text).ljust(width), fg, bg))
+                out.append(self._put(top + 1 + n - first, left + 1, (' ' + text).ljust(width), fg, bg))
+            if height < len(items):                    # arrows on the border show there is more
+                out.append(self._put(top, right - 1, '▲' if first > 0 else '─', self.fg, self.bg))
+                out.append(self._put(bottom, right - 1, '▼' if first + height < len(items) else '─', self.fg, self.bg))
             self._w(''.join(out) + self._normal())
 
         def open_menu():
-            nonlocal opened, item, underneath
+            nonlocal opened, item, underneath, first
             close_menu()
             if menus[current][1]:
-                underneath = self.save(*dropdown_area(current))
-                opened, item = True, first_item(menus[current][1])
+                top, left, bottom, right = dropdown_area(current)
+                shade = 1 if self.shadows else 0
+                underneath = self.save(top, left, min(bottom + shade, self.rows), min(right + 2 * shade, self.cols))
+                opened, item, first = True, first_item(menus[current][1]), 0
             else:
                 opened = False
 
@@ -1386,7 +1504,7 @@ class Screen:
                     if opened:
                         top, left, bottom, right = dropdown_area(current)
                         if top < r < bottom and left < c < right:
-                            k = r - top - 1
+                            k = r - top - 1 + first
                             if selectable(menus[current][1], k):
                                 return f'{menus[current][0]}.{menus[current][1][k].strip()}'
                             continue
@@ -1457,8 +1575,7 @@ class Screen:
         top = max(1, (self.rows - height) // 2 + 1)
         left = max(1, (self.cols - inner - 2) // 2 + 1)
         bottom, right = top + height - 1, left + inner + 1
-        underneath = self.save(top, left, min(bottom, self.rows), min(right, self.cols))
-        self.box(top, left, bottom, right, double=True)
+        underneath = self.popup(top, left, bottom, right, double=True)
         for n, line in enumerate(lines):
             self._w(self._put(top + 1 + n, left + 1, line.strip()[:inner].center(inner), self.fg, self.bg))
         choice = 0
@@ -1506,24 +1623,34 @@ class Screen:
             raise ScreenError("MENU needs at least one item.")
         items = [str(i) for i in items]
         width = max(len(i) for i in items) + 2
-        underneath = self.save(row, col, row + len(items) + 1, col + width + 1)
-        self.box(row, col, row + len(items) + 1, col + width + 1)
-        choice = 0
+        # A menu taller than the room below it moves up; one taller than the screen scrolls
+        below = 1 if self.shadows else 0
+        if row + len(items) + 1 + below > self.rows:
+            row = max(1, self.rows - len(items) - 1 - below)
+        height = max(1, min(len(items), self.rows - row - 1 - below))
+        underneath = self.popup(row, col, row + height + 1, col + width + 1)
+        choice, first = 0, 0
         self._w('\x1b[?25l')
         try:
             while True:
-                for n, item in enumerate(items):
-                    fg, bg = (self.field_fg, self.field_bg) if n == choice else (self.fg, self.bg)
-                    self._w(self._put(row + 1 + n, col + 1, ' ' + item.ljust(width - 1), fg, bg) + self._normal())
+                first = min(max(first, choice - height + 1), choice)
+                for n in range(height):
+                    i = first + n
+                    fg, bg = (self.field_fg, self.field_bg) if i == choice else (self.fg, self.bg)
+                    self._w(self._put(row + 1 + n, col + 1, ' ' + items[i].ljust(width - 1), fg, bg) + self._normal())
+                if height < len(items):                # arrows on the border show there is more
+                    self._w(self._put(row, col + width, '▲' if first > 0 else '─', self.fg, self.bg) +
+                            self._put(row + height + 1, col + width, '▼' if first + height < len(items) else '─',
+                                      self.fg, self.bg) + self._normal())
                 key = self.keys.read_key()
                 if key is None:
                     key = ESC
                 self.last_key = key
                 if key == 'CLICK':
                     r, c = self.keys.mouse_row, self.keys.mouse_col
-                    if row < r <= row + len(items) and col < c <= col + width:
-                        return r - row                 # the item clicked
-                    if not (row <= r <= row + len(items) + 1 and col <= c <= col + width + 1):
+                    if row < r <= row + height and col < c <= col + width:
+                        return first + r - row         # the item clicked
+                    if not (row <= r <= row + height + 1 and col <= c <= col + width + 1):
                         return 0                       # a click outside the menu cancels it
                     continue
                 if key == 'WHEELDOWN':
@@ -1538,10 +1665,14 @@ class Screen:
                     choice = (choice + 1) % len(items)
                 elif key in ('UP', 'LEFT', 'BTAB'):
                     choice = (choice - 1) % len(items)
-                elif key in ('HOME', 'PGUP'):
+                elif key == 'HOME':
                     choice = 0
-                elif key in ('END', 'PGDN'):
+                elif key == 'END':
                     choice = len(items) - 1
+                elif key == 'PGUP':
+                    choice = max(0, choice - height) if height < len(items) else 0
+                elif key == 'PGDN':
+                    choice = min(len(items) - 1, choice + height) if height < len(items) else len(items) - 1
                 elif len(key) == 1:
                     hits = [n for n, item in enumerate(items) if item.strip()[:1].upper() == key.upper()]
                     if hits:
@@ -1552,7 +1683,7 @@ class Screen:
 
     # --- BROWSE --------------------------------------------------------
     def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None,
-               start=0, frozen=0, formats=None, color_col=None):
+               start=0, frozen=0, formats=None, color_col=None, shadow=False):
         """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
 
         With save, the grid is editable: Left/Right move between cells, Enter (or typing)
@@ -1633,8 +1764,7 @@ class Screen:
             current = start
             top = max(0, start - (page - 1))
         message = ''
-        underneath = self.save(r1, c1, r2, c2)
-        self.box(r1, c1, r2, c2, title)
+        underneath = self.popup(r1, c1, r2, c2, title, shadow=shadow and self.shadows)
         self._w('\x1b[?25l')
 
         def shown():

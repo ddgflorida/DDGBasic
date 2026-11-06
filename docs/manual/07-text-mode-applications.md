@@ -26,7 +26,7 @@ Related material in other chapters:
 
 1. [Tutorial: a contact manager](#71-tutorial-a-contact-manager)
 2. [The screen](#72-the-screen)
-   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen)
+   * [CLS, LOCATE, COLOR and BOX](#cls-locate-color-and-box) · [PROGRESS](#progress) · [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen)
 3. [Entry fields](#73-entry-fields)
    * [@ ... SAY ... GET](#--say--get) · [READ](#read) · [Buttons](#buttons)
 4. [Menus and message boxes](#74-menus-and-message-boxes)
@@ -264,7 +264,8 @@ IF LASTKEY$ = CHR$(27) THEN GOTO cancelled
 | `CLS` | Clears the screen in the current colours and moves the cursor to 1, 1. Pending `GET` fields are discarded. |
 | `LOCATE row [, col]` | Moves the cursor. The next `PRINT` or `INPUT` starts there. `col` defaults to 1. |
 | `COLOR [fg] [, bg] [, field_fg] [, field_bg]` | Sets the text colours. Any value can be left out (`COLOR , 4` changes only the background). `field_fg`/`field_bg` colour `GET` fields, the menu bar and the `BROWSE` bar; they start as black on white. |
-| `BOX top, left, bottom, right [, title$] [DOUBLE]` | Draws a single- or double-line box, clears its inside in the current colours, and centres the title in the top line. |
+| `BOX top, left, bottom, right [, title$] [DOUBLE] [SHADOW]` | Draws a single- or double-line box, clears its inside in the current colours, and centres the title in the top line. `SHADOW` adds a drop shadow (see below). |
+| `SET SHADOW ON` / `OFF` | Whether pop-ups (`MENU`, `ALERT`, pull-downs, `LIST` and `LOOKUP` pickers, `EDIT RECORD` and `PROGRESS`) have a drop shadow. On by default. |
 
 The colour numbers are those of QBasic:
 
@@ -272,6 +273,41 @@ The colour numbers are those of QBasic:
 |---|---|---|---|---|---|---|---|
 | 0 black | 1 blue | 2 green | 3 cyan | 4 red | 5 magenta | 6 brown | 7 white |
 | 8 grey | 9 light blue | 10 light green | 11 light cyan | 12 light red | 13 light magenta | 14 yellow | 15 bright white |
+
+**Shadows.** A drop shadow darkens what is under the box: the two columns to its right and the row below it, offset as if the light came from the top left. The characters stay readable, drawn in grey on black. The pop-ups have one unless `SET SHADOW OFF`; a `BOX` has one when it says `SHADOW`. When a pop-up closes, the shadowed area is put back with the rest. A `BOX ... SHADOW` is part of the screen until something is drawn over it, so save the area with its shadow (two columns wider and one row taller) if you want to put it back.
+
+```
+xxxx┌──────── Shadow ────────┐xxxxx
+xxxx│                        │▒▒xxx      ▒ = the characters under the shadow, in grey on black
+xxxx│                        │▒▒xxx
+xxxx└────────────────────────┘▒▒xxx
+xxxxxx▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒xxx
+```
+
+### PROGRESS
+
+```
+PROGRESS done, total [TITLE title$]
+PROGRESS OFF
+```
+
+`PROGRESS` shows a centred box with a bar and a percentage, for a long job. The first `PROGRESS` draws the box; later ones update the bar in place. Only a change in what is shown is drawn, so calling it on every pass of a tight loop costs little. `PROGRESS OFF` removes the box and puts back what it covered. The cursor is left where it was, so `PRINT` carries on as before.
+
+```basic
+FOR i = 1 TO n
+    PROGRESS i, n TITLE "Copying"
+    REM ... the work ...
+NEXT i
+PROGRESS OFF
+```
+
+```
+┌──────────────────── Copying ─────────────────────┐
+│                                                  │
+│ ████████████████████░░░░░░░░░░░░░░░░░░░░░░░  46% │
+│                                                  │
+└──────────────────────────────────────────────────┘
+```
 
 ### SAVESCREEN and RESTSCREEN
 
@@ -501,6 +537,8 @@ choice = MENU(row, col, items)                 REM an array of items
 ```
 
 `MENU` draws a box at `row, col` with one item per line and a highlighted bar. Up and Down move the bar, Enter chooses, and typing the first letter of an item chooses it at once. It returns the item number, counting from 1, or `0` for Esc. When it returns, the menu disappears and what it covered is put back.
+
+A menu that would run off the bottom of the screen moves up. One with more items than the screen has rows scrolls: `▲` and `▼` on its border show there are more items above or below, and PgUp/PgDn move a page at a time. Pull-downs of `MENUBAR$` scroll the same way.
 
 ### ALERT()
 
@@ -774,6 +812,8 @@ LOOP UNTIL k$ = CHR$(27)
 While a program reads keys, the terminal does not echo them and passes Ctrl-S, Ctrl-Q, Ctrl-Y, Ctrl-V and Ctrl-O to the program. Ctrl-C still stops the program. `INPUT` switches the terminal back to normal line editing. When the program ends, the colours, the cursor and the terminal mode are restored. The screen contents are left as they are, as they were in DOS.
 
 DbBasic always writes its output as UTF-8. On Windows, output sent to a pipe or a file would otherwise use the ANSI code page (cp1252), which cannot encode the box-drawing characters and fails with `'charmap' codec can't encode ...`. The console itself shows them as long as its font has the characters (the default fonts of Windows Terminal and the Windows 10+ console do).
+
+**Resizing.** When the terminal window changes size, DbBasic redraws the screen from its copy (see [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen)), so the window doesn't fill with wrapped or shuffled lines. What fits the new size is kept where it was. Nothing is laid out again: a full-screen `BROWSE` or a menu bar keeps the size it was drawn at until it is drawn again, and `CLS` starts over at the new size. The redraw happens while the program waits for a key; on Windows the size is checked four times a second during the wait.
 
 When standard input is not a terminal, keys are read from it as a stream, with arrow keys written as their escape sequences (`\x1b[A` for Up). This is how `tests/screen.bas` and `examples/retro_contacts.bas` are run by the test runner.
 
