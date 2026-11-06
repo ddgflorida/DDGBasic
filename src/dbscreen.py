@@ -1739,7 +1739,8 @@ class Screen:
     # --- BROWSE --------------------------------------------------------
     def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None,
                start=0, frozen=0, formats=None, color_col=None, shadow=False,
-               on_move=None, switch=False, keep=False, draw_only=False, bar=True, state=None, keys_hint=None):
+               on_move=None, switch=False, keep=False, draw_only=False, bar=True, state=None, keys_hint=None,
+               exit_keys=()):
         """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
 
         With save, the grid is editable: Left/Right move between cells, Enter (or typing)
@@ -1764,7 +1765,8 @@ class Screen:
         putting back what it covered; draw_only draws it and returns; bar=False draws no bar;
         state, a dict, keeps the position and sort between turns. keys_hint replaces
         "Enter=select  Esc=cancel" on the status line; 'back' marks a detail grid, whose Esc
-        goes back to the master."""
+        goes back to the master. A key in exit_keys (EXIT ON) ends the grid, returning the
+        current row, with last_key set to it, so the program can act on it."""
         screen_rows, screen_cols = self.size()
         r1, c1, r2, c2 = area or (1, 1, screen_rows, screen_cols)
         if r2 - r1 < 4 or c2 - c1 < 10:
@@ -2042,6 +2044,8 @@ class Screen:
                 if key is None:
                     key = ESC
                 self.last_key = key
+                if key in exit_keys:
+                    return current             # EXIT ON: the program handles this key
                 if switch and (key == 'F6' or (key == TAB and not save) or
                                (key == 'CLICK' and not (r1 <= self.keys.mouse_row <= r2 and
                                                         c1 <= self.keys.mouse_col <= c2))):

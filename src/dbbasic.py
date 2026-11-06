@@ -354,8 +354,8 @@ class HelpRegistry:
             "examples": ['choice = MENU(5, 10, "Add", "Edit", "Quit")']
         },
         "BROWSE": {
-            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [INTO var] [DETAIL (SELECT ... WHERE col = :var.col) [EDIT [KEY key$]] [TITLE t$] ...]',
-            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown. DETAIL adds a second grid below for the rows of the master's current row (INTO var holds it, so the DETAIL query uses :var.col); Enter or Tab on the master (F6 in an EDIT grid) or a click goes to the detail, Esc goes back, Esc on the master ends with INTO holding its current row, and lines added with Ins are linked to the master row.",
+            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [EXIT ON keys$] [INTO var] [DETAIL (SELECT ... WHERE col = :var.col) [EDIT [KEY key$]] [TITLE t$] ...]',
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown. DETAIL adds a second grid below for the rows of the master's current row (INTO var holds it, so the DETAIL query uses :var.col); Enter or Tab on the master (F6 in an EDIT grid) or a click goes to the detail, Esc goes back, Esc on the master ends with INTO holding its current row, and lines added with Ins are linked to the master row. EXIT ON \"PgUp,PgDn,F2\" makes those keys end BROWSE so the program can handle them (LASTKEY$ says which).",
             "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"', 'BROWSE (SELECT name, city, balance, CASE WHEN balance < 0 THEN 12 END AS shade FROM customers) FREEZE 1 FORMAT balance "#,##0.00" COLOR "shade"', 'BROWSE (SELECT id, customer FROM orders) INTO o DETAIL (SELECT * FROM order_lines WHERE order_id = :o.id) EDIT KEY "line_id"']
         },
         "EDIT": {
@@ -4461,7 +4461,7 @@ class Interpreter:
                 table = source
                 sql = f"SELECT * FROM {self._quote_identifier(source)}"
         spec = dict(sql=sql, table=table, area=None, title='', into=None, edit=False, key=None,
-                    frozen=0, formats={}, color=None)
+                    frozen=0, formats={}, color=None, exit_keys=())
         while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
             tok = self._current_token()
             word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
@@ -4488,6 +4488,17 @@ class Interpreter:
             elif word == 'COLOR':
                 self._next_token()
                 spec['color'] = self._to_string(self._parse_expression())
+            elif word == 'EXIT':
+                # EXIT ON "PgUp,PgDn,F2": these keys end BROWSE; LASTKEY$ says which one
+                self._next_token()
+                if str(self._current_token()[1]).upper() != 'ON':
+                    self._error('Expected ON after EXIT: EXIT ON "PgUp,PgDn"')
+                self._next_token()
+                names = [n.strip() for n in self._to_string(self._parse_expression()).split(',') if n.strip()]
+                try:
+                    spec['exit_keys'] = tuple(key_from_name(n) for n in names)
+                except ScreenError as e:
+                    self._error(f"EXIT ON: {e}")
             elif tok[0] == 'INTO' and not detail:
                 self._next_token()
                 spec['into'] = self._expect('ID')[1]
@@ -4594,7 +4605,8 @@ class Interpreter:
         format_fns = {column_index(name, 'FORMAT'): (lambda mask: lambda v: Formatter.format(mask, [v]).strip())(mask)
                       for name, mask in spec['formats'].items()}
         options = dict(save=save, hidden=hidden, locked=locked, add=add, delete=delete,
-                       frozen=spec['frozen'], formats=format_fns, color_col=color_index)
+                       frozen=spec['frozen'], formats=format_fns, color_col=color_index,
+                       exit_keys=spec['exit_keys'])
         return dict(columns=columns, rows=results, hidden=hidden, options=options)
 
     @staticmethod
@@ -5176,16 +5188,27 @@ class Interpreter:
         Uses a regex to find the first table name after a FROM clause.
         Handles quoted and unquoted identifiers. Not a full SQL parser.
         """
-        # This regex looks for FROM followed by an optional quote ([ or "),
-        # captures the name, then matches the optional closing quote.
-        match = re.search(
-            r'\bFROM\s+(?:\[([^\]]+)\]|"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_]*))',
-            sql_string,
-            re.IGNORECASE
-        )
-        if match:
-            # The result will be in one of the capture groups
-            return next((group for group in match.groups() if group is not None), None)
+        # The FROM of the query itself, not of a subquery in its column list
+        # ((SELECT name FROM track ...) AS track): the first FROM outside brackets and quotes.
+        depth, quote, i = 0, None, 0
+        while i < len(sql_string):
+            ch = sql_string[i]
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in ("'", '"'):
+                quote = ch
+            elif ch == '(':
+                depth += 1
+            elif ch == ')':
+                depth -= 1
+            elif depth == 0:
+                # FROM followed by an optional quote ([ or "), the name, the optional closing quote
+                match = re.match(r'FROM\s+(?:\[([^\]]+)\]|"([^"]+)"|([a-zA-Z_][a-zA-Z0-9_]*))',
+                                 sql_string[i:], re.IGNORECASE)
+                if match and (i == 0 or not (sql_string[i - 1].isalnum() or sql_string[i - 1] == '_')):
+                    return next((group for group in match.groups() if group is not None), None)
+            i += 1
         return None
 
     def run(self):

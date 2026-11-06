@@ -38,7 +38,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * **Composition:** Pipelines like `REDUCE(MAP(FILTER(nums, is_even), square), add, 0)` work cleanly.
 
 * ### 1990s-Style Text Screens
-    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
+    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `invoice_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
@@ -409,4 +409,4 @@ PRINT `Row ${i}: ${row("city$")} (${CARDINAL$(row("count"))})`
 
 ## 📄 License
 
-DbBasic is released under the [MIT License](LICENSE). The sample data in `examples/dotgov.csv` is the public list of .gov domains published by CISA.
+DbBasic is released under the [MIT License](LICENSE). The sample data in `examples/dotgov.csv` is the public list of .gov domains published by CISA, and `examples/data/chinook.sqlite` is the [Chinook sample database](https://github.com/lerocha/chinook-database) by Luis Rocha (MIT License).

@@ -11,6 +11,7 @@ Example programs in `examples/`, each short enough to read in a minute:
 | `form_demo.bas` | An order form: `GET` with `PICTURE`, a `LOOKUP` list, a date (`@D`), number masks, `@R` phone, `CHECKBOX`, a drop-down `LIST`, `VALID ... MESSAGE`, `WHEN`, Save/Cancel buttons, and F1 help with `ON KEY` |
 | `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
 | `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows, with sorting, type-ahead, `FREEZE`, `FORMAT` and row colours (`COLOR`) |
+| `invoice_demo.bas` | A traditional invoice screen on the Chinook database: the header as a form, the lines as a grid, PgUp/PgDn between invoices, F2 find, F4 edit the header, Ins add a track (`BROWSE ... EXIT ON`) |
 | `orders_demo.bas` | A master-detail screen: orders on top, their lines below (`BROWSE ... DETAIL`), editable, with totals that follow |
 | `themes_demo.bas` | The same form in each `SET THEME` colour scheme |
 | `progress_demo.bas` | A `PROGRESS` bar while a table loads, a `MENU` longer than the screen that scrolls, and drop shadows |
@@ -627,7 +628,7 @@ IF ALERT("Save changes?;They can't be undone.", "Yes", "No", "Cancel") = 1 THEN 
 
 ```
 BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE title$]
-        [FREEZE n] [FORMAT column mask$, ...] [COLOR column$] [INTO var]
+        [FREEZE n] [FORMAT column mask$, ...] [COLOR column$] [EXIT ON keys$] [INTO var]
         [DETAIL (SELECT ... WHERE column = :var.column) [EDIT [KEY key$]] [TITLE title$]
                 [FREEZE n] [FORMAT column mask$, ...] [COLOR column$]]
 ```
@@ -663,6 +664,16 @@ BROWSE (SELECT name, city, phone, email, balance,
 ```
 
 This is after scrolling right past `city`, `phone` and `email` and clicking the `balance` heading.
+
+**Keys for the program: EXIT ON.** `EXIT ON "PgUp,PgDn,F2"` makes those keys end `BROWSE`, wherever the bar is, and `LASTKEY$` says which one it was (`"PGUP"`, `"PGDN"`, `"F2"`), so the program can act on it and show the grid again. The key names are those of `ON KEY`. A listed key no longer does its own job in the grid: with `EXIT ON "Ins"`, Ins is the program's to handle (to add a row its own way, say), not the grid's.
+
+```basic
+DO
+    BROWSE (SELECT ...) EDIT KEY "id" EXIT ON "PgUp,PgDn,F2"
+    k$ = LASTKEY$
+    IF k$ = "PGDN" THEN ...      REM the next invoice
+LOOP UNTIL k$ = CHR$(27)
+```
 
 **Master and detail.** `DETAIL` adds a second grid under the first, for rows that belong to the row under the bar: the lines of an order, the payments of an invoice. While the bar moves, `INTO var` holds the master's current row, and the `DETAIL` query is run again with it, so it names the master's columns as bind variables (`:o.id`):
 
@@ -700,6 +711,25 @@ BROWSE (SELECT id, customer, placed FROM orders ORDER BY id) INTO o TITLE "Order
 - A column worked out by the query (`qty * price AS total`) is shown but can't be edited, in any `BROWSE ... EDIT`, and the Ins form leaves it out.
 
 `examples/orders_demo.bas` is an orders screen built this way.
+
+**A traditional invoice screen.** `DETAIL` puts a grid over a grid. The invoice screens of the 1990s put a form over a grid: the invoice's header (customer, date, billing address) at the top, its lines below, and PgUp/PgDn to step from one invoice to the next. That is a short program rather than one statement: draw the header with `@ ... SAY`, show the lines with `BROWSE ... EDIT ... EXIT ON "PgUp,PgDn,F2,F4,Ins"`, and act on `LASTKEY$` in a loop (move to another invoice, find one, edit the header with `@ ... GET` and `READ`, add a line from a pick list). `examples/invoice_demo.bas` does all of it on the Chinook sample database, in about 130 lines:
+
+```
+╔══════════════════════════════ Invoice 1 of 412 ══════════════════════════════╗
+║ Invoice : 1           Date : 2009-01-01              Total :     1.98        ║
+║ Customer: Leonie Köhler             Rep  : Steve Johnson                     ║
+║ Company :                                                                    ║
+║ Bill to : Theodor-Heuss-Straße 34, Stuttgart, Germany                        ║
+║                                                                              ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+┌─────────────────────────────────── Lines ────────────────────────────────────┐
+│ track             │ album           │ Quantity │ UnitPrice │ amount │ Invoice│
+│──────────────────────────────────────────────────────────────────────────────│
+│ Balls to the Wall │ Balls to the Wa │ 1        │      0.99 │   0.99 │ 1      │
+│ Restless and Wild │ Restless and Wi │ 1        │      0.99 │   0.99 │ 2      │
+...
+ PgUp/PgDn invoice  F2 find  F4 header  Ins add track  Del remove  Esc quit
+```
 
 **Large tables.** `BROWSE` does not read the whole result. It fetches 500 rows at a time as you scroll, by adding `LIMIT`/`OFFSET` to the query (so its `ORDER BY` is kept exactly), and counts the rows once with `COUNT(*)` for the status line. A million-row table opens as fast as a small one. A query that already ends in its own `LIMIT` (or `OFFSET`, `FETCH FIRST`) is read whole. After a row is added with Ins, the grid fetches again; finding the new row then reads through the result, which takes a moment on a very large table.
 
