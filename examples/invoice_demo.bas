@@ -4,12 +4,15 @@ REM database. The invoice is a form at the top and its lines a grid below,
 REM as invoice screens were in the business software of the 1990s.
 REM
 REM   PgUp/PgDn  previous/next invoice      F2   find an invoice
-REM   F4         edit the invoice header    Ins  add a track
+REM   F4         edit the header, status    Ins  add a track
 REM   Enter      edit a quantity or price   Del  remove a line
 REM   Esc        quit
 REM
 REM The lines grid hands PgUp, PgDn, F2, F4 and Ins back to the program
 REM (BROWSE ... EXIT ON), which acts on LASTKEY$ and shows the grid again.
+REM
+REM Business rule: only open invoices can be changed. The lines grid enforces it with
+REM EDIT WHEN ... MESSAGE; F4 and Ins, which the program handles, check it themselves.
 REM The data is copied into memory first, so the demo never changes the file.
 REM ===================================================================
 db$ = "data/chinook.sqlite"
@@ -23,10 +26,18 @@ FOR t IN (SELECT name, sql FROM src.sqlite_master WHERE type = 'table'
 NEXT
 EXECUTE "DETACH DATABASE src"
 
+REM Chinook has no invoice status, so the demo gives its invoices one: those of 2013 (the
+REM last year in the data) are open, older ones shipped, and every 40th is cancelled.
+ALTER TABLE Invoice ADD COLUMN Status TEXT;
+UPDATE Invoice SET Status = CASE WHEN InvoiceId % 40 = 0 THEN 'cancelled'
+                                 WHEN InvoiceDate >= '2013-01-01' THEN 'open' ELSE 'shipped' END;
+rule$ = "Shipped and cancelled invoices can't be changed"
+
 SET THEME "default"                    REM SET THEME "classic" gives the blue screens of the time
 inv = (SELECT MIN(InvoiceId) FROM Invoice)
 CLS
 DO
+    status$ = (SELECT Status FROM Invoice WHERE InvoiceId = :inv)
     GOSUB show_invoice
     REM The lines: Quantity and UnitPrice can be edited (the other columns are worked out).
     REM The line's id, which BROWSE needs to save a change, comes last, out of view.
@@ -35,7 +46,7 @@ DO
                      WHERE t.TrackId = l.TrackId) AS album,
                    l.Quantity, l.UnitPrice, l.Quantity * l.UnitPrice AS amount, l.InvoiceLineId
               FROM InvoiceLine l WHERE l.InvoiceId = :inv ORDER BY l.InvoiceLineId) _
-        EDIT KEY "InvoiceLineId" AT 8, 1, 23, 80 TITLE "Lines" _
+        EDIT KEY "InvoiceLineId" WHEN status$ = "open" MESSAGE rule$ AT 8, 1, 23, 80 TITLE "Lines" _
         FORMAT UnitPrice "#,##0.00", amount "#,##0.00" EXIT ON "PgUp,PgDn,F2,F4,Ins"
     k$ = LASTKEY$
     REM The total follows the lines
@@ -44,27 +55,35 @@ DO
     IF k$ = "PGDN" THEN inv = (SELECT COALESCE(MIN(InvoiceId), :inv) FROM Invoice WHERE InvoiceId > :inv)
     IF k$ = "PGUP" THEN inv = (SELECT COALESCE(MAX(InvoiceId), :inv) FROM Invoice WHERE InvoiceId < :inv)
     IF k$ = "F2" THEN GOSUB find_invoice
-    IF k$ = "F4" THEN GOSUB edit_header
-    IF k$ = "INS" THEN GOSUB add_line
+    IF (k$ = "F4" OR k$ = "INS") AND status$ <> "open" THEN
+        x = ALERT(rule$ & ";This invoice is " & status$ & ".")
+    ELSEIF k$ = "F4" THEN
+        GOSUB edit_header
+    ELSEIF k$ = "INS" THEN
+        GOSUB add_line
+    END IF
 LOOP UNTIL k$ = CHR$(27)
 
 COLOR 7, 0
 CLS
-FOR h IN (SELECT i.InvoiceId, c.FirstName || ' ' || c.LastName AS customer, i.BillingCity, i.Total,
+FOR h IN (SELECT i.InvoiceId, c.FirstName || ' ' || c.LastName AS customer, i.BillingCity, i.Total, i.Status,
                  (SELECT COUNT(*) FROM InvoiceLine WHERE InvoiceId = i.InvoiceId) AS lines
             FROM Invoice i JOIN Customer c ON c.CustomerId = i.CustomerId WHERE i.InvoiceId = :inv)
     PRINT "Last invoice: " & LTRIM$(STR$(h.InvoiceId)) & " for " & h.customer & " (" & h.BillingCity & "), " & _
-          LTRIM$(STR$(h.lines)) & " lines, total " & TRIM$(FORMAT$(h.Total, "$#,##0.00"))
+          LTRIM$(STR$(h.lines)) & " lines, total " & TRIM$(FORMAT$(h.Total, "$#,##0.00")) & ", " & h.Status
 NEXT
 END
-REM The test runner plays a session (find, add a track, change its quantity and the city) and checks for:
-REM EXPECT: Last invoice: 98 for Luís Gonçalves (Testville), 3 lines, total $6.95
+REM The test runner plays a session: on shipped invoice 1, typing, Ins and F4 are refused;
+REM then on open invoice 382 it adds a track, sets its quantity, changes the city, marks
+REM the invoice shipped (F4), and Ins is refused. It checks for:
+REM EXPECT: This invoice is shipped.
+REM EXPECT: Last invoice: 382 for Luís Gonçalves (Testville), 10 lines, total $11.88, shipped
 
 show_invoice:
     REM The header: a form with the invoice, its customer, sales rep and billing address
     FOR h IN (SELECT i.InvoiceId, substr(i.InvoiceDate, 1, 10) AS day, i.Total,
                      i.BillingAddress, i.BillingCity, i.BillingCountry,
-                     c.FirstName || ' ' || c.LastName AS customer, COALESCE(c.Company, '') AS company,
+                     i.Status, c.FirstName || ' ' || c.LastName AS customer, COALESCE(c.Company, '') AS company,
                      COALESCE(e.FirstName || ' ' || e.LastName, '') AS rep,
                      (SELECT COUNT(*) FROM Invoice WHERE InvoiceId <= i.InvoiceId) AS position
                 FROM Invoice i JOIN Customer c ON c.CustomerId = i.CustomerId
@@ -74,7 +93,11 @@ show_invoice:
         @ 2, 3 SAY "Invoice : " & PADRIGHT$(LTRIM$(STR$(h.InvoiceId)), 12, " ") & "Date : " & h.day
         @ 2, 56 SAY "Total : " & FORMAT$(h.Total, "#,##0.00")
         @ 3, 3 SAY "Customer: " & PADRIGHT$(h.customer, 26, " ") & "Rep  : " & h.rep
-        @ 4, 3 SAY "Company : " & h.company
+        @ 4, 3 SAY "Company : " & LEFT$(h.company, 40)
+        IF h.Status = "open" THEN COLOR 10
+        IF h.Status = "cancelled" THEN COLOR 12
+        @ 4, 56 SAY "Status: " & PADRIGHT$(h.Status, 10, " ")
+        COLOR 7
         @ 5, 3 SAY "Bill to : " & h.BillingAddress & ", " & h.BillingCity & ", " & h.BillingCountry
     NEXT
     @ 24, 1 SAY PADRIGHT$(" PgUp/PgDn invoice  F2 find  F4 header  Ins add track  Del remove  Esc quit", 79, " ")
@@ -82,7 +105,7 @@ show_invoice:
 
 find_invoice:
     BROWSE (SELECT c.LastName || ', ' || c.FirstName AS customer, substr(i.InvoiceDate, 1, 10) AS day,
-                   i.Total, i.InvoiceId
+                   i.Status, i.Total, i.InvoiceId
               FROM Invoice i JOIN Customer c ON c.CustomerId = i.CustomerId
              ORDER BY customer, i.InvoiceDate) _
         AT 3, 6, 22, 75 TITLE "Find an invoice (type a name)" FORMAT Total "#,##0.00" INTO f
@@ -90,8 +113,8 @@ find_invoice:
     RETURN
 
 edit_header:
-    FOR r IN (SELECT CustomerId, substr(InvoiceDate, 1, 10) AS day, BillingAddress, BillingCity, BillingCountry
-                FROM Invoice WHERE InvoiceId = :inv)
+    FOR r IN (SELECT CustomerId, substr(InvoiceDate, 1, 10) AS day, BillingAddress, BillingCity, BillingCountry,
+                     Status FROM Invoice WHERE InvoiceId = :inv)
         BOX 1, 1, 7, 80, "Invoice " & LTRIM$(STR$(inv)) & ": PgDn saves, Esc cancels" DOUBLE
         @ 2, 3 SAY "Customer: " GET r.CustomerId PICTURE "999" _
             LOOKUP (SELECT CustomerId, LastName || ', ' || FirstName AS name FROM Customer ORDER BY name) _
@@ -100,11 +123,13 @@ edit_header:
         @ 3, 3 SAY "Address : " GET r.BillingAddress PICTURE "@S50" HINT "Street address for the bill"
         @ 4, 3 SAY "City    : " GET r.BillingCity PICTURE "@S25" HINT "City for the bill"
         @ 5, 3 SAY "Country : " GET r.BillingCountry PICTURE "@S25" HINT "Country for the bill"
+        @ 5, 40 SAY "Status  : " GET r.Status LIST "open,shipped,cancelled" _
+            HINT "Once shipped or cancelled, the invoice can't be changed"
         READ
         IF LASTKEY$ <> CHR$(27) THEN
             UPDATE Invoice SET CustomerId = :r.CustomerId, InvoiceDate = :r.day || ' 00:00:00',
                    BillingAddress = :r.BillingAddress, BillingCity = :r.BillingCity,
-                   BillingCountry = :r.BillingCountry WHERE InvoiceId = :inv;
+                   BillingCountry = :r.BillingCountry, Status = :r.Status WHERE InvoiceId = :inv;
         END IF
     NEXT
     RETURN

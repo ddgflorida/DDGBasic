@@ -11,7 +11,7 @@ Example programs in `examples/`, each short enough to read in a minute:
 | `form_demo.bas` | An order form: `GET` with `PICTURE`, a `LOOKUP` list, a date (`@D`), number masks, `@R` phone, `CHECKBOX`, a drop-down `LIST`, `VALID ... MESSAGE`, `WHEN`, Save/Cancel buttons, and F1 help with `ON KEY` |
 | `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
 | `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows, with sorting, type-ahead, `FREEZE`, `FORMAT` and row colours (`COLOR`) |
-| `invoice_demo.bas` | A traditional invoice screen on the Chinook database: the header as a form, the lines as a grid, PgUp/PgDn between invoices, F2 find, F4 edit the header, Ins add a track (`BROWSE ... EXIT ON`) |
+| `invoice_demo.bas` | A traditional invoice screen on the Chinook database: the header as a form, the lines as a grid, PgUp/PgDn between invoices, F2 find, F4 edit the header, Ins add a track (`BROWSE ... EXIT ON`); only open invoices can be changed (`EDIT WHEN`) |
 | `orders_demo.bas` | A master-detail screen: orders on top, their lines below (`BROWSE ... DETAIL`), editable only for open orders (`EDIT WHEN`), with totals that follow |
 | `themes_demo.bas` | The same form in each `SET THEME` colour scheme |
 | `progress_demo.bas` | A `PROGRESS` bar while a table loads, a `MENU` longer than the screen that scrolls, and drop shadows |
@@ -723,7 +723,7 @@ BROWSE (SELECT id, customer, placed FROM orders ORDER BY id) INTO o TITLE "Order
 
 `examples/orders_demo.bas` is an orders screen built this way.
 
-**A traditional invoice screen.** `DETAIL` puts a grid over a grid. The invoice screens of the 1990s put a form over a grid: the invoice's header (customer, date, billing address) at the top, its lines below, and PgUp/PgDn to step from one invoice to the next. That is a short program rather than one statement: draw the header with `@ ... SAY`, show the lines with `BROWSE ... EDIT ... EXIT ON "PgUp,PgDn,F2,F4,Ins"`, and act on `LASTKEY$` in a loop (move to another invoice, find one, edit the header with `@ ... GET` and `READ`, add a line from a pick list). `examples/invoice_demo.bas` does all of it on the Chinook sample database, in about 130 lines:
+**A traditional invoice screen.** `DETAIL` puts a grid over a grid. The invoice screens of the 1990s put a form over a grid: the invoice's header (customer, date, billing address) at the top, its lines below, and PgUp/PgDn to step from one invoice to the next. That is a short program rather than one statement: draw the header with `@ ... SAY`, show the lines with `BROWSE ... EDIT ... EXIT ON "PgUp,PgDn,F2,F4,Ins"`, and act on `LASTKEY$` in a loop (move to another invoice, find one, edit the header with `@ ... GET` and `READ`, add a line from a pick list). `examples/invoice_demo.bas` does all of it on the Chinook sample database, in about 150 lines. It also has a business rule, only open invoices can be changed: the lines grid has `EDIT WHEN status$ = "open" MESSAGE rule$`, and the keys the program handles itself (F4, Ins) check `status$` before acting:
 
 ```
 ╔══════════════════════════════ Invoice 1 of 412 ══════════════════════════════╗

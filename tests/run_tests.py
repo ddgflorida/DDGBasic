@@ -76,7 +76,10 @@ STDIN = {
     'examples/grid_demo': '\x1bORmi\r\r\x1b[F\x1b[C\x1b[C0\r\x1b',   # F3 sorts by city, "mi" finds Miami
     'examples/progress_demo': '\x1b[F\r\r',
     'examples/themes_demo': 'ag\x1b',   # Amber, Green, Esc
-    'examples/invoice_demo': '\x1b[6~\x1b[6~\x1b[5~\x1bOQgon\r\x1b[2~smells\r\x1b[F\x1b[C\x1b[C3\r\x1bOS\t\t\t\x19Testville\x1b[6~\x1b',   # F2 find, Ins track, qty, F4 city
+    'examples/invoice_demo': ('5\x1b[2~\r\x1bOS\r'   # invoice 1 is shipped: typing, Ins and F4 refused
+                               '\x1bOQgon' + '\x1b[B' * 6 + '\r'   # F2: Luis Goncalves's 2013 invoice, 382 (open)
+                               '\x1b[2~smells\r\x1b[F\x1b[C\x1b[C3\r\x1bOS\t\t\t\x19Testville\x1b[6~'   # a track, its qty, the city
+                               '\x1bOS\t\t\t\t\ts\x1b[6~\x1b[2~\r\x1b'),   # F4: shipped; then Ins is refused; Esc
     'examples/orders_demo': '\r5\x1b[2~\x1b' '\x1b[B\x1b[B\r\x1b[C\x1b[C5\r\x1b[2~\tBolt\t4\t0.5\r\x1b\x1b',   # Enter on order 3: edit a qty, add a line; Esc, Esc
     'examples/contact': 'Ann Lee\r5551234567\rann@example.com\rn\r \r\r',   # State NY, Active off, Save
     'examples/report_demo': 'q',

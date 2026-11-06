@@ -7335,9 +7335,11 @@ class Interpreter:
     def _run_if_branch(self, stop_at):
         """Run the statements of a block-IF branch up to stop_at (its ELSEIF/ELSE/END IF).
         A GOTO to a label inside the branch continues there; one outside leaves the IF.
+        A GOSUB runs its subroutine, wherever it is, and its RETURN comes back into the branch.
         Returns True if the program terminated."""
         branch_start = self.token_index
-        while self.token_index < stop_at:
+        depth = len(self.gosub_stack)
+        while self.token_index < stop_at or len(self.gosub_stack) > depth:
             if self.program_terminated:
                 return True
             try:
