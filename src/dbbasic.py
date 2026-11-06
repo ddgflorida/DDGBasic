@@ -348,9 +348,9 @@ class HelpRegistry:
             "examples": ['choice = MENU(5, 10, "Add", "Edit", "Quit")']
         },
         "BROWSE": {
-            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [INTO var]',
-            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\").",
-            "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"']
+            "syntax": 'BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE t$] [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [INTO var]',
+            "desc": "Shows query results in a scrolling grid (arrows, PgUp/PgDn, Home/End, Left/Right for columns). Enter chooses a row: INTO gets it as a hash, like FOR row IN (SELECT ...). Esc gives an empty hash; check LASTKEY$. What the grid covered is put back when it ends. With EDIT, arrows move between cells, Enter or typing edits a cell, Ins adds a row, Del deletes one (after Y/N), and each change is saved at once (a table is edited by rowid; a query needs KEY \"column\"). A click on a heading, or F3, sorts by that column (again reverses it). Without EDIT, typing jumps to the next row whose sort column (or first column) starts with what was typed. FREEZE n keeps the first n columns in place when the others scroll; FORMAT shows columns with FORMAT$ masks, right-aligned; COLOR names a column holding each row's text colour (0-15), which is not shown.",
+            "examples": ['BROWSE (SELECT id, name FROM customers ORDER BY name) TITLE "Customers" INTO row', 'BROWSE "orders" AT 2, 2, 20, 78', 'BROWSE "orders" EDIT', 'BROWSE (SELECT id, name, phone FROM customers) EDIT KEY "id"', 'BROWSE (SELECT name, city, balance, CASE WHEN balance < 0 THEN 12 END AS shade FROM customers) FREEZE 1 FORMAT balance "#,##0.00" COLOR "shade"']
         },
         "EDIT": {
             "syntax": 'EDIT RECORD (SELECT ... FROM table WHERE ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]\nEDIT TEXT target [AT top, left, bottom, right] [TITLE title$]',
@@ -1720,7 +1720,7 @@ class PagedRows:
     PAGE = 500
 
     def __init__(self, interpreter, sql):
-        self.interpreter, self.sql = interpreter, sql
+        self.interpreter, self.sql, self.base_sql = interpreter, sql, sql
         self.columns = []
         self.reload()
         self._page(0)                        # runs the query once, which also gives the columns
@@ -1761,6 +1761,29 @@ class PagedRows:
 
     def pop(self, index):
         self.reload()                        # the row was deleted in the database; fetch again
+
+    def sort_by(self, col_index, descending, numeric):
+        """Re-sorts in the database, in the order BROWSE expects: blanks first, then numbers,
+        or text ignoring case. Returns an error message or None."""
+        name = self.columns[col_index]
+        if [c.lower() for c in self.columns].count(name.lower()) > 1:
+            return f"two columns are called {name}"
+        column = self.interpreter._quote_identifier(name)
+        expr = column if numeric else f"LOWER(CAST({column} AS VARCHAR))"
+        order = 'DESC NULLS LAST' if descending else 'ASC NULLS FIRST'
+        self.sql = f"SELECT * FROM ({self.base_sql}) AS __browse_sorted ORDER BY {expr} {order}"
+        self.sort_expr = expr
+        self.reload()
+        return None
+
+    def position(self, value):
+        """For a grid sorted ascending by sort_by: the index of the first row whose sort column
+        is not below value (a lower-case string, or a number), found with one COUNT(*)."""
+        literal = repr(float(value)) if isinstance(value, (int, float)) else "'" + str(value).replace("'", "''") + "'"
+        rows = self.interpreter._execute_sql(      # a literal, so the query's own :binds still work
+            f"SELECT COUNT(*) FROM ({self.base_sql}) AS __browse_find "
+            f"WHERE {self.sort_expr} IS NULL OR {self.sort_expr} < {literal}", is_query=True)
+        return int(rows[0][0]) if rows else 0
 
 
 class LegacyJsonNormalizer:
@@ -4342,7 +4365,8 @@ class Interpreter:
         return PagedRows(self, sql)
 
     def _parse_browse_statement(self):
-        """BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY col$]] [AT r1, c1, r2, c2] [TITLE t$] [INTO var]"""
+        """BROWSE (SELECT ...) | BROWSE table$ [EDIT [KEY col$]] [AT r1, c1, r2, c2] [TITLE t$]
+                  [FREEZE n] [FORMAT col mask$, ...] [COLOR col$] [INTO var]"""
         tok, nxt = self._current_token(), self._peek_token()
         table = None
         if tok and tok[0] == 'LPAREN' and nxt and nxt[0] == 'SQL_STRING':
@@ -4356,6 +4380,7 @@ class Interpreter:
                 sql = f"SELECT * FROM {self._quote_identifier(source)}"
         area, title, into = None, '', None
         edit, key_column = False, None
+        frozen, formats, color_column = 0, {}, None
         while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
             tok = self._current_token()
             word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
@@ -4371,6 +4396,15 @@ class Interpreter:
             elif word == 'KEY':
                 self._next_token()
                 key_column = self._to_string(self._parse_expression())
+            elif word == 'FREEZE':
+                self._next_token()
+                frozen = int(self._parse_expression())
+            elif word == 'FORMAT':
+                self._next_token()
+                formats = self._parse_format_list()
+            elif word == 'COLOR':
+                self._next_token()
+                color_column = self._to_string(self._parse_expression())
             elif tok[0] == 'INTO':
                 self._next_token()
                 into = self._expect('ID')[1]
@@ -4446,8 +4480,21 @@ class Interpreter:
                     return str(e).splitlines()[0]
                 return None
 
+        def column_index(name, clause):
+            matches = [i for i, c in enumerate(columns) if c.upper() == name.upper()]
+            if not matches:
+                self._error(f"BROWSE ... {clause}: there is no column '{name}' in the query.")
+            return matches[0]
+
+        format_fns = {column_index(name, 'FORMAT'): (lambda mask: lambda v: Formatter.format(mask, [v]).strip())(mask)
+                      for name, mask in formats.items()}
+        color_index = None
+        if color_column:
+            color_index = column_index(color_column, 'COLOR')
+            hidden.add(color_index)
         chosen = SCREEN.browse(columns, results, area, title, save=save, hidden=hidden, locked=locked,
-                               add=add if edit else None, delete=delete if edit else None)
+                               add=add if edit else None, delete=delete if edit else None,
+                               frozen=frozen, formats=format_fns, color_col=color_index)
         if into:
             record = {}
             if chosen >= 0:
@@ -4461,6 +4508,23 @@ class Interpreter:
                     if i < len(columns):
                         record[columns[i].upper()] = value
             self.variables[into] = record
+
+    def _parse_format_list(self):
+        """The list after FORMAT in REPORT and BROWSE: col mask$, col mask$, ... as {name: mask}."""
+        formats = {}
+        while True:
+            column = self._current_token()
+            if not column or column[0] in ('NEWLINE', 'COLON'):
+                self._error("Expected a column name and a mask after FORMAT")
+            name = self._to_string(self._parse_expression()) if column[0] == 'STRING' else str(column[1])
+            if column[0] != 'STRING':
+                self._next_token()
+            formats[name] = self._to_string(self._parse_expression())
+            if self._current_token() and self._current_token()[0] == 'COMMA':
+                self._next_token()
+            else:
+                break
+        return formats
 
     def _parse_report_statement(self):
         """REPORT (SELECT ...) [TITLE t$] [GROUP BY col, ...] [TOTAL col, ...]
@@ -4517,18 +4581,7 @@ class Interpreter:
                 totals = column_names()
             elif word == 'FORMAT':
                 self._next_token()
-                while True:
-                    column = self._current_token()
-                    if not column or column[0] in ('NEWLINE', 'COLON'):
-                        self._error("Expected a column name and a mask after FORMAT")
-                    name = self._to_string(self._parse_expression()) if column[0] == 'STRING' else str(column[1])
-                    if column[0] != 'STRING':
-                        self._next_token()
-                    formats[name] = self._to_string(self._parse_expression())
-                    if self._current_token() and self._current_token()[0] == 'COMMA':
-                        self._next_token()
-                    else:
-                        break
+                formats = self._parse_format_list()
             elif word == 'PAGE':
                 self._next_token()
                 page_length = int(self._parse_expression())

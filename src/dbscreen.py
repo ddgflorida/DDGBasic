@@ -1551,7 +1551,8 @@ class Screen:
             self._w('\x1b[?25h')
 
     # --- BROWSE --------------------------------------------------------
-    def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None, start=0):
+    def browse(self, columns, rows, area=None, title='', save=None, hidden=(), locked=(), add=None, delete=None,
+               start=0, frozen=0, formats=None, color_col=None):
         """A scrolling grid. Returns the index of the chosen row, or -1 for Esc.
 
         With save, the grid is editable: Left/Right move between cells, Enter (or typing)
@@ -1561,7 +1562,14 @@ class Screen:
 
         With add, Ins calls add(), which inserts a row, reloads rows in place and returns the
         index of the new row (or None if it isn't known), or False when cancelled. With delete,
-        Del asks for confirmation and calls delete(row_index), which returns an error or None."""
+        Del asks for confirmation and calls delete(row_index), which returns an error or None.
+
+        A click on a heading (or F3) sorts by that column; again reverses it. rows is sorted in
+        place, or, if it has sort_by(col_index, descending, numeric), asked to sort itself.
+        Without save, typing jumps to the next row whose sort column (or first column) starts
+        with what was typed. frozen columns stay at the left when the others scroll. formats
+        maps a column index to a function giving its text (shown right-aligned). color_col is
+        the index of a column holding each row's text colour (0-15)."""
         screen_rows, screen_cols = self.size()
         r1, c1, r2, c2 = area or (1, 1, screen_rows, screen_cols)
         if r2 - r1 < 4 or c2 - c1 < 10:
@@ -1569,10 +1577,14 @@ class Screen:
         visible = [i for i in range(len(columns)) if i not in hidden]
         if not visible:
             raise ScreenError("BROWSE has no columns to show.")
+        formats = formats or {}
+        frozen = max(0, min(frozen, len(visible) - 1))
 
-        def show(v):
+        def show(v, ci):
             if v is None:
                 return ''
+            if ci in formats:
+                return formats[ci](v)
             return format_number(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else str(v)
 
         # Rows are formatted only when they are shown, so rows can be a lazy, paged list
@@ -1590,7 +1602,7 @@ class Screen:
 
             def __getitem__(self, i):
                 if i not in self.cache:
-                    self.cache[i] = [show(v) for v in rows[i]]
+                    self.cache[i] = [show(v, k) for k, v in enumerate(rows[i])]
                 return self.cache[i]
 
             def pop(self, i):
@@ -1603,14 +1615,20 @@ class Screen:
         def layout():
             cells = Cells()
             widths = [min(30, len(str(c))) for c in columns]
+            for i in range(min(len(rows), 200)):
+                for k, text in enumerate(cells[i][:len(widths)]):
+                    widths[k] = min(30, max(widths[k], len(text)))
+            if sort_col is not None:           # room for the heading's sort arrow
+                widths[sort_col] = max(widths[sort_col], min(30, len(str(columns[sort_col])) + 1))
             return cells, widths
 
+        sort_col, sort_desc = None, False      # column index of the sort, if any
         cells, widths = layout()
-        for i in range(min(len(rows), 200)):
-            widen(i)
         page = r2 - r1 - 4                     # rows between the header line and the status line
         inner = c2 - c1 - 1
-        top, current, first_col, cur_col = 0, 0, 0, 0   # cur_col indexes visible[]
+        top, current, cur_col = 0, 0, 0        # cur_col indexes visible[]
+        first_col = frozen                     # the first scrolling column (index into visible[])
+        typed, typed_at = '', 0.0              # type-ahead
         if 0 < start < len(rows):
             current = start
             top = max(0, start - (page - 1))
@@ -1619,20 +1637,112 @@ class Screen:
         self.box(r1, c1, r2, c2, title)
         self._w('\x1b[?25l')
 
-        def line(values):
-            text = ' │ '.join(str(values[i])[:widths[i]].ljust(widths[i]) for i in visible[first_col:])
-            return (' ' + text)[:inner].ljust(inner)
+        def shown():
+            """Indexes into visible[] of the columns drawn, left to right."""
+            return list(range(frozen)) + list(range(first_col, len(visible)))
+
+        def line(values, heading=False):
+            parts = []
+            for n in shown():
+                i = visible[n]
+                text = str(values[i])[:widths[i]]
+                if heading and i == sort_col:
+                    text = (text[:widths[i] - 1] + ('▼' if sort_desc else '▲'))
+                parts.append(text.rjust(widths[i]) if i in formats and not heading else text.ljust(widths[i]))
+                if frozen and n == frozen - 1:
+                    parts[-1] += ' ║'
+                elif n != len(visible) - 1:
+                    parts[-1] += ' │'
+            return (' ' + ' '.join(parts))[:inner].ljust(inner)
 
         def cell_offset(n):
             """Column within the grid where visible column n starts."""
-            return 1 + sum(widths[i] + 3 for i in visible[first_col:n])
+            offset = 1
+            for k in shown():
+                if k == n:
+                    return offset
+                offset += widths[visible[k]] + 3
+            return offset
+
+        def column_at(c):
+            """Index into visible[] of the column under screen column c, or None."""
+            x = c - (c1 + 1)
+            columns_shown = shown()
+            for k in columns_shown:
+                if x < cell_offset(k) + widths[visible[k]] + 2:
+                    return k
+            return columns_shown[-1]          # the last column runs to the edge of the box
+
+        def numeric_column(ci):
+            return any(isinstance(rows[i][ci], (int, float)) and not isinstance(rows[i][ci], bool)
+                       for i in range(min(len(rows), 200)))
+
+        def sort_key(v, numeric):
+            """The order the grid sorts in: blanks first, then numbers or text (ignoring case)."""
+            if v is None:
+                return (0, 0)
+            if numeric:
+                if isinstance(v, (int, float)) and not isinstance(v, bool):
+                    return (1, float(v))
+                return (2, str(v).lower())
+            return (1, str(v).lower())
+
+        def sort_by(ci):
+            nonlocal sort_col, sort_desc, cells, widths, current, top, message
+            desc = (not sort_desc) if ci == sort_col else False
+            numeric = numeric_column(ci)
+            if hasattr(rows, 'sort_by'):
+                error = rows.sort_by(ci, desc, numeric)
+                if error:
+                    bell()
+                    message = 'Cannot sort: ' + error
+                    return
+            else:
+                rows.sort(key=lambda r: sort_key(r[ci], numeric), reverse=desc)
+            sort_col, sort_desc = ci, desc
+            cells, widths = layout()
+            current, top = 0, 0
+
+        def find(text):
+            """The row type-ahead jumps to: the next row whose search column starts with text."""
+            ci = sort_col if sort_col is not None else visible[0]
+            if not cells:
+                return None
+            if sort_col is not None and not sort_desc:
+                # sorted ascending: a binary search, so even a paged million-row grid answers at once
+                numeric = numeric_column(ci)
+                if numeric:
+                    try:
+                        want = (1, float(text))
+                    except ValueError:
+                        return None
+                else:
+                    want = (1, text.lower())
+                lo, hi = 0, len(rows)
+                if hasattr(rows, 'position'):  # a paged grid counts in the database instead
+                    lo = hi = rows.position(want[1])
+                while lo < hi:
+                    mid = (lo + hi) // 2
+                    if sort_key(rows[mid][ci], numeric) < want:
+                        lo = mid + 1
+                    else:
+                        hi = mid
+                if lo >= len(rows):
+                    return None
+                return lo if numeric or str(rows[lo][ci]).lower().startswith(text.lower()) else None
+            first = current if len(text) > 1 else current + 1
+            for k in range(len(rows)):
+                i = (first + k) % len(rows)
+                if cells[i][ci].lower().startswith(text.lower()):
+                    return i
+            return None
 
         def edit_cell(screen_row, n, first_key):
             ci = visible[n]
             raw = rows[current][ci]
             numeric = isinstance(raw, (int, float)) and not isinstance(raw, bool)
             offset = cell_offset(n)
-            width = max(1, min(max(widths[ci], len(show(raw)), 10), inner - offset))
+            width = max(1, min(max(widths[ci], len(show(raw, None)), 10), inner - offset))
             field = Field(screen_row, c1 + 1 + offset, '', '' if raw is None else raw, f'@S{width}', None, numeric)
             pos, insert = field.first_pos(), True
             if first_key:                      # typing starts a new value, as in a spreadsheet
@@ -1665,21 +1775,30 @@ class Screen:
             finally:
                 self._w('\x1b[?25l')
 
+        def row_colour(i):
+            if color_col is None or i >= len(rows):
+                return self.fg
+            try:
+                colour = int(rows[i][color_col])
+            except (TypeError, ValueError):
+                return self.fg
+            return colour if 0 <= colour <= 15 else self.fg
+
         try:
             while True:
                 # keep the current cell in view
-                if save:
+                if save and cur_col >= frozen:
+                    first_col = min(first_col, cur_col)
                     while first_col < cur_col and cell_offset(cur_col) + widths[visible[cur_col]] > inner:
                         first_col += 1
-                    first_col = min(first_col, cur_col)
-                out = [self._put(r1 + 1, c1 + 1, line(columns), self.fg, self.bg),
+                out = [self._put(r1 + 1, c1 + 1, line(columns, heading=True), self.fg, self.bg),
                        self._put(r1 + 2, c1 + 1, '─' * inner, self.fg, self.bg)]
                 for n in range(page):
                     if top + n < len(cells):
                         widen(top + n)
                 for n in range(page):
                     i = top + n
-                    fg, bg = (self.field_fg, self.field_bg) if i == current else (self.fg, self.bg)
+                    fg, bg = (self.field_fg, self.field_bg) if i == current else (row_colour(i), self.bg)
                     text = line(cells[i]) if i < len(cells) else ' ' * inner
                     out.append(self._put(r1 + 3 + n, c1 + 1, text, fg, bg))
                     if save and i == current:   # the current cell in reverse
@@ -1689,11 +1808,13 @@ class Screen:
                         out.append(self._put(r1 + 3 + n, c1 + 1 + off, cell_text, self.field_bg, self.field_fg))
                 if message:
                     status = ' ' + message
+                elif typed:
+                    status = f' {current + 1 if cells else 0} of {len(cells)}   Find: {typed}'
                 elif save:
                     extra = ('  Ins=add' if add else '') + ('  Del=delete' if delete else '')
-                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=edit{extra}  Esc=done'
+                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=edit{extra}  F3=sort  Esc=done'
                 else:
-                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns'
+                    status = f' {current + 1 if cells else 0} of {len(cells)}   Enter=select  Esc=cancel  ←→=columns  F3=sort'
                 message = ''
                 out.append(self._put(r2 - 1, c1 + 1, status[:inner].ljust(inner), self.fg, self.bg))
                 self._w(''.join(out) + self._normal())
@@ -1701,18 +1822,38 @@ class Screen:
                 if key is None:
                     key = ESC
                 self.last_key = key
+
+                # type-ahead (when not editing): printable keys search, Backspace takes one back
+                if not save and ((len(key) == 1 and key.isprintable()) or (key == BACKSPACE and typed)):
+                    now = time.monotonic()
+                    if now - typed_at > 1.5:
+                        typed = ''
+                    typed_at = now
+                    wanted = typed[:-1] if key == BACKSPACE else typed + key
+                    found = find(wanted) if wanted else current
+                    if found is None:
+                        bell()
+                    else:
+                        typed, current = wanted, found
+                    if current < top or current >= top + page:
+                        top = max(0, current - page // 2)
+                    continue
+                typed = ''
+
                 if key == 'CLICK':
                     r, c = self.keys.mouse_row, self.keys.mouse_col
+                    if r == r1 + 1 and c1 < c < c2:    # a heading: sort by it
+                        n = column_at(c)
+                        if n is not None:
+                            sort_by(visible[n])
+                        continue
                     n, i = r - (r1 + 3), top + r - (r1 + 3)
                     if not (0 <= n < page and i < len(cells) and c1 < c < c2):
                         continue                       # not on a row
                     new_col = cur_col
                     if save:                           # which cell: column offsets as drawn
-                        x = c - (c1 + 1)
-                        for k in range(first_col, len(visible)):
-                            if x < cell_offset(k) + widths[visible[k]] + 2:
-                                new_col = k
-                                break
+                        k = column_at(c)
+                        new_col = cur_col if k is None else k
                     if i == current and new_col == cur_col:
                         key = ENTER                    # a click on the selected row (or cell) chooses (edits) it
                     else:
@@ -1723,12 +1864,18 @@ class Screen:
                     key = ''
                 if key == ESC:
                     return -1
+                if key == 'F3':
+                    sort_by(visible[cur_col] if save else visible[first_col if first_col < len(visible) else 0])
+                    continue
                 if save and add and key == 'INS':
                     new_index = add()
                     if new_index is not False:
+                        new_row = rows[new_index] if new_index is not None else None
+                        if sort_col is not None and not hasattr(rows, 'sort_by'):
+                            numeric = numeric_column(sort_col)
+                            rows.sort(key=lambda r: sort_key(r[sort_col], numeric), reverse=sort_desc)
+                            new_index = next((k for k, r in enumerate(rows) if r is new_row), None)
                         cells, widths = layout()
-                        for i in range(min(len(rows), 200)):
-                            widen(i)
                         if new_index is not None:
                             current = new_index
                         current = min(current, len(cells) - 1)
@@ -1761,7 +1908,7 @@ class Screen:
                             message = 'Not saved: ' + error
                         else:
                             rows[current][ci] = result[1]
-                            cells[current][ci] = show(result[1])
+                            cells[current][ci] = show(result[1], ci)
                             widths[ci] = min(30, max(widths[ci], len(cells[current][ci])))
                             if end_key == TAB: key = 'RIGHT'
                             elif end_key in ('UP', 'DOWN'): key = end_key
@@ -1778,7 +1925,7 @@ class Screen:
                 elif save and key in ('RIGHT', TAB): cur_col = min(cur_col + 1, len(visible) - 1)
                 elif save and key in ('LEFT', 'BTAB'): cur_col = max(cur_col - 1, 0)
                 elif key == 'RIGHT': first_col = min(first_col + 1, len(visible) - 1)
-                elif key == 'LEFT': first_col = max(first_col - 1, 0)
+                elif key == 'LEFT': first_col = max(first_col - 1, frozen)
                 current = max(current, 0)
                 if current < top: top = current
                 elif current >= top + page: top = current - page + 1

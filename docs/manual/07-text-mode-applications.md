@@ -531,12 +531,41 @@ IF ALERT("Save changes?;They can't be undone.", "Yes", "No", "Cancel") = 1 THEN 
 ### BROWSE
 
 ```
-BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE title$] [INTO var]
+BROWSE (SELECT ...) | BROWSE table$  [EDIT [KEY key$]] [AT top, left, bottom, right] [TITLE title$]
+        [FREEZE n] [FORMAT column mask$, ...] [COLOR column$] [INTO var]
 ```
 
 `BROWSE` runs the query and shows the rows in a box: a header line, the rows, and a status line (`2 of 3   Enter=select  Esc=cancel`). Without `AT`, it fills the terminal. A string that does not start with `SELECT` or `WITH` is taken as a table name. Bind variables (`:id`) work as in any query.
 
 Up/Down, PgUp/PgDn and Home/End move the bar, and Left/Right scroll the columns. Columns start as wide as their widest value in the first 200 rows, up to 30 characters, and widen when a wider value scrolls into view. Enter chooses the row. `INTO var` then receives it as a hash, keyed by upper-case column name and by column number, like the row of `FOR row IN (SELECT ...)`. Esc gives an empty hash. When `BROWSE` ends, what the grid covered is put back.
+
+**Sorting.** A click on a column heading sorts the rows by that column, and the heading shows `▲`; another click reverses the order (`▼`). F3 does the same from the keyboard: for the current cell's column with `EDIT`, otherwise for the leftmost column scrolled into view (Left/Right choose it). Blanks come first, then numbers in order, or text ignoring case. A large grid is sorted by the database, by wrapping the query in `SELECT * FROM (...) ORDER BY ...`.
+
+**Type-ahead.** Without `EDIT`, typing jumps to the next row whose sort column starts with what was typed (the first column before any sort), and the status line shows `Find: jo`. Letters typed within a second and a half add to the search; Backspace takes one back, and a key with no match beeps. On a grid sorted in ascending order, the search is a single count in the database, so it is quick even on a million rows; otherwise the rows are read in order from the current one.
+
+**Frozen columns, formats and colours.**
+
+- `FREEZE n` keeps the first `n` columns at the left (after a `║`) while Left/Right scroll the others, so a name stays in view next to wide data.
+- `FORMAT column mask$, ...` shows columns with `FORMAT$` masks, right-aligned, as in `REPORT`. Only the display changes: `INTO` and editing see the stored values.
+- `COLOR column$` names a column of the query that holds each row's text colour (0-15, as in `COLOR`). The column is not shown. A row whose value is blank, or not a colour, uses the normal colour, and the current row keeps the highlight bar.
+
+```basic
+BROWSE (SELECT name, city, phone, email, balance,
+               CASE WHEN balance < 0 THEN 12 END AS shade
+          FROM people ORDER BY id) AT 2, 2, 12, 50 TITLE "People" FREEZE 1 FORMAT balance "#,##0.00" COLOR "shade"
+```
+
+```
+┌─────────────────── People ────────────────────┐
+│ name  ║ balance▲                              │
+│───────────────────────────────────────────────│
+│ Alice ║    -5.00                              │   (in bright red)
+│ dave  ║     0.00                              │
+│ bob   ║   200.00                              │
+│ carol ║ 1,234.50                              │
+```
+
+This is after scrolling right past `city`, `phone` and `email` and clicking the `balance` heading.
 
 **Large tables.** `BROWSE` does not read the whole result. It fetches 500 rows at a time as you scroll, by adding `LIMIT`/`OFFSET` to the query (so its `ORDER BY` is kept exactly), and counts the rows once with `COUNT(*)` for the status line. A million-row table opens as fast as a small one. A query that already ends in its own `LIMIT` (or `OFFSET`, `FETCH FIRST`) is read whole. After a row is added with Ins, the grid fetches again; finding the new row then reads through the result, which takes a moment on a very large table.
 
