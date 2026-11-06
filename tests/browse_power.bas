@@ -44,4 +44,8 @@ IF LEFT$(r.code, 5) <> "c1123" THEN ERROR 1, "search with a bind variable, got "
 REM Keys: Right F3 F3 (EDIT: name descending, dave first) Enter Ctrl-Y "Zed" Enter Esc
 BROWSE "people" EDIT AT 1, 1, 12, 60
 IF (SELECT name FROM people WHERE id = 4) <> "Zed" THEN ERROR 1, "sorted EDIT should rename dave"
+REM Keys: Ins "9" Tab "Eve" Enter Esc -> the new-row form has no field for the COLOR column
+BROWSE (SELECT id, name, CASE WHEN id > 5 THEN 14 END AS shade FROM people) EDIT KEY "id" COLOR "shade"
+IF (SELECT name FROM people WHERE id = 9) <> "Eve" THEN ERROR 1, "Ins with a COLOR column"
+DELETE FROM people WHERE id = 9;
 RETURN

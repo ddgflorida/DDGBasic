@@ -79,7 +79,8 @@ STDIN = {
     'examples/notes_demo': '\x1b[B\x1b[B\x1b[F\r- book a room\x17/acme\rqq',
     'examples/mouse_demo': '\x1b[<0;10;5M\x1b[<0;11;5M\x1b[<64;12;5M\x1b[<0;12;5M\x1b[<2;11;5M\x1b',
     'examples/errorhandling': 'nope.txt\n\n',   # file-not-found path, then quit
-    'examples/retro_contacts': ('ca' 'hooli\t5552223333\tzz\r\r-5\r\x19500\r\r' '\r'   # Contacts.Add: lookup, a refused credit, [ Save ], ALERT
+    'examples/retro_contacts': ('\x1bOP\x1b'                                    # F1 help from the menu bar
+                                'ca' 'hooli\t\x1bOP\x1b5552223333\tinfo@hooli.example\tc\t\t\x1920240115\t-5\r\x19500\r\r' '\r'   # Contacts.Add: F1 in the form, list, date, a refused credit, [ Save ], ALERT
                                 'ce' '\x1b[B\x1b[B\r' '\t\t\t750\r'                 # Contacts.Edit: EDIT RECORD on HOOLI
                                 'cn' '\x1b[B\x1b[B\r' 'Met at expo\x17'              # Contacts.Notes: EDIT TEXT
                                 'cb' '\x1b' 'cd' '\x1b[B\r' 'y'                       # Browse; Delete GLOBEX (ALERT)
@@ -89,7 +90,8 @@ STDIN = {
                                 '\x1b[2~3\t' 'pear\t4\r\x1b[C\r\x19Pear2\r\x1b[A\x1b[3~n\x1b[3~y\x1b[2~\x1b' '\x1b[2~\t\t1\r \x1b\x1b'),         # DuckDB
     'tests/browse_paging': ('\x1b[F\r' + '\x1b[6~' * 40 + '\r' + '\x1b[F\x1b[C\r\x19last\r\x1b[A\x1b[3~y\x1b' + '\x1b[F\r') * 2,   # SQLite, then DuckDB
     'tests/visual_polish': '\x1b[B' * 25 + '\r' '\x1b[F\r' '\x1b[6~\x1b[5~\r' '\x1b[C\r' + '\x1b[B' * 28 + '\r' '\r',
-    'tests/browse_power': ('\x1bOR\x1bOR\r' '\x1b[C\x1bORc\r' 'b\r' 'a\x08d\r' '\x1b[C\x1bORc11234\r' '\x1b[C\x1bORc1123\r' '\x1b[C\x1bOR\x1bOR\r\x19Zed\r\x1b') * 2,   # SQLite, then DuckDB
+    'tests/get_hints': '\x1b[15~Ann\r\x1b[15~5551234567\r\x1b[15~Boston\r',
+    'tests/browse_power': ('\x1bOR\x1bOR\r' '\x1b[C\x1bORc\r' 'b\r' 'a\x08d\r' '\x1b[C\x1bORc11234\r' '\x1b[C\x1bORc1123\r' '\x1b[C\x1bOR\x1bOR\r\x19Zed\r\x1b' '\x1b[2~9\tEve\r\x1b') * 2,   # SQLite, then DuckDB
     'tests/browse_edit': '\x1b[C\r\x19Apricot\r\x1b[C7\r-1\r\x1b[B\x1b[C\r\x19\r\x1b[D\x1b[DBanana2\t\x1b' '\r\x1b[CCherry\r\x1b' * 2,   # SQLite, then DuckDB
     'tests/edit_record': ('\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'     # SQLite
                           '\x19jones\t\t\x19-5\r ' '\t\t\x1950\r' '2\t\x19brown\tb@x.com\t7\r' '\x19zzz\x1b'),  # DuckDB

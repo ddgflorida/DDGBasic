@@ -46,7 +46,7 @@ Related material in other chapters:
 
 ## 7.1 Tutorial: a contact manager
 
-`examples/retro_contacts.bas` is a complete application in about a hundred lines. This section builds it up piece by piece. Run it with `dbbasic examples/retro_contacts.bas` (or `python3 src/dbbasic.py examples/retro_contacts.bas`) in a terminal of at least 80 x 24.
+`examples/retro_contacts.bas` is a complete application in about a hundred and fifty lines. This section builds it up piece by piece. Run it with `dbbasic examples/retro_contacts.bas` (or `python3 src/dbbasic.py examples/retro_contacts.bas`) in a terminal of at least 80 x 24.
 
 **1. The data.** A text-mode application is an ordinary DbBasic program, so it starts with its tables:
 
@@ -54,8 +54,8 @@ Related material in other chapters:
 DATABASE OPEN ":memory:"
 CREATE TABLE states (code TEXT PRIMARY KEY, name TEXT);
 INSERT INTO states VALUES ('CA', 'California'), ('FL', 'Florida'), ('NY', 'New York'), ('TX', 'Texas');
-CREATE TABLE contacts (id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT, state TEXT,
-                       credit REAL CHECK (credit >= 0), notes TEXT);
+CREATE TABLE contacts (id INTEGER PRIMARY KEY, name TEXT NOT NULL, phone TEXT, email TEXT, state TEXT,
+                       active TEXT DEFAULT 'Y', since TEXT, credit REAL CHECK (credit >= 0), notes TEXT);
 ```
 
 **2. The desktop.** `COLOR` sets the colours (here bright white on blue, with black-on-cyan fields and menu bars), `CLS` clears the screen in them, and `BOX` draws the frame:
@@ -65,8 +65,17 @@ desktop:
     COLOR 15, 1, 0, 3
     CLS
     BOX 2, 1, 23, 80, "CONTACTS  " & DATE$ DOUBLE
-    @ 24, 2 SAY "Arrows move  Enter chooses  Esc goes back  Letters are hot keys"
+    @ 24, 2 SAY "F1 help  Arrows move  Enter chooses  Esc goes back  Letters are hot keys"
     RETURN
+```
+
+F1 shows the keys from anywhere in the program: on the menu bar, in a form, in the grid or the editor. `ON KEY` binds the key to a function once, at the top, and every screen statement honours it, putting the screen back afterwards:
+
+```basic
+FUNCTION show_help()
+    VIEW keys$ AT 5, 8, 17, 74 TITLE "Keys (Esc closes)"
+END FUNCTION
+ON KEY "F1" CALL show_help
 ```
 
 **3. The menu bar.** `MENUBAR$` draws a bar with a pull-down under each title and returns the choice as `"Title.Item"`, so the main loop reads like a list of commands:
@@ -102,8 +111,10 @@ summary:
     @ 5, 6 SAY PADRIGHT$("Name", 20, " ") & " " & PADRIGHT$("Phone", 16, " ") & " " & PADRIGHT$("State", 5, " ") & "    Credit"
     @ 6, 6 SAY REPEAT$("-", 53)
     row = 7
-    FOR s IN (SELECT name, phone, state, credit FROM contacts ORDER BY name LIMIT 12)
+    FOR s IN (SELECT name, phone, state, credit, active FROM contacts ORDER BY name LIMIT 12)
+        IF s.active = "N" THEN COLOR 7
         @ row, 6 SAY PADRIGHT$(s.name, 20, " ") & " " & PADRIGHT$(s.phone, 16, " ") & " " & PADRIGHT$(s.state, 5, " ") & FORMAT$(s.credit, "###,##0.00")
+        COLOR 15
         row = row + 1
     NEXT
     @ 20, 6 SAY LTRIM$(STR$((SELECT COUNT(*) FROM contacts))) & " contacts.  Press C for Contacts, F for File, H for Help."
@@ -122,55 +133,69 @@ summary:
 ║ │  INITECH              (555) 444-1212   TX         0.00                   │ ║
 ```
 
-**4. The list.** One `BROWSE ... EDIT` gives a scrolling grid in which Enter (or typing) edits a cell, Ins adds a row and Del deletes one. Every change goes straight to the table:
+**4. The list.** One `BROWSE ... EDIT` gives a scrolling grid in which Enter (or typing) edits a cell, Ins adds a row and Del deletes one. Every change goes straight to the table. A click on a heading (or F3) sorts by that column. `FREEZE 2` keeps the id and name in view while the other columns scroll, `FORMAT` shows the credit with commas, and `COLOR` takes each row's colour from a column of the query, here grey (7) for inactive contacts:
 
 ```basic
 browse_contacts:
-    BROWSE (SELECT id, name, phone, state, credit FROM contacts ORDER BY name) EDIT KEY "id" _
-        AT 3, 3, 21, 78 TITLE "Contacts (Enter edits, Ins adds, Del deletes)"
+    BROWSE (SELECT id, name, phone, email, state, active, since, credit,
+                   CASE WHEN active = 'N' THEN 7 END AS shade
+              FROM contacts ORDER BY name) EDIT KEY "id" _
+        AT 3, 3, 21, 78 TITLE "Contacts (Enter edits, Ins adds, Del deletes, F3 sorts)" _
+        FREEZE 2 FORMAT credit "###,##0.00" COLOR "shade"
     RETURN
 ```
 
-**5. An entry form.** For a form with its own layout, `@ ... SAY ... GET` places the fields and `READ` edits them. The fields here belong to a hash, `c`, so the `INSERT` can bind them directly. `PICTURE` shapes the input, `VALID ... MESSAGE` explains a refusal, and `LOOKUP` gives the state field a list (F2, or typing a code that isn't in it, opens the list):
+**5. An entry form.** For a form with its own layout, `@ ... SAY ... GET` places the fields and `READ` edits them. The fields here belong to a hash, `c`, so the `INSERT` can bind them directly. `PICTURE` shapes the input (`@D` is a date, `999,999.99` a number typed like a calculator), `VALID ... MESSAGE` explains a refusal, `LIST` makes the state a drop-down filled from a query, `CHECKBOX` gives a `[X]` box, and `HINT` puts a line of help on the bottom of the screen while the cursor is in that field. `BOX ... SHADOW` gives the form a drop shadow:
 
 ```basic
 add_contact:
-    c.name = "" : c.phone = "" : c.state = "" : c.credit = 0
+    c.name = "" : c.phone = "" : c.email = "" : c.state = "FL" : c.active = "Y" : c.since = DATE$ : c.credit = 0
     saved$ = SAVESCREEN()
-    BOX 6, 12, 15, 68, "New contact"
-    @ 8, 15 SAY "Name   : " GET c.name PICTURE "@!S30" VALID LEN(TRIM$(c.name)) > 0 MESSAGE "A name is required"
-    @ 9, 15 SAY "Phone  : " GET c.phone PICTURE "(999) 999-9999"
-    @ 10, 15 SAY "State  : " GET c.state PICTURE "!!" LOOKUP (SELECT code, name FROM states ORDER BY code)
-    @ 11, 15 SAY "Credit : " GET c.credit VALID c.credit >= 0 AND c.credit <= 100000 MESSAGE "Credit must be 0 to 100,000"
-    @ 13, 15 BUTTON "Save"
-    @ 13, 25 BUTTON "Cancel" CANCEL
-    @ 13, 39 SAY "F2: list of states"
+    BOX 5, 12, 18, 68, "New contact" SHADOW
+    @ 7, 15 SAY "Name   : " GET c.name PICTURE "@!S30" VALID LEN(TRIM$(c.name)) > 0 MESSAGE "A name is required" _
+        HINT "The company or person's name (required)"
+    @ 8, 15 SAY "Phone  : " GET c.phone PICTURE "(999) 999-9999" HINT "Ten digits: the brackets and dash are filled in"
+    @ 9, 15 SAY "Email  : " GET c.email PICTURE "@S30" HINT "Optional"
+    @ 10, 15 SAY "State  : " GET c.state LIST (SELECT code FROM states ORDER BY code) _
+        HINT "Space or F2 opens the list; a letter jumps to a state"
+    @ 11, 15 SAY "Active : " GET c.active CHECKBOX HINT "Space ticks or clears the box"
+    @ 12, 15 SAY "Since  : " GET c.since PICTURE "@D" HINT "When they became a customer: YYYY-MM-DD"
+    @ 13, 15 SAY "Credit : " GET c.credit PICTURE "999,999.99" VALID c.credit >= 0 AND c.credit <= 100000 _
+        MESSAGE "Credit must be 0 to 100,000" HINT "Credit limit in dollars, 0 to 100,000"
+    @ 16, 15 BUTTON "Save"
+    @ 16, 25 BUTTON "Cancel" CANCEL
     READ
     RESTSCREEN saved$
     IF BUTTON$ <> "Save" THEN RETURN
-    INSERT INTO contacts (name, phone, state, credit) VALUES (:c.name, :c.phone, :c.state, :c.credit);
+    INSERT INTO contacts (name, phone, email, state, active, since, credit)
+        VALUES (:c.name, :c.phone, :c.email, :c.state, :c.active, :c.since, :c.credit);
     x = ALERT("Saved " & c.name)
     RETURN
 ```
 
 ```
-║ │  ------┌───────────────────── New contact ─────────────────────┐         │ ║
-║ │  ACME C│                                                       │         │ ║
-║ │  GLOBEX│  Name   : HOOLI                                       │         │ ║
-║ │  INITEC│  Phone  : (555) 222-3333                              │         │ ║
-║ │        │  State  : ZZ                                          │         │ ║
-║ │        │  Credit : ┌─────── Choose ───────┐                    │         │ ║
-║ │        │           │ code │ name          │                    │         │ ║
-║ │        │  [ Save ] │──────────────────────│of states           │         │ ║
-║ │        │           │ CA   │ California    │                    │         │ ║
-║ │        └───────────│ FL   │ Florida       │────────────────────┘         │ ║
-║ │                    │ NY   │ New York      │                              │ ║
-║ │                    │ TX   │ Texas         │                              │ ║
-║ │                    │ 1 of 4   Enter=select│                              │ ║
-║ │                    └──────────────────────┘                              │ ║
+╔════════════════════════════ CONTACTS  2026-11-05 ════════════════════════════╗
+║ ┌──────────────────────────── Contacts on file ────────────────────────────┐ ║
+║ │                                                                          │ ║
+║ │  Name  ┌───────────────────── New contact ─────────────────────┐         │ ║
+║ │  ------│                                                       │         │ ║
+║ │  ACME C│  Name   : HOOLI                                       │         │ ║
+║ │  GLOBEX│  Phone  : (555) 222-3333                              │         │ ║
+║ │  INITEC│  Email  :                                             │         │ ║
+║ │        │  State  : FL ▼                                        │         │ ║
+║ │        │  Active : [X]                                         │         │ ║
+║ │        │  Since  : 2026-11-05                                  │         │ ║
+║ │        │  Credit :       0.00                                  │         │ ║
+║ │        │                                                       │         │ ║
+║ │        │                                                       │         │ ║
+║ │        │  [ Save ]  [ Cancel ]                                 │         │ ║
+║ │        │                                                       │         │ ║
+║ │        └───────────────────────────────────────────────────────┘         │ ║
+...
+ Space or F2 opens the list; a letter jumps to a state
 ```
 
-`BUTTON` adds `[ Save ]` and `[ Cancel ]` after the fields: Enter on the last field moves onto them, and `BUTTON$` tells the program which was pressed (`CANCEL` makes a button put the old values back, like Esc). `SAVESCREEN` and `RESTSCREEN` put back what the form covered. `ALERT` shows a message box and waits for a key.
+The bottom line is the hint for the field with the cursor, State here; the program's own status line comes back when `READ` ends. `BUTTON` adds `[ Save ]` and `[ Cancel ]` after the fields: Enter on the last field moves onto them, and `BUTTON$` tells the program which was pressed (`CANCEL` makes a button put the old values back, like Esc). `SAVESCREEN` and `RESTSCREEN` put back what the form covered. `ALERT` shows a message box and waits for a key.
 
 **6. A form in one line.** When the layout doesn't matter, `EDIT RECORD` lays out one labelled field per column and saves the changes with an `UPDATE`:
 
@@ -182,13 +207,13 @@ edit_contact:
     RETURN
 
 pick_contact:
-    BROWSE (SELECT id, name, phone FROM contacts ORDER BY name) AT 3, 3, 21, 78 TITLE "Pick a contact" INTO c
+    BROWSE (SELECT name, phone, state, id FROM contacts ORDER BY name) AT 3, 3, 21, 78 TITLE "Pick a contact (type a name)" INTO c
     RETURN
 ```
 
-`BROWSE` without `EDIT` is a picker: Enter puts the chosen row into `c` as a hash.
+`BROWSE` without `EDIT` is a picker: Enter puts the chosen row into `c` as a hash. Typing jumps to the next row whose first column starts with what was typed, so the name comes first.
 
-**7. Notes, confirmations and reports.** `EDIT TEXT` is a memo editor, `ALERT` with buttons asks a question, and `VIEW` shows a query (or a file, or a string) in a scrolling viewer with search:
+**7. Notes, confirmations and reports.** `EDIT TEXT` is a memo editor, `ALERT` with buttons asks a question, and `REPORT ... TO VIEW` lays out a report with a group per state and credit totals, and shows it in the scrolling viewer with search:
 
 ```basic
 edit_notes:
@@ -207,8 +232,8 @@ delete_contact:
     RETURN
 
 report:
-    VIEW (SELECT state, COUNT(*) AS contacts, SUM(credit) AS credit FROM contacts GROUP BY state ORDER BY state) _
-        AT 3, 3, 21, 78 TITLE "Contacts by state (q closes)"
+    REPORT (SELECT state, name, active, credit FROM contacts ORDER BY state, name) _
+        TITLE "Contacts by state" GROUP BY state TOTAL credit FORMAT credit "###,##0.00" TO VIEW
     RETURN
 ```
 
@@ -341,7 +366,8 @@ Compare two saved strings to see whether the screen changed: `IF SAVESCREEN() <>
 
 ```
 @ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$]
-                                                  [WHEN condition] [LOOKUP (SELECT ...)]]
+                                                  [HINT text$] [WHEN condition] [LOOKUP (SELECT ...)]
+                                                  [CHECKBOX] [LIST items]]
 ```
 
 The `GET` clauses can come in any order.
@@ -404,6 +430,12 @@ Functions and a template combine with a space between them: `@Z 9999`, `@R (999)
 @ 5, 5 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000"
 ```
 
+`HINT text$` is a line of help for the field: while the cursor is in it, the text is shown on the bottom line of the screen. Moving to a field without a hint shows what was on that line before, and so does the end of `READ`, so a program's own status line comes back. A `MESSAGE` shows over the hint until the next key.
+
+```basic
+@ 6, 5 SAY "Phone : " GET phone$ PICTURE "@R (999) 999-9999" HINT "Ten digits; the brackets are filled in"
+```
+
 `WHEN condition` is checked when the cursor would move into the field. If it is false, the field is skipped, in whichever direction the cursor was moving. Use it for fields that only apply sometimes. A field skipped as the last one ends `READ`:
 
 ```basic
@@ -411,7 +443,7 @@ Functions and a template combine with a space between them: `@Z 9999`, `@R (999)
 @ 5, 5 SAY "Credit: " GET credit WHEN type$ = "B"
 ```
 
-A condition ends at the end of the statement or at the next clause word (`MESSAGE`, `WHEN`, `LOOKUP`, `PICTURE`, `VALID`), so `VALID message$ <> ""` still works with a variable called `message$`.
+A condition ends at the end of the statement or at the next clause word (`MESSAGE`, `HINT`, `WHEN`, `LOOKUP`, `PICTURE`, `VALID`, `CHECKBOX`, `LIST`), so `VALID message$ <> ""` still works with a variable called `message$`.
 
 **LOOKUP** gives a field a list of allowed values from a query. Its first column holds the values; any other columns are shown as a description:
 

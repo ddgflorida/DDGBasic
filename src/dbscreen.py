@@ -897,7 +897,7 @@ class Screen:
 
     # --- GET / READ ----------------------------------------------------
     def add_get(self, row, col, var_name, value, picture, valid, numeric, target=None,
-                message=None, when=None, lookup=None, kind=None, items=None):
+                message=None, when=None, lookup=None, kind=None, items=None, hint=None):
         if kind == 'check':
             field = CheckBox(row, col, var_name, value, valid, isinstance(value, str) or var_name.endswith('$'))
         elif kind == 'list':
@@ -906,6 +906,7 @@ class Screen:
             field = Field(row, col, var_name, value, picture, valid, numeric)
         field.target = target       # where READ stores the value (the interpreter's description)
         field.message, field.when, field.lookup = message, when, lookup
+        field.hint = hint
         self.gets.append(field)
         self._draw_field(field)
         return field
@@ -984,10 +985,22 @@ class Screen:
         pos = fields[index].first_pos()
         fresh = True        # the first key typed into a numeric field replaces its value
         message_under = None
+        # HINT: the current field's hint is shown on the bottom line; what was there comes back
+        # for a field without one, and when READ ends
+        hint_under = self.save(self.rows, 1, self.rows, self.cols) \
+            if any(getattr(f, 'hint', None) for f in fields) else None
+        hint_shown = None
         self._w('\x1b[?25h')
         try:
             while True:
                 field = fields[index]
+                if hint_under and getattr(field, 'hint', None) != hint_shown:
+                    hint_shown = getattr(field, 'hint', None)
+                    if hint_shown:
+                        self._w(self._put(self.rows, 1, (' ' + hint_shown)[:self.cols].ljust(self.cols),
+                                          self.fg, self.bg) + self._normal())
+                    else:
+                        self.restore_saved(hint_under)
                 if getattr(field, 'is_button', False):
                     # A button: Enter or Space presses it; Tab, arrows and Shift-Tab move on
                     self._w('\x1b[?25l')
@@ -1119,6 +1132,8 @@ class Screen:
         finally:
             if message_under:
                 self.restore_saved(message_under)
+            if hint_under and hint_shown:
+                self.restore_saved(hint_under)
             self._w(self._normal())
 
     def _choose_from_list(self, field):

@@ -328,9 +328,9 @@ class HelpRegistry:
             "examples": ['FOR i = 1 TO n\n    PROGRESS i, n TITLE "Copying"\nNEXT i\nPROGRESS OFF']
         },
         "@": {
-            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [WHEN condition] [LOOKUP (SELECT ...)]]\n@ row, col BUTTON label$ [CANCEL]\nGET ... CHECKBOX | GET ... LIST "a,b,c" | GET ... LIST (SELECT ...)',
-            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left; MESSAGE text is shown on the bottom line when it fails. WHEN skips the field when false. LOOKUP gives a list of allowed values (first column): F2 opens it, and leaving with a value not in the list opens it too.",
-            "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Email: " GET rec.email PICTURE "@S40"', '@ 7, 10 SAY "State: " GET state$ PICTURE "!!" LOOKUP (SELECT code, name FROM states)', '@ 8, 10 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000" WHEN type$ = "B"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 20, 1 SAY total PICTURE "$#,###.##"']
+            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [HINT text$] [WHEN condition] [LOOKUP (SELECT ...)]]\n@ row, col BUTTON label$ [CANCEL]\nGET ... CHECKBOX | GET ... LIST "a,b,c" | GET ... LIST (SELECT ...)',
+            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left; MESSAGE text is shown on the bottom line when it fails. HINT text is shown on the bottom line while the cursor is in the field. WHEN skips the field when false. LOOKUP gives a list of allowed values (first column): F2 opens it, and leaving with a value not in the list opens it too.",
+            "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Email: " GET rec.email PICTURE "@S40"', '@ 7, 10 SAY "State: " GET state$ PICTURE "!!" LOOKUP (SELECT code, name FROM states)', '@ 8, 10 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000" WHEN type$ = "B"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 9, 10 SAY "Phone: " GET phone$ PICTURE "@R (999) 999-9999" HINT "Ten digits"', '@ 20, 1 SAY total PICTURE "$#,###.##"']
         },
         "READ": {
             "syntax": 'READ',
@@ -4227,7 +4227,7 @@ class Interpreter:
             last = target[1][-1][1] if target[1] else target[0]
             numeric = not str(last).endswith('$') and isinstance(value, (int, float)) and not isinstance(value, bool)
             picture = valid = message = when = lookup = None
-            kind, items = None, None
+            kind, items, hint = None, None, None
             # The clauses can come in any order
             while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
                 if keyword('PICTURE'):
@@ -4238,6 +4238,8 @@ class Interpreter:
                     when = self._skip_get_condition()      # evaluated by READ when the field is reached
                 elif keyword('MESSAGE'):
                     message = self._to_string(self._parse_expression())
+                elif keyword('HINT'):
+                    hint = self._to_string(self._parse_expression())   # shown on the bottom line in READ
                 elif keyword('CHECKBOX'):
                     kind = 'check'
                 elif keyword('LIST'):
@@ -4258,12 +4260,12 @@ class Interpreter:
                     lookup = self._extract_sql_from_parens()
                 else:
                     self._error(f"Unexpected '{self._current_token()[1]}' after GET {var_name}: "
-                                "expected PICTURE, VALID, MESSAGE, WHEN, LOOKUP, CHECKBOX or LIST")
+                                "expected PICTURE, VALID, MESSAGE, HINT, WHEN, LOOKUP, CHECKBOX or LIST")
             if picture and picture.startswith('@') and 'D' in picture[1:].split(' ')[0].upper():
                 numeric = False             # a date field holds text (YYYY-MM-DD)
             try:
                 SCREEN.add_get(row, col, var_name, value, picture, valid, numeric, target,
-                               message=message, when=when, lookup=lookup, kind=kind, items=items)
+                               message=message, when=when, lookup=lookup, kind=kind, items=items, hint=hint)
             except ScreenError as e:
                 self._error(str(e))
         elif not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
@@ -4340,7 +4342,7 @@ class Interpreter:
         container, key = self._get_target_slot(target)
         container[key] = value
 
-    GET_CLAUSE_WORDS = ('PICTURE', 'VALID', 'MESSAGE', 'WHEN', 'LOOKUP', 'CHECKBOX', 'LIST')
+    GET_CLAUSE_WORDS = ('PICTURE', 'VALID', 'MESSAGE', 'WHEN', 'LOOKUP', 'CHECKBOX', 'LIST', 'HINT')
 
     def _skip_get_condition(self):
         """Remembers where a VALID or WHEN condition starts and moves past it. The condition
@@ -4457,6 +4459,16 @@ class Interpreter:
         results = self._browse_rows(sql)
         columns = results.columns if isinstance(results, PagedRows) else \
             ([d[0] for d in self.db_cursor.description] if self.db_cursor.description else [])
+        def column_index(name, clause):
+            matches = [i for i, c in enumerate(columns) if c.upper() == name.upper()]
+            if not matches:
+                self._error(f"BROWSE ... {clause}: there is no column '{name}' in the query.")
+            return matches[0]
+
+        color_index = None
+        if color_column:                  # hidden before EDIT works out the columns of its forms
+            color_index = column_index(color_column, 'COLOR')
+            hidden.add(color_index)
         if edit:
             if key_column:
                 matches = [i for i, c in enumerate(columns) if c.upper() == key_column.upper()]
@@ -4511,18 +4523,8 @@ class Interpreter:
                     return str(e).splitlines()[0]
                 return None
 
-        def column_index(name, clause):
-            matches = [i for i, c in enumerate(columns) if c.upper() == name.upper()]
-            if not matches:
-                self._error(f"BROWSE ... {clause}: there is no column '{name}' in the query.")
-            return matches[0]
-
         format_fns = {column_index(name, 'FORMAT'): (lambda mask: lambda v: Formatter.format(mask, [v]).strip())(mask)
                       for name, mask in formats.items()}
-        color_index = None
-        if color_column:
-            color_index = column_index(color_column, 'COLOR')
-            hidden.add(color_index)
         chosen = SCREEN.browse(columns, results, area, title, save=save, hidden=hidden, locked=locked,
                                add=add if edit else None, delete=delete if edit else None,
                                frozen=frozen, formats=format_fns, color_col=color_index)
