@@ -229,6 +229,7 @@ class KeyReader:
         """The next key, waiting up to timeout seconds (None waits forever).
         Returns '' if no key arrives in time, or None when input has ended.
         A key bound with ON KEY runs its handler instead of being returned."""
+        sys.stdout.flush()                 # whatever was printed is on screen before the wait
         while True:
             key = self._read_key_once(timeout)
             if key and key in self.hotkeys and self.on_hotkey and not self._in_hotkey:

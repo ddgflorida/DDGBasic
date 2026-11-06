@@ -7610,7 +7610,8 @@ class Interpreter:
             if target == sys.stdout and SCREEN.used:
                 SCREEN.track(formatted_output + ("" if suppress_nl else "\n"))
             elif target == sys.stdout:
-                print(formatted_output, end="" if suppress_nl else "\n")
+                # Text left without a newline (a prompt) is shown now, not when the line ends
+                print(formatted_output, end="" if suppress_nl else "\n", flush=suppress_nl)
             else:
                 target.write(formatted_output)
                 if not suppress_nl:
@@ -7660,7 +7661,9 @@ class Interpreter:
                     parts.append('\n')
         output = "".join(parts)
         if target == sys.stdout and SCREEN.used: SCREEN.track(output)   # keep the screen copy current
-        elif target == sys.stdout: print(output, end='')
+        elif target == sys.stdout:
+            # PRINT "Enter a key: "; shows the prompt now: a terminal only sends a line when it ends
+            print(output, end='', flush=not output.endswith('\n'))
         else: target.write(output)   
             
     def _parse_write_statement(self):
