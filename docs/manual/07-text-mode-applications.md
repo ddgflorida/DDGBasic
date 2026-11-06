@@ -968,6 +968,8 @@ LOOP UNTIL k$ = CHR$(27)
 
 While a program reads keys, the terminal does not echo them and passes Ctrl-S, Ctrl-Q, Ctrl-Y, Ctrl-V and Ctrl-O to the program. Ctrl-C still stops the program. `INPUT` switches the terminal back to normal line editing. When the program ends, the colours, the cursor and the terminal mode are restored. The screen contents are left as they are, as they were in DOS.
 
+On Windows, DbBasic turns on the console's ANSI support and `DISABLE_NEWLINE_AUTO_RETURN`, so that drawing the bottom-right character of the screen (a hint line, a full-screen box) doesn't scroll everything up a line, as it does in other terminals. A console too old for that setting gets everything but that one character.
+
 DbBasic always writes its output as UTF-8. On Windows, output sent to a pipe or a file would otherwise use the ANSI code page (cp1252), which cannot encode the box-drawing characters and fails with `'charmap' codec can't encode ...`. The console itself shows them as long as its font has the characters (the default fonts of Windows Terminal and the Windows 10+ console do).
 
 **Resizing.** When the terminal window changes size, DbBasic redraws the screen from its copy (see [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen)), so the window doesn't fill with wrapped or shuffled lines. What fits the new size is kept where it was. Nothing is laid out again: a full-screen `BROWSE` or a menu bar keeps the size it was drawn at until it is drawn again, and `CLS` starts over at the new size. The redraw happens while the program waits for a key; on Windows the size is checked four times a second during the wait.

@@ -627,6 +627,10 @@ class Screen:
         self.hotkey_call = None     # set by the interpreter: runs the function bound to a key
         self.keys.on_hotkey = self._run_hotkey
         self.shadows = True         # SET SHADOW OFF: pop-ups without a drop shadow
+        # Whether writing the bottom-right cell leaves the cursor there (as xterm, macOS and
+        # Linux terminals do) rather than scrolling the screen up a line. The Windows console
+        # does it only with DISABLE_NEWLINE_AUTO_RETURN, which _activate turns on.
+        self.deferred_wrap = os.name != 'nt'
         self.progress_box = None    # PROGRESS: (area, what it covered, last drawn bar)
         self.keys.on_resize = self._resized
         if hasattr(signal, 'SIGWINCH') and self.keys.is_tty:
@@ -684,7 +688,14 @@ class Screen:
                 handle = k32.GetStdHandle(-11)
                 mode = ctypes.c_uint32()
                 if k32.GetConsoleMode(handle, ctypes.byref(mode)):
-                    k32.SetConsoleMode(handle, mode.value | 0x0004)
+                    # 0x0004: interpret ANSI sequences. 0x0008 (DISABLE_NEWLINE_AUTO_RETURN):
+                    # writing the last column doesn't move the cursor on, so drawing the
+                    # bottom-right cell (a hint line, a full-screen box) doesn't scroll the
+                    # screen up. Older consoles refuse 0x0008; _put then skips that cell.
+                    if k32.SetConsoleMode(handle, mode.value | 0x0004 | 0x0008):
+                        self.deferred_wrap = True
+                    else:
+                        k32.SetConsoleMode(handle, mode.value | 0x0004)
             except Exception:
                 pass
         atexit.register(self.restore)
@@ -724,6 +735,8 @@ class Screen:
 
     def _put(self, row, col, text, fg, bg):
         """Records text in the screen copy and returns the ANSI output that draws it."""
+        if not self.deferred_wrap and row == self.rows and col - 1 + len(text) >= self.cols:
+            text = text[:max(0, self.cols - col)]       # the bottom-right cell would scroll the screen
         r = row - 1
         if 0 <= r < self.rows:
             line = self.cells[r]
@@ -767,6 +780,8 @@ class Screen:
         """ANSI output for a block of cells with its top-left corner at r1, c1."""
         out = []
         for n, line in enumerate(block):
+            if not self.deferred_wrap and r1 + n == self.rows and c1 - 1 + len(line) >= self.cols:
+                line = line[:max(0, self.cols - c1)]    # as in _put: not the bottom-right cell
             out.append(f'\x1b[{r1 + n};{c1}H')
             colour = None
             for ch, fg, bg in line:
