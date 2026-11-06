@@ -40,6 +40,9 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
 * ### 1990s-Style Text Screens
     * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `invoice_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
 
+* ### A QBasic-style IDE
+    * `dbbasic --ide program.bas` opens a full-screen editor with syntax colouring and a menu bar. F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor.
+
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
     * Full expressions allowed inside `${...}` — including UDF calls, hash lookups, arithmetic.
@@ -70,6 +73,7 @@ DbBasic needs Python 3.10 or newer.
 pip install -r requirements.txt
 python3 src/dbbasic.py examples/hello.bas      # run a script
 python3 src/dbbasic.py                         # interactive REPL
+python3 src/dbbasic.py --ide examples/contact.bas   # the QBasic-style IDE: F5 runs, F1 helps
 ```
 
 To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `dbbasic` from anywhere.

@@ -1343,6 +1343,7 @@ DUMP VARIABLES | LABELS | JUMPS | TOKENS
 python dbbasic.py [--debug] [--dump-tokens] program.bas [arg1 arg2 ...]
 python dbbasic.py [--debug] [--dump-tokens] - [arg1 arg2 ...]
 python dbbasic.py [--repl]
+python dbbasic.py --ide [program.bas]
 ```
 
 | Form | Behaviour |
@@ -1350,6 +1351,7 @@ python dbbasic.py [--repl]
 | no arguments, or only `--repl` | Starts the interactive REPL. Combining `--repl` with any other argument does not start the REPL; `--repl` is then treated as a file name. |
 | `program.bas args...` | Runs the file. All remaining words become program arguments. |
 | `- args...` | Reads the program source from standard input. |
+| `--ide [program.bas]` | Opens the program (or a new, untitled one) in the IDE, a full-screen editor. See [The IDE](#the-ide). |
 | `--debug` | Turns on internal parser debug output. It can appear anywhere on a run-a-file command line and is removed before the remaining arguments are processed. Very few code paths produce debug output. `--debug` on its own gives `Error: No source file specified.` |
 | `--dump-tokens` | Prints every token (`(TYPE, value, offset)`) before the program runs. It can appear anywhere on the line. |
 
@@ -1412,6 +1414,54 @@ DbBasic> FOR I=1 TO 3: PRINT I: NEXT
 - Because each line is separate, **block structures must fit on one line**. Block `IF ... END IF` cannot span several REPL lines; you get `Mismatched 'IF'`. Labels exist only within the line that defines them, so `GOTO`/`GOSUB` work only within one line.
 - A `FUNCTION` definition is the exception to the one-line rule. After a line starting with `FUNCTION name`, the REPL keeps reading lines (prompt `...>`) until `END FUNCTION`. The function stays defined for the rest of the session.
 - Errors are printed as `REPL Error: ...` and the session continues.
+
+### The IDE
+
+`dbbasic --ide program.bas` opens a full-screen editor in the style of QBasic, drawn with the same screen layer as the statements of [Chapter 7](07-text-mode-applications.md). Without a file name it starts an untitled program.
+
+```
+  File   Edit   Run   Options   Help
+┌──────────────────────────────── contact.bas ─────────────────────────────────┐
+│REM Contact screen: a simple entry form saved with one INSERT. The record is a│
+│DATABASE OPEN ":memory:"                                                      │
+│@ 5, 13 SAY "Name   : " GET c.name PICTURE "@S30" VALID c.name <> "" MESSAGE "│
+│...                                                                           │
+└──────────────────────────────────────────────────────────────────────────────┘
+ F1=Help  F5=Run  F10=Menu  Ctrl-S=Save  Alt-X=Exit           Ln 1  Col 1  Ins
+```
+
+Keywords, strings, numbers and comments have their own colours. The status line shows messages, the cursor's line and column, and whether typing inserts or overwrites (Ins switches).
+
+- **F5 runs the program.** It is saved first, then runs in its own folder (so its relative file names work) with the whole terminal, so text-screen programs work as usual. When it ends, its output stays on the screen until you press a key. If it stopped with an error, the IDE puts the cursor on the error's line and column and shows the message.
+- **F1 shows the help** for the word under the cursor, the same text as `HELP`. Two-word topics are found from either word (`ON KEY`, `SET THEME`, `MAKE FORM`), and the clause words of a statement show the statement's help (`GET` and `PICTURE` show `@`, `NEXT` shows `FOR`, `THEN` shows `IF`). Shift-F1 lists every topic; type to jump to one.
+- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Delete line, Duplicate line, Find, Find next, Go to line), Run, Options (blue or black screen, mouse on or off) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
+
+| Key | Action |
+|---|---|
+| F1 / Shift-F1 | Help on the word under the cursor / all help topics |
+| F5 | Save and run the program |
+| F10, Alt+letter | The menu bar |
+| Ctrl-S, Ctrl-O, Ctrl-N | Save, open, new |
+| Alt-X, Ctrl-Q | Exit (it asks first if there are unsaved changes) |
+| Ctrl-Z | Undo (typing on one line is one step) |
+| Ctrl-Y, Ctrl-D | Delete the line, duplicate the line |
+| Ctrl-F, F3 | Find (ignoring case), find the next one |
+| Ctrl-G | Go to a line |
+| Enter | A new line, indented like the one before |
+| Tab, Shift-Tab | Indent, unindent (4 spaces) |
+| Home, End | The start of the text (again: the margin), the end of the line |
+| Ctrl-Home, Ctrl-End | The start, the end of the program |
+| Ctrl-Left, Ctrl-Right | A word left, right |
+| PgUp, PgDn | A screen up, down |
+| The mouse | A click moves the cursor or opens a menu; the wheel scrolls |
+
+Notes:
+
+- Files keep their line endings (CRLF or LF). Tabs in a file are shown and saved as 4 spaces.
+- The IDE turns the mouse on (also on Windows) and puts the setting back when it ends. While the mouse is on, a drag does not select text in the terminal; hold Shift while dragging, or choose Options > Mouse off.
+- Ctrl-Z is Undo, so it does not suspend the IDE as it would a program in a macOS or Linux terminal. Ctrl-C does nothing in the IDE; leave with Alt-X or Ctrl-Q.
+- There is no text selection (cut, copy and paste of a block) yet.
+- The IDE needs an interactive terminal; with input or output redirected it stops with `The IDE needs an interactive terminal.`
 
 ### HELP
 

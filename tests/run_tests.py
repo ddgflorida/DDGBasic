@@ -141,6 +141,11 @@ def expected_output(path):
     return expected
 
 
+# Python checks of the interpreter's own code (no BASIC script, no terminal). They test the
+# source, so --binary skips them.
+PY_CHECKS = ['tests/ide_check.py']
+
+
 def find_scripts(include_examples):
     dirs = ['tests'] + (['examples'] if include_examples else [])
     scripts = []
@@ -176,7 +181,9 @@ def main():
     if args.names:
         wanted = {n[:-4] if n.lower().endswith('.bas') else n for n in args.names}
         scripts = [s for s in scripts if s in wanted or s.split('/')[1] in wanted]
-        if not scripts:
+        checks = [c for c in PY_CHECKS if os.path.basename(os.path.splitext(c)[0]) in args.names
+                  or os.path.splitext(c)[0] in args.names]
+        if not scripts and not checks:
             sys.exit(f"No scripts match: {' '.join(args.names)}")
 
     work = tempfile.mkdtemp(prefix='dbbasic-tests-')
@@ -238,6 +245,26 @@ def main():
                 for line in output.rstrip().splitlines():
                     print(f"      | {line}")
             shutil.rmtree(run_dir, ignore_errors=True)
+        for check in PY_CHECKS:
+            name = os.path.splitext(check)[0]
+            if args.names and os.path.basename(name) not in args.names and name not in args.names:
+                continue
+            if args.binary:
+                skipped.append(name)
+                print(f"SKIP  {name:36} tests the source, not the binary")
+                continue
+            started = time.time()
+            result = subprocess.run([sys.executable, os.path.join(REPO, check)], capture_output=True,
+                                    encoding='utf-8', errors='replace', timeout=TIMEOUT_SECONDS)
+            elapsed = time.time() - started
+            if result.returncode == 0:
+                passed.append(name)
+                print(f"PASS  {name:36} {elapsed:5.1f}s")
+            else:
+                failed.append(name)
+                print(f"FAIL  {name:36} {elapsed:5.1f}s  (exit {result.returncode})")
+                for line in (result.stdout + result.stderr).strip().splitlines()[-8:]:
+                    print(f"      | {line}")
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

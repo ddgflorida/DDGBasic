@@ -66,6 +66,17 @@ The mouse          click to move the cursor or open a menu; the wheel scrolls
                    (Options > Mouse off gives the terminal its own text selection back)"""
 
 
+def error_location(errors):
+    """The last error a program printed, as (message, line, column), or None. Runtime
+    errors read "Runtime Error: ... at line 12, col 5." and lexer errors
+    "Error: ... at line 2, col 5"."""
+    found = re.findall(r'(?:Runtime Error|Error): (.*?) at line (\d+), col (\d+)', errors)
+    if not found:
+        return None
+    message, line, col = found[-1]
+    return message, int(line), int(col)
+
+
 class Editor:
     def __init__(self, path, runner, help_topics, get_help):
         self.runner = runner                  # the command that runs a .bas file
@@ -315,12 +326,12 @@ class Editor:
         sys.stdout.flush()
         SCREEN.keys.read_key()
         self.repaint()
-        # Go to the error: "... at line 12, col 5." (runtime) or "Error: ... at line 2, col 5" (lexer)
-        found = re.findall(r'(?:Runtime Error|Error): (.*?) at line (\d+), col (\d+)', errors)
-        if found and status != 0:
-            text, line, col = found[-1]
-            self.row = max(0, min(int(line) - 1, len(self.lines) - 1))
-            self.col = max(0, min(int(col) - 1, len(self.lines[self.row])))
+        # Go to the error
+        found = error_location(errors) if status != 0 else None
+        if found:
+            text, line, col = found
+            self.row = max(0, min(line - 1, len(self.lines) - 1))
+            self.col = max(0, min(col - 1, len(self.lines[self.row])))
             self.scroll_to_cursor()
             self.draw()
             SCREEN.alert(f'Line {line}:;{text[:200]}', ['OK'])
