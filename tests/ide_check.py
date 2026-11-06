@@ -130,6 +130,21 @@ check(error_location("Error: Unexpected character '{' at line 2, col 5\n")
       == ("Unexpected character '{'", 2, 5), 'a lexer error')
 check(error_location('all fine\n') is None, 'no error')
 
+# The Immediate window: its own session, ? for PRINT, variables kept, SQL, errors, CLS
+from dbbasic import Interpreter, Lexer   # noqa: E402
+e = Editor(None, ['dbbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help,
+           new_session=lambda: Interpreter(Lexer("\n"), cmd_args=[]))
+check(e.execute_immediate('? 1 + 2') == [' 3'], 'the Immediate window: ? 1 + 2')
+e.execute_immediate('x = 5')
+check(e.execute_immediate('? x * 10') == [' 50'], 'the Immediate window keeps variables')
+out = e.execute_immediate('SELECT 42 AS answer;')
+check(any('42' in l for l in out) and any('answer' in l for l in out), f'the Immediate window runs SQL: {out}')
+check(e.execute_immediate('PRINT FOO(1)') == ['Error: Unknown function: FOO'], 'an error shows only its message')
+check(e.execute_immediate('INPUT a$')[0].startswith("INPUT can't be used here"), 'INPUT is refused')
+check(e.imm_lines[0] == '> ? 1 + 2' and e.imm_history[-1] == 'INPUT a$', 'typed lines are kept and recalled')
+e.execute_immediate('CLS')
+check(e.imm_lines == [], 'CLS clears the Immediate window')
+
 if failures:
     for f in failures:
         print('FAIL:', f)

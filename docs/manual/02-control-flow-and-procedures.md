@@ -1426,20 +1426,29 @@ DbBasic> FOR I=1 TO 3: PRINT I: NEXT
 │DATABASE OPEN ":memory:"                                                      │
 │@ 5, 13 SAY "Name   : " GET c.name PICTURE "@S30" VALID c.name <> "" MESSAGE "│
 │...                                                                           │
+├───────────────── Immediate  (F6 or Esc: back to the editor) ─────────────────┤
+│> x = 5                                                                       │
+│> ? x * 10                                                                    │
+│ 50                                                                           │
+│> PRINT FOO(1)                                                                │
+│Error: Unknown function: FOO                                                  │
+│>                                                                             │
 └──────────────────────────────────────────────────────────────────────────────┘
- F1=Help  F5=Run  F10=Menu  Ctrl-S=Save  Alt-X=Exit           Ln 1  Col 1  Ins
+ Enter runs the line  ? x prints x  Up=recall  F6=editor      Ln 1  Col 1  Ins
 ```
 
 Keywords, strings, numbers and comments have their own colours. The status line shows messages, the cursor's line and column, and whether typing inserts or overwrites (Ins switches).
 
 - **F5 runs the program.** It is saved first, then runs in its own folder (so its relative file names work) with the whole terminal, so text-screen programs work as usual. When it ends, its output stays on the screen until you press a key. If it stopped with an error, the IDE puts the cursor on the error's line and column and shows the message.
 - **F1 shows the help** for the word under the cursor, the same text as `HELP`. Two-word topics are found from either word (`ON KEY`, `SET THEME`, `MAKE FORM`), and the clause words of a statement show the statement's help (`GET` and `PICTURE` show `@`, `NEXT` shows `FOR`, `THEN` shows `IF`). Shift-F1 lists every topic; type to jump to one.
-- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Delete line, Duplicate line, Find, Find next, Go to line), Run, Options (blue or black screen, mouse on or off) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
+- **The Immediate window**, under the editor, runs one line at a time. F6 (or a click) moves between it and the editor. Type a statement and press Enter: it runs at once and its output appears in the window. `? x` is short for `PRINT x`. The window has a session of its own, as the REPL does: its variables, `FUNCTION`s, database connection and `SET` options stay from line to line until you leave the IDE, and it is separate from the program F5 runs. File names are relative to the program's folder, so `DATABASE OPEN "shop.db"` there opens the program's database. Up and Down bring back earlier lines, PgUp/PgDn (or the wheel) scroll back through the output, `CLS` clears the window, and Esc goes back to the editor. `INPUT` can't be used in it, since it has no keyboard prompt, and each line is a whole statement (a block `IF ... END IF` must fit on the line, as in the REPL). Options > Immediate window hides it to give the editor more room, or shows it again.
+- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Delete line, Duplicate line, Find, Find next, Go to line), Run, Options (blue or black screen, mouse on or off, Immediate window) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
 
 | Key | Action |
 |---|---|
 | F1 / Shift-F1 | Help on the word under the cursor / all help topics |
 | F5 | Save and run the program |
+| F6 | Move between the editor and the Immediate window |
 | F10, Alt+letter | The menu bar |
 | Ctrl-S, Ctrl-O, Ctrl-N | Save, open, new |
 | Alt-X, Ctrl-Q | Exit (it asks first if there are unsaved changes) |

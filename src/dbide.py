@@ -6,9 +6,11 @@ It edits one program with syntax colouring, runs it with F5 (the program gets th
 whole terminal; the IDE comes back when it ends and moves the cursor to the line of
 an error), shows the built-in HELP for the keyword under the cursor with F1, and has
 a menu bar (F10, or Alt and a menu's first letter) for files, editing, running,
-colours and help. It is drawn with the same screen layer as the text-screen
-statements (dbscreen.py).
+colours and help. Under the editor, the Immediate window (F6) runs one line at a
+time in a session of its own, as the REPL does. It is drawn with the same screen
+layer as the text-screen statements (dbscreen.py).
 """
+import io
 import os
 import re
 import subprocess
@@ -53,6 +55,7 @@ _SCHEMES = {
 
 _HELP_KEYS = """F1 / Shift-F1      help on the word under the cursor / all help topics
 F5                 run the program (it is saved first)
+F6                 move between the editor and the Immediate window
 F10, Alt+letter    the menu bar (Alt-F File, Alt-E Edit, Alt-R Run, Alt-O Options, Alt-H Help)
 Ctrl-S             save                      Ctrl-O   open
 Ctrl-N             new program               Alt-X    exit
@@ -62,7 +65,9 @@ Ctrl-F             find                      F3       find the next one
 Tab / Shift-Tab    indent / unindent         Ins      insert or overwrite
 Home / End         start / end of the line   Ctrl-Home / Ctrl-End   start / end of the program
 PgUp / PgDn        a screen up / down        Ctrl-Left / Ctrl-Right a word left / right
-The mouse          click to move the cursor or open a menu; the wheel scrolls
+The mouse          click to move the cursor, open a menu or go to a window; the wheel scrolls
+Immediate window   type a statement and press Enter: it runs at once (? x is PRINT x);
+                   Up/Down recall earlier lines, PgUp/PgDn scroll, CLS clears, Esc goes back
                    (Options > Mouse off gives the terminal its own text selection back)"""
 
 
@@ -78,8 +83,11 @@ def error_location(errors):
 
 
 class Editor:
-    def __init__(self, path, runner, help_topics, get_help):
+    IMMEDIATE_HEIGHT = 6                      # the Immediate window's rows, its input line included
+
+    def __init__(self, path, runner, help_topics, get_help, new_session=None):
         self.runner = runner                  # the command that runs a .bas file
+        self.new_session = new_session        # makes the interpreter of the Immediate window
         self.help_topics = help_topics        # HELP topic names
         self.get_help = get_help              # get_help(topic) -> {'desc', 'syntax', 'examples'} or None
         self.keywords = set(_SQL_WORDS) | _BASIC_WORDS
@@ -99,6 +107,14 @@ class Editor:
         self.last_edit = None                 # (kind, row): typing on one line is one undo step
         self.find_text = ''
         self.message = ''
+        # The Immediate window
+        self.session = None                   # its interpreter, made on first use
+        self.show_immediate = new_session is not None
+        self.focus = 'editor'                 # or 'immediate'
+        self.imm_lines = []                   # what it has shown: typed lines and their output
+        self.imm_text, self.imm_pos = '', 0   # the line being typed
+        self.imm_history, self.imm_recall = [], None
+        self.imm_scroll = 0                   # lines scrolled back from the newest
         if path:
             self.load(path)
 
@@ -242,13 +258,19 @@ class Editor:
                 return m.start(), m.group()
         return None, ''
 
-    def help_topic_at_cursor(self):
-        """The HELP topic for the word under the cursor, trying two-word topics (ON KEY,
-        SET THEME, MAKE FORM) with the word before and after it too."""
-        start, word = self.word_at_cursor()
+    def help_topic_at_cursor(self, line=None, col=None):
+        """The HELP topic for the word under the cursor (of the editor, or of the given line
+        and column), trying two-word topics (ON KEY, SET THEME, MAKE FORM) with the word
+        before and after it too."""
+        if line is None:
+            line, col = self.lines[self.row], self.col
+        start, word = None, ''
+        for m in re.finditer(r'[A-Za-z_@][A-Za-z0-9_]*\$?|@', line):
+            if m.start() <= col <= m.end():
+                start, word = m.start(), m.group()
+                break
         if not word:
             return None
-        line = self.lines[self.row]
         words = [(m.start(), m.group().upper()) for m in re.finditer(r'[A-Za-z_@][A-Za-z0-9_]*\$?|@', line)]
         i = next((n for n, (s, _) in enumerate(words) if s == start), None)
         topics = set(self.help_topics)
@@ -478,10 +500,126 @@ class Editor:
                 c += 1
             self.col = c
 
+    # --- the Immediate window -------------------------------------------------------------
+    def execute_immediate(self, text):
+        """Runs one line in the Immediate window's session and adds it and its output to the
+        window. ? x is PRINT x; CLS clears the window. Returns the output lines."""
+        line = text.strip()
+        if not line:
+            return []
+        if line.upper() == 'CLS':
+            self.imm_lines, self.imm_scroll = [], 0
+            return []
+        if re.match(r'(?i)(LINE\s+)?INPUT\b(?!\s*#)', line):
+            out = ["INPUT can't be used here: the Immediate window has no keyboard prompt."]
+        else:
+            code = 'PRINT ' + line[1:] if line.startswith('?') else line
+            if self.session is None:
+                self.session = self.new_session()
+            buffer, saved = io.StringIO(), (sys.stdout, sys.stderr)
+            here = os.getcwd()
+            colours = (SCREEN.fg, SCREEN.bg, SCREEN.field_fg, SCREEN.field_bg)
+            try:
+                sys.stdout = sys.stderr = buffer          # what the line prints goes to the window
+                if self.path:
+                    os.chdir(os.path.dirname(self.path))  # file names are relative to the program
+                self.session.repl_execute(code)
+            except KeyboardInterrupt:
+                buffer.write('Interrupted.\n')
+            finally:
+                sys.stdout, sys.stderr = saved
+                os.chdir(here)
+                SCREEN.fg, SCREEN.bg, SCREEN.field_fg, SCREEN.field_bg = colours   # a COLOR in the line
+                SCREEN.gets = []                                                 # a GET in the line
+            # Screen statements in the line drew with escape codes; keep only their text
+            text_out = re.sub(r'\x1b\[[0-9;?<]*[A-Za-z]', '', buffer.getvalue()).replace('\r', '')
+            out = [l.expandtabs(8) for l in text_out.rstrip('\n').split('\n')] if text_out.strip() else []
+            # An error: just its message (its position in a one-line program means nothing here)
+            for n, l in enumerate(out):
+                if l.startswith('REPL Error: '):
+                    message = re.sub(r' at line \d+, col \d+\.?$', '', l[len('REPL Error: '):])
+                    out = out[:n] + ['Error: ' + message]
+                    break
+        self.imm_lines.extend(['> ' + line] + out)
+        del self.imm_lines[:-1000]
+        if not self.imm_history or self.imm_history[-1] != line:
+            self.imm_history.append(line)
+        self.imm_recall, self.imm_scroll = None, 0
+        return out
+
+    def immediate_key(self, key):
+        """A key typed in the Immediate window."""
+        text, pos = self.imm_text, self.imm_pos
+        if key == ENTER:
+            self.execute_immediate(text)
+            self.imm_text, self.imm_pos = '', 0
+            self.repaint()                                # in case the line drew on the screen
+            return
+        if key in (ESC, 'F6'):
+            self.focus = 'editor'
+        elif key == BACKSPACE and pos > 0:
+            self.imm_text, self.imm_pos = text[:pos - 1] + text[pos:], pos - 1
+        elif key == 'DEL':
+            self.imm_text = text[:pos] + text[pos + 1:]
+        elif key == 'LEFT':
+            self.imm_pos = max(0, pos - 1)
+        elif key == 'RIGHT':
+            self.imm_pos = min(len(text), pos + 1)
+        elif key == 'HOME':
+            self.imm_pos = 0
+        elif key == 'END':
+            self.imm_pos = len(text)
+        elif key in ('UP', 'DOWN') and self.imm_history:
+            n = len(self.imm_history)
+            i = self.imm_recall if self.imm_recall is not None else n
+            i = max(0, i - 1) if key == 'UP' else i + 1
+            if i >= n:
+                self.imm_recall, self.imm_text = None, ''
+            else:
+                self.imm_recall, self.imm_text = i, self.imm_history[i]
+            self.imm_pos = len(self.imm_text)
+        elif key in ('PGUP', 'PGDN', 'WHEELUP', 'WHEELDOWN'):
+            step = self.IMMEDIATE_HEIGHT - 1 if key in ('PGUP', 'PGDN') else 3
+            back = key in ('PGUP', 'WHEELUP')
+            most = max(0, len(self.imm_lines) - (self.IMMEDIATE_HEIGHT - 1))
+            self.imm_scroll = max(0, min(most, self.imm_scroll + (step if back else -step)))
+        elif len(key) == 1 and key.isprintable():
+            self.imm_text, self.imm_pos = text[:pos] + key + text[pos:], pos + 1
+        else:
+            bell()
+
     # --- drawing ---------------------------------------------------------------------
     def area(self):
         rows, cols = SCREEN.size()
-        return 3, rows - 2, cols - 2          # first and last text row, text width
+        last = rows - 2 - (self.IMMEDIATE_HEIGHT + 1 if self.show_immediate else 0)
+        return 3, last, cols - 2              # first and last text row, text width
+
+    def draw_immediate(self, rows, cols):
+        """The Immediate window: a title line, the newest lines, and the line being typed."""
+        s = self.scheme
+        first, last, width = self.area()
+        title = ' Immediate ' if self.focus != 'immediate' else ' Immediate  (F6 or Esc: back to the editor) '
+        bar = '─' * (cols - 2)
+        start = max(0, (cols - 2 - len(title)) // 2)
+        bar = bar[:start] + title + bar[start + len(title):]
+        out = [SCREEN._put(last + 1, 1, '├' + bar[:cols - 2] + '┤', s['frame'], s['bg'])]
+        shown = self.IMMEDIATE_HEIGHT - 1
+        end = len(self.imm_lines) - self.imm_scroll
+        lines = self.imm_lines[max(0, end - shown):end]
+        lines = [''] * (shown - len(lines)) + lines
+        for n, text in enumerate(lines):
+            row = last + 2 + n
+            colour = s['keyword'] if text.startswith('> ') else s['text']
+            out.append(SCREEN._put(row, 1, '│', s['frame'], s['bg']))
+            out.append(SCREEN._put(row, 2, text[:width].ljust(width), colour, s['bg']))
+            out.append(SCREEN._put(row, cols, '│', s['frame'], s['bg']))
+        row = last + 2 + shown
+        typed = '> ' + self.imm_text
+        offset = max(0, len(typed) - width + 1) if self.imm_pos + 2 >= width else 0
+        out.append(SCREEN._put(row, 1, '│', s['frame'], s['bg']))
+        out.append(SCREEN._put(row, 2, typed[offset:offset + width].ljust(width), s['keyword'], s['bg']))
+        out.append(SCREEN._put(row, cols, '│', s['frame'], s['bg']))
+        return ''.join(out), row, 2 + 2 + self.imm_pos - offset
 
     def scroll_to_cursor(self):
         first, last, width = self.area()
@@ -593,13 +731,22 @@ class Editor:
             out.append(SCREEN._put(screen_row, 1, '│', s['frame'], s['bg']))
             out.append(self.draw_line(screen_row, self.top + n, width))
             out.append(SCREEN._put(screen_row, cols, '│', s['frame'], s['bg']))
-        out.append(SCREEN._put(rows - 1, 1, '└' + '─' * (cols - 2) + '┘', s['frame'], s['bg']))
-        position = f'Ln {self.row + 1}  Col {self.col + 1}  {"Ins" if self.insert else "Ovr"} '
-        left = ' ' + (self.message or 'F1=Help  F5=Run  F10=Menu  Ctrl-S=Save  Alt-X=Exit')
-        status = left[:cols - len(position) - 1].ljust(cols - len(position) - 1) + position
-        out.append(SCREEN._put(rows, 1, status[:cols - 1], s['bar_fg'], s['bar_bg']))
         cursor_row = first + self.row - self.top
         cursor_col = 2 + self.col - self.left
+        if self.show_immediate:
+            pane, input_row, input_col = self.draw_immediate(rows, cols)
+            out.append(pane)
+            if self.focus == 'immediate':
+                cursor_row, cursor_col = input_row, input_col
+        out.append(SCREEN._put(rows - 1, 1, '└' + '─' * (cols - 2) + '┘', s['frame'], s['bg']))
+        position = f'Ln {self.row + 1}  Col {self.col + 1}  {"Ins" if self.insert else "Ovr"} '
+        if self.focus == 'immediate':
+            hint = 'Enter runs the line  ? x prints x  Up=recall  F6=editor'
+        else:
+            hint = 'F1=Help  F5=Run  F6=Immediate  F10=Menu  Ctrl-S=Save  Alt-X=Exit'
+        left = ' ' + (self.message or hint)
+        status = left[:cols - len(position) - 1].ljust(cols - len(position) - 1) + position
+        out.append(SCREEN._put(rows, 1, status[:cols - 1], s['bar_fg'], s['bar_bg']))
         SCREEN._w(''.join(out) + SCREEN._normal() + f'\x1b[{cursor_row};{cursor_col}H\x1b[?25h')
 
     def set_scheme(self, name):
@@ -621,7 +768,7 @@ class Editor:
         ('Edit', ['Undo           Ctrl-Z', '-', 'Delete line    Ctrl-Y', 'Duplicate line Ctrl-D', '-',
                   'Find...        Ctrl-F', 'Find next      F3', 'Go to line...  Ctrl-G']),
         ('Run', ['Start          F5']),
-        ('Options', ['Blue screen', 'Black screen', '-', 'Mouse on', 'Mouse off']),
+        ('Options', ['Blue screen', 'Black screen', '-', 'Mouse on', 'Mouse off', '-', 'Immediate window   F6']),
         ('Help', ['Help on word   F1', 'Topics...      Shift-F1', 'Keys', '-', 'About']),
     ]
 
@@ -664,11 +811,20 @@ class Editor:
             self.set_scheme('blue')
         elif name == 'Options.Black screen':
             self.set_scheme('black')
+        elif name == 'Options.Immediate window F6' or name == 'Options.Immediate window':
+            if self.new_session is None:
+                bell()
+            elif self.show_immediate and self.focus == 'editor':
+                self.show_immediate = False       # hide it, giving the editor the room
+            else:
+                self.show_immediate, self.focus = True, 'immediate'
+            self.repaint()
         elif name in ('Options.Mouse on', 'Options.Mouse off'):
             SCREEN.keys.set_mouse(name.endswith('on'))
             self.message = 'The mouse is ' + ('on' if name.endswith('on') else 'off')
         elif name == 'Help.Help on word':
-            topic = self.help_topic_at_cursor()
+            topic = self.help_topic_at_cursor(self.imm_text, self.imm_pos) if self.focus == 'immediate' \
+                else self.help_topic_at_cursor()
             if topic:
                 self.show_help(topic)
             else:
@@ -715,11 +871,37 @@ class Editor:
                     continue
             if key == 'SHIFT-F1':
                 name = 'Help.Topics...'
+            if key == 'F6' and self.new_session is not None:
+                if self.focus == 'editor':
+                    self.show_immediate, self.focus = True, 'immediate'
+                    self.repaint()
+                else:
+                    self.focus = 'editor'
+                continue
+            if self.focus == 'immediate' and name in ('Edit.Undo', 'Edit.Delete line', 'Edit.Duplicate line',
+                                                     'Edit.Go to line...'):
+                name = None                   # editor commands: not while typing in the Immediate window
+                bell()
+                continue
             if name:
                 if not self.command(name):
                     return
                 continue
             first, last, width = self.area()
+            if key in ('CLICK', 'WHEELUP', 'WHEELDOWN') and self.show_immediate:
+                r = SCREEN.keys.mouse_row
+                in_pane = last + 1 < r < SCREEN.size()[0] - 1
+                if key == 'CLICK' and in_pane:
+                    self.focus = 'immediate'
+                    continue
+                if key == 'CLICK' and first <= r <= last:
+                    self.focus = 'editor'
+                if key != 'CLICK' and in_pane:
+                    self.immediate_key(key)
+                    continue
+            if self.focus == 'immediate' and key != 'CLICK':
+                self.immediate_key(key)
+                continue
             height = last - first + 1
             line = self.lines[self.row]
             if key in ('UP', 'DOWN', 'PGUP', 'PGDN', 'LEFT', 'RIGHT', 'HOME', 'END', 'CTRL-HOME',
@@ -795,12 +977,13 @@ class Editor:
             self.col = min(self.col, len(self.lines[self.row]))
 
 
-def run_ide(path, runner, help_topics, get_help):
-    """Opens the IDE on path (or a new program) and returns when the user leaves it."""
+def run_ide(path, runner, help_topics, get_help, new_session=None):
+    """Opens the IDE on path (or a new program) and returns when the user leaves it.
+    new_session() makes the interpreter of the Immediate window."""
     if not sys.stdin.isatty() or not sys.stdout.isatty():
         print("The IDE needs an interactive terminal.", file=sys.stderr)
         return 1
-    editor = Editor(path, runner, help_topics, get_help)
+    editor = Editor(path, runner, help_topics, get_help, new_session)
     mouse_before = SCREEN.keys.mouse_wanted
     SCREEN.keys.set_mouse(True)              # off by default on Windows; the IDE wants clicks
     try:
@@ -808,6 +991,11 @@ def run_ide(path, runner, help_topics, get_help):
     finally:
         SCREEN.keys.set_mouse(mouse_before)
         SCREEN.keys.block_suspend = False
+        if editor.session is not None:
+            try:
+                editor.session.close()
+            except Exception:
+                pass
         SCREEN.restore()
         sys.stdout.write('\x1b[0m\x1b[2J\x1b[H')
         sys.stdout.flush()

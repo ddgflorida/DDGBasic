@@ -41,7 +41,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `invoice_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
 
 * ### A QBasic-style IDE
-    * `dbbasic --ide program.bas` opens a full-screen editor with syntax colouring and a menu bar. F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor.
+    * `dbbasic --ide program.bas` opens a full-screen editor with syntax colouring and a menu bar. F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor, and the Immediate window (F6) runs a line at a time: `? x`, a quick `SELECT`.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
