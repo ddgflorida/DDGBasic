@@ -22,7 +22,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
 * ### Powerful Data Ingestion & Transformation
     * **`LOAD` Command:** Ingest data from `.csv`, fixed-width, `.json`, `.jsonl`, `.xml`, `.parquet`, `.html`, and `.xls`/`.xlsx` (**Excel**) files into database tables or for file-to-file conversion.
     * **First-class TRANSFORM and VALIDATE clauses:** Apply user-defined functions (UDFs) or built-ins per cell or per row during loading: `LOAD CSV "raw.csv" CREATE TABLE clean TRANSFORM phone WITH normalize_phone$ VALIDATE email WITH is_valid_email TRANSFORM ROW WITH derive_full_name`.
-    * **OPTIONS string:** Headers, delimiters, encoding, and the legacy transform/validate rules (upper, lower, trim, REQUIRED, MINLENGTH, REGEX).
+    * **OPTIONS string:** Headers, delimiters, encoding, and simple built-in transform/validate rules (upper, lower, trim, REQUIRED, MINLENGTH, REGEX).
     * **Field manipulation:** Select, rename (`fields=[Name] as N`), and exclude (`fields=*,-[Name]`) columns on the fly during data loading.
 
 * ### User-Defined Functions

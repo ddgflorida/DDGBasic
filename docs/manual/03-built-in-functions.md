@@ -30,7 +30,7 @@ Related chapters:
 - [3.13 FORMAT$ mask syntax](#313-format-mask-syntax)
 - [3.14 FORMATDATE$ mask tokens](#314-formatdate-mask-tokens)
 - [3.15 Functions available inside SQL](#functions-available-inside-sql-sqlite)
-- [3.16 Implementation notes and discrepancies](#316-implementation-notes-and-discrepancies)
+- [3.16 Notes](#316-notes)
 
 ---
 
@@ -50,11 +50,11 @@ Related chapters:
 
 **Boolean results.** Predicate functions return **-1 for true and 0 for false**, following BASIC convention. When a test such as `IF CONTAINS(a$, "x") THEN` is evaluated, any non-zero value counts as true.
 
-**Numbers are floating point.** Every numeric result is a Python `float`. `PRINT` shows whole-number floats without the decimal part, but some functions convert numbers to text with Python's `str()` and so show the `.0`. These are `LEN`, `ARRAY_JOIN`, string-criteria `FILTER`, and any string function that is given a number. For example, `LEN(10)` is `4` because the text is `"10.0"`. If you need integer text, convert first with `STR$` and `TRIM$`, or with `FORMAT$`.
+**Numbers are floating point.** Every numeric result is a Python `float`. `PRINT` shows whole-number floats without the decimal part, and `LEN`, `ARRAY_JOIN` and string-criteria `FILTER` use the same text form (`LEN(10)` is 2). Other string functions that are given a number convert it with Python's `str()` and so show the `.0`: `UCASE$(10)` returns `"10.0"`. If you need integer text, convert first with `STR$` and `TRIM$`, or with `FORMAT$`.
 
 **Indexing.** String positions are **1-based**. This applies to `MID$`, `INSTR`, `INSTRREV` and `EXTRACT$`. Array indexes are **0-based**. This applies to `a(0)`, `FIND` and `UBOUND`.
 
-**Argument checking.** Many functions check how many arguments they receive and stop with a clear message, for example `REPEAT$ requires 2 arguments.` Some of the simplest ones (`LEFT$`, `RIGHT$`, `MID$`, `UCASE$`, `LCASE$`, `HEX$`, `OCT$`, `SPACE$`, `STR$`, `VAL`, `INT`, `FIX`, the trigonometric functions, `EXP`, `LOG`, `SGN`, `SQR` and the date-part functions) do not check. If you leave out an argument, those functions fail with a raw Python error such as `list index out of range`. The math functions do not convert strings to numbers, so pass strings through `VAL` first. Math domain errors, such as `SQR(-1)` or `LOG(0)`, stop the program with `Runtime Error: math domain error`.
+**Argument checking.** Many functions check how many arguments they receive and stop with a clear message, for example `REPEAT$ requires 2 arguments.` Some of the simplest ones (`LEFT$`, `RIGHT$`, `MID$`, `UCASE$`, `LCASE$`, `HEX$`, `OCT$`, `SPACE$`, `STR$`, `VAL`, `INT`, `FIX`, the trigonometric functions, `EXP`, `LOG`, `SGN`, `SQR` and the date-part functions) do not check. If you leave out an argument or pass the wrong type, those functions stop with a message that includes the underlying Python error, such as `Invalid arguments for LEFT$(): list index out of range`, with the line and column. The math functions do not convert strings to numbers, so pass strings through `VAL` first. Math domain errors, such as `SQR(-1)` or `LOG(0)`, stop the program with `Runtime Error: math domain error`.
 
 **Function references.** `FILTER`, `MAP`, `REDUCE` and `SORT ... WITH` accept a bare function name (no parentheses) as an argument. The name can be a user-defined function or any built-in listed in this chapter. See [3.7](#37-higher-order-functions-filter-map-reduce).
 
@@ -577,12 +577,12 @@ PRINT ASC("ABC")
 <a id="fn-hex-str"></a>
 ### HEX$
 
-`HEX$(n)` returns a **String**: `INT(n)` written in lower-case hexadecimal, without a prefix. **Edge case:** negative numbers come out wrong. `HEX$(-255)` returns `"xff"` because Python's `-0xff` is cut after two characters.
+`HEX$(n)` returns a **String**: `INT(n)` written in lower-case hexadecimal, without a prefix. Negative numbers get a leading `-`: `HEX$(-255)` returns `"-ff"`.
 
 <a id="fn-oct-str"></a>
 ### OCT$
 
-`OCT$(n)` returns a **String**: `n` written in octal, without a prefix. It has the same problem with negative numbers as `HEX$`.
+`OCT$(n)` returns a **String**: `n` written in octal, without a prefix. Negative numbers get a leading `-`, as with `HEX$`.
 
 ```basic
 PRINT "[" + HEX$(255) + "]"
@@ -698,7 +698,7 @@ PRINT ISNUMERIC("nan"); ISNUMERIC("1,000")
 
 ## 3.4 Numeric and math functions
 
-All of these return a **Number** (a float). Arguments must already be numbers. A string argument causes a Python type error, so use `VAL` to convert first.
+All of these return a **Number** (a float). Arguments must already be numbers. A string argument stops the program with an error such as `Invalid arguments for SIN(): must be real number, not str`, so use `VAL` to convert first.
 
 <a id="fn-abs"></a>
 ### ABS
@@ -924,16 +924,7 @@ PRINT VAL("1e3")
 
 ## 3.5 Date and time functions
 
-DbBasic stores dates as **strings**. Different functions accept different input formats:
-
-| Accepted input | Functions |
-|---|---|
-| `YYYY-MM-DD` or `YYYYMMDD` **only** (strict) | `DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY` |
-| `YYYY-MM-DD`, `MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY/MM/DD`, `YYYYMMDD` | `ISDATE` |
-| The `ISDATE` formats plus `YYYY-MM-DD HH:MM:SS` (auto-detected), or any format given by an input mask | `FORMATDATE$` |
-| `HH:MM:SS` text split on `:` | `HOUR`, `MINUTE`, `SECOND` |
-
-The date functions (`DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`, `ISDATE`, `FORMATDATE$`) all accept the same input formats: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY/MM/DD`, `YYYYMMDD` and a `YYYY-MM-DD HH:MM:SS` datetime. Any other text stops the program with `Invalid date: '...'`, with the line and column.
+DbBasic stores dates as **strings**. The date functions (`DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`, `ISDATE`, `FORMATDATE$`) all accept the same input formats: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY/MM/DD`, `YYYYMMDD` and a `YYYY-MM-DD HH:MM:SS` datetime. `FORMATDATE$` also accepts any format described by an input mask. `ISDATE` returns 0 for any other text; the other functions stop the program with an error, with the line and column (`Invalid date: '...'`). `HOUR`, `MINUTE` and `SECOND` take a time (`HH:MM:SS`) or a datetime.
 
 Functions that return a date always return `YYYY-MM-DD`.
 
@@ -1338,7 +1329,7 @@ names = ARRAY("apple", "banana", "cherry")
 `FILTER(arr, criteria [, include])` returns an **Array**.
 
 - If `criteria` is a **function reference**, the function is called with each element. An element is kept when the result is truthy, which means non-zero or a non-empty string.
-- Otherwise `criteria` is converted to a string, and an element is kept when that string is a **case-sensitive substring** of `str(element)`. Numbers are compared in their `"2.0"` form, so `FILTER(nums, "2")` also matches `12`.
+- Otherwise `criteria` is converted to a string, and an element is kept when that string is a **case-sensitive substring** of the element's text. Numbers are compared in the form `PRINT` shows them without the leading space (`2`, `12`, `2.5`), so `FILTER(nums, "2")` also matches `12`.
 - If `include` is 0, the test is inverted and the elements that do **not** match are returned. The default is to keep matches.
 
 ```basic
@@ -1952,45 +1943,11 @@ SQLite's own built-in functions (`UPPER`, `LOWER`, `SUBSTR`, `LENGTH`, `REPLACE`
 
 ---
 
-## 3.16 Implementation notes and discrepancies
+## 3.16 Notes
 
-This section lists the places where `README.md` (function table) or `docs/DbBasicFunctionReference.md` differ from what `src/dbbasic.py` actually does, along with implementation quirks worth knowing.
+This section collects details of how the built-in functions behave that are easy to miss.
 
-### Documented but not implemented
-
-1. **`CARDINAL$`** and **`ORDINAL$`** (fixed): listed in the README table but missing from the interpreter. Both are now implemented (see [CARDINAL$](#fn-cardinal-str)).
-
-### Documented with the wrong signature or behaviour
-
-2. **`EXTRACT$`** (README fixed): the README gave `EXTRACT$(string$, before$, after$)` ("substring between before$ and after$"). The implementation is `EXTRACT$(s$, position [, delimiter$])` and returns the Nth delimited field.
-3. **`DAYSINMONTH`** (fixed): the README gives `(year, month)` but the code took `(month, year)`. Both orders now work.
-4. **`INSTRREV`** (README fixed): the README gave `INSTRREV([start_pos,] haystack$, needle$)`. The actual signature is `INSTRREV(haystack$, needle$ [, start])`, where `start` limits the end of the search.
-5. **`TYPENAME$`** (README fixed): the README said it returned `"NUMBER"`. It actually returns `"FLOAT"` for all numbers, and `"UNKNOWN"` for other types.
-6. **`WEEKDAYNAME$`** (fixed): it mapped 1 to Monday, not Sunday, so it did not match `WEEKDAY`. It now uses 1 = Sunday ... 7 = Saturday.
-7. **`FORMAT$`** (fixed): it had no percent support and dropped any text after the field. A numeric field followed by `%` now scales by 100, and trailing literal text is kept (3.13).
-8. **`HOUR`, `MINUTE`, `SECOND`** (fixed): `HOUR` returned 0 for a `YYYY-MM-DD HH:MM:SS` datetime. All three now use the time part of a datetime.
-9. **`HASH_DELETE` and `HASH_RENAME`**: `DbBasicFunctionReference.md` showed them as statements (`HASH_DELETE(h, "city")`). That form is a syntax error; you must use the result, for example `r = HASH_DELETE(h, "city")`. `HASH_DELETE` now returns -1 if the key was deleted and 0 if it was not present (it used to always return 0).
-10. **`NVL(value, default)`** (README fixed): the README described it as "non-null/non-empty". It actually takes any number of arguments (at least two) and also treats `0` as empty.
-11. **`ARRAY_JOIN`** (fixed): its default delimiter `","` could never be used, because two arguments were required. The delimiter is now optional.
-12. **`STR$`** (README fixed): the documentation said "converts a number to its string representation". It also adds a leading space for zero and positive numbers, as `PRINT` does.
-
-### Missing from `docs/DbBasicFunctionReference.md`
-
-13. The older reference does not mention 33 implemented functions: `CENTER$`, `DATESERIAL`, `DAYSINMONTH`, `DAYSINYEAR`, `EXTRACT$`, `FILTER`, `FORMAT$`, `HOUR`, `HTMLDECODE$`, `HTMLENCODE$`, `INSTRREV`, `ISALNUM`, `ISALPHA`, `ISDATE`, `ISDIGIT`, `ISLEAP`, `ISNUMERIC`, `MAP`, `MINUTE`, `MONTHCAL$`, `MONTHNAME$`, `NOW`, `NVL`, `PARSEJSON`, `REDUCE`, `SECOND`, `SOUNDEX$`, `STRIPHTML$`, `TYPENAME$`, `URLDECODE$`, `URLENCODE$`, `WEEKDAYNAME$` and `YEARCAL$`. Every function in the README table except `CARDINAL$` and `ORDINAL$` is implemented. Neither document describes the SQLite-side functions in [3.15](#functions-available-inside-sql-sqlite).
-
-### Implementation quirks (not documented elsewhere)
-
-14. **`RIGHT$(s$, 0)`** (fixed): it returned the whole string; it now returns `""`, like the SQL `RIGHT$`.
-15. **`HEX$` and `OCT$` with negative numbers** (fixed): `HEX$(-255)` returned `"xff"`; it now returns `"-ff"`.
-16. **Date input formats** (fixed). `DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY` and `WEEKDAY` accepted only `YYYY-MM-DD` and `YYYYMMDD`, and stopped with a plain Python error otherwise. They now accept the same formats as `ISDATE` and `FORMATDATE$`, and a bad date is a normal error with line and column.
-17. **`FORMATDATE$` masks** (fixed): the whole mask was upper-cased, which changed literal text and broke lower-case `strftime` directives. Tokens are now matched in any case and everything else is kept as written.
-18. **Numbers converted to text** (fixed): `LEN`, `ARRAY_JOIN` and `FILTER` substring matching used Python `str()`, so `LEN(10)` was 4 and joined numbers showed `.0`. They now use the same text form as `PRINT`.
-19. **`VAL`** (fixed): it did not read a leading number (`VAL("12abc")` was 0) and accepted `"nan"` and `"inf"`. It now reads the leading number like classic BASIC. `ISNUMERIC` no longer treats `"nan"`/`"inf"` as numbers.
-20. **`SOUNDEX$` and SQL `SOUNDEX`** (fixed): vowels did not separate repeated codes (`Tymczak` gave `T520`). They now follow standard Soundex (`T522`).
-21. **`STRIPHTML$` needs the `lxml` package** as well as BeautifulSoup. If it is missing, the function fails at run time.
-22. **`INSTR` argument order differs** between DbBasic (`INSTR(start, s$, sub$)`) and SQL (`INSTR(s, sub, start)`).
-23. **SQL helper functions on DuckDB** (fixed). They were registered only for SQLite. They are now available on DuckDB too (3.15).
-24. **`FORMAT$` treats the literal characters `0`, `9`, `$`, `*`, `!` and `&` in the mask as field markers.** Negative exponents in `^^^^` output are now zero-padded (`E-04`; this used to be `E-4`).
-25. **Bad arguments to built-in functions** (fixed): functions that don't check their arguments (`LEFT$`, `MID$`, `INT`, `SIN` and others) failed with bare Python errors. These are now reported as `Invalid arguments for LEFT$(): ...` with the line and column.
-26. **`HASH_JOIN`** (fixed): an unreachable duplicate block after its `return` has been removed.
-27. **Function names usable as references** for `FILTER`, `MAP`, `REDUCE` and `SORT WITH` are found by scanning the source code of `_execute_function` at run time (`_get_builtin_fn_names`). A compiled (Nuitka) build cannot read its source, so it uses the static list `Interpreter.BUILTIN_FN_NAMES`, which contains all 133 built-ins. The build scripts (`compilenuitka.sh` and `compilenuitka.bat`) check that list against the source with `tools/check_builtin_names.py` before building and stop if they differ, so add new functions to it.
+1. **Functions are not statements.** Every built-in returns a value, and a line that consists only of a function call is a syntax error. Functions such as `HASH_DELETE` and `HASH_RENAME` must be used in an expression, for example `r = HASH_DELETE(h, "city")`.
+2. **`INSTR` and `INSTRREV` put `start` in different places.** `INSTR(start, s$, sub$)` takes it first, as in classic BASIC; `INSTRREV(s$, sub$, start)` and the SQL `INSTR(s, sub, start)` take it last.
+3. **Truthiness.** `NVL`, `FILTER` with a function reference and `IF` treat `0` as false, so `NVL(0, 5)` returns 5. Use an explicit test if `0` is a valid value.
+4. **Function references in compiled builds.** The built-in names that `FILTER`, `MAP`, `REDUCE` and `SORT ... WITH` accept as references are read from the source of `_execute_function` at run time. A compiled (Nuitka) build cannot read its source, so it uses the static list `Interpreter.BUILTIN_FN_NAMES`, which contains all 133 built-ins. The build scripts (`compilenuitka.sh` and `compilenuitka.bat`) check that list against the source with `tools/check_builtin_names.py` and stop if they differ, so a new built-in must be added to the list.

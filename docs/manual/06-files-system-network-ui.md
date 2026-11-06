@@ -23,7 +23,7 @@ Related material in other chapters:
    * [SHELL](#shell) · [BROWSER](#browser) · [BELL](#bell) · [INPUT](#input)
 5. [HTTP: FETCH](#65-http-fetch)
 6. [E-mail: SET EMAIL and EMAIL](#66-e-mail-set-email-and-email)
-7. [Implementation notes / discrepancies](#67-implementation-notes--discrepancies)
+7. [Notes](#67-notes)
 
 ---
 
@@ -116,7 +116,7 @@ WRITE [#n,] expression [, expression ...]
 * A float with no fractional part is written as an integer (`25.0` becomes `25`).
 * Without `#n` the record goes to standard output, and the trailing record terminator is stripped before printing.
 * With `#n`, the record ends with the system line ending (`os.linesep`), the same as `PRINT #n`.
-* If the handle is not open: `File #n not open.`
+* If the handle is not open: `File #n is not open.`
 
 ```basic
 WRITE "Name", "Age", 3.5, 42
@@ -339,7 +339,7 @@ copied:-1
 NAME oldname AS newname
 ```
 
-Renames or moves a file or directory (`os.rename`). `~` is **not** expanded.
+Renames or moves a file or directory (`os.rename`). `~` is expanded in both names.
 
 | Condition | ERR | Effect |
 |---|---|---|
@@ -467,7 +467,7 @@ Extracted 3 files from out.zip
   -> x/z.bas
 ```
 
-Only the `FROM` form is accepted. Older forms such as `ZIP "a.zip", "f1", "f2"` and `ZIP "a.zip" FILES "dir/*"` fail; `tests/zip.bas` has been updated to use `FROM`.
+Only the `FROM` form is accepted. Forms such as `ZIP "a.zip", "f1", "f2"` and `ZIP "a.zip" FILES "dir/*"` are errors.
 
 ### UNZIP
 
@@ -798,35 +798,13 @@ ERR=-1 MSG=[Errno 61] Connection refused
 
 ---
 
-## 6.7 Implementation notes / discrepancies
+## 6.7 Notes
 
-These were found while checking the source against behaviour. Line numbers refer to `src/dbbasic.py` unless stated otherwise.
+This section collects details of how DbBasic behaves that are easy to miss.
 
-1. **`COPY ... AS`** (fixed): the dispatcher looked for an identifier, but the lexer emits a `COPY` token, so the statement never ran.
-2. **`ZIP`** (fixed): the `FROM` check compared the wrong token and could never pass. It also created an empty archive and reset `ERR` to 0 when no files matched.
-3. **`UNZIP`** (fixed). For a missing archive, `ERR` was set to 2 and then overwritten with 1; it now stays 2. The archive name expands `~`. UNZIP errors are still fatal unless `SET SQL_FATAL_ERRORS OFF`, which ties archive handling to a SQL setting.
-4. **`PRINT #n, USING ...`** (fixed). Without a trailing `;` it failed with `cannot access local variable 'parts'`, and with one no line ending was written.
-5. **`OPEN` / `READ FILE` errors** (fixed). The generic error path set `ERRMSG$` to a tuple and left `ERR` at 0, and `OPEN` printed `DEBUG OPEN EXCEPTION`. Both now set `ERR` = 1 and `ERRMSG$` to the message, and expand `~`.
-6. **`WRITE #n` line endings** (fixed). They were `\r\n` on all platforms while `PRINT #n` used `os.linesep`; both now use `os.linesep`. `WITH OPTIONS` values are passed to `csv.writer` as strings, so non-string dialect options (for example `quoting=1`) fail.
-7. **`INPUT`** (fixed). `HELP INPUT` showed a comma after the prompt but only `;` was accepted, and non-numeric input to a numeric variable was a fatal error. Both separators work now, and bad numeric input asks again. Only a literal prompt and a single variable are supported.
-8. **`LINE INPUT #` and `PRINT #` on a closed handle** (fixed). They raised a bare `KeyError` (`Runtime Error: 5`); the error is now `File #5 is not open.`. `LINE INPUT` past EOF still returns `""`; test `EOF(n)` first.
-9. **`~` in file names** (fixed). `NAME`, `OPEN`, `READ FILE` and `UNZIP` now expand `~`, like `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES` and `COPY`.
-10. **`FILES RECURSIVE`** (fixed) listed every directory whatever the pattern, while `FOR ... IN FILES(... RECURSIVE)` filtered directories by it. Both filter by the pattern now. Arrays filled by `FILES ... INTO` start at index 0, like every other array.
-11. **Multi-word keywords inside strings** (fixed). The lexer used to collapse `WITH DETAILS`, `TO FILE`, `READ FILE` and similar pairs even inside string literals, so `PRINT "TO FILE"` printed `TOFILE`. Strings and comments are now left unchanged.
-12. **FETCH.**
-    * `ERR` is the HTTP status on success (200, 201, ...), not 0. This is deliberate: the status is more useful than 0.
-    * (fixed) `TO FILE` reported every HTTP error status as -1; it now reports the status, as `INTO` does, and doesn't save the error page.
-    * (fixed) `ERRMSG$` was never set; it now holds the status and reason, or the error text.
-    * (fixed) Response header keys ignored `SET HASH_KEYS IGNORE_CASE`.
-    * (fixed) Numeric body values were sent as `"42.0"`.
-    * `GET` cannot send a body.
-13. **EMAIL.**
-    * Errors raised during sending (missing attachment, SMTP failures) are caught and turned into `ERR` = -1, but configuration errors are fatal.
-    * `HELP EMAIL` (fixed) listed only TO/SUBJECT/BODY/ATTACH; it now shows CC, BCC and HTMLBODY too.
-    * `SET EMAIL` settings never reset between providers.
-    * For SMTP, a missing `TO` is not checked.
-14. **Forms** (archived). See [Chapter 7](07-text-mode-applications.md#78-replacing-the-old-form-statements).
-15. *(merged into item 14)*
-16. *(merged into item 14)*
-17. **Web runner** (removed). The experimental web runner (`src/dbbasicweb.py`, `.htb` templates, the `REDIRECT` statement, `Interpreter.execute()` and the unused `WebFormRunner` import) has been removed from `main`. Its known problems were the `cgi` dependency (removed in Python 3.13), one interpreter shared by all requests, an unsanitised request path, and no static files. The last working version is kept on the `experiment/web-runner` branch.
-18. **`SHELL` and `SET OUTPUT`** (by design). `SET OUTPUT` redirects query results only (`SELECT`, `EXECUTE`, `DESCRIBE`). `SHELL` without `INTO` writes to the screen, exactly as `PRINT` does. To keep a command's output, use `SHELL "cmd" INTO out$`, then write it to a file with `PRINT #n` if needed.
+1. **`~` in file names.** A leading `~` is expanded to your home directory by `OPEN`, `READ FILE`, `COPY`, `NAME`, `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES`, `FOR ... IN FILES()`, `UNZIP` and `FETCH ... TO FILE`. It is **not** expanded by `ZIP` (archive name or file patterns), by the upload path in `FETCH ... USING FILE`, or by `EMAIL ... ATTACH`.
+2. **Other `OPEN` and `READ FILE` errors.** A missing file sets `ERR` = 2 (see above). Any other failure, such as a permission error or, for `READ FILE`, a file that is not valid UTF-8, sets `ERR` = 1 and `ERRMSG$` to the message, then raises `Error opening file: ...` or `Error reading file: ...`.
+3. **Archive errors follow a SQL setting.** `ZIP` and `UNZIP` failures are runtime errors unless `SET SQL_FATAL_ERRORS OFF` is in effect, so error handling for archives is controlled by a setting named for SQL.
+4. **`FETCH` and `GET`.** A `GET` request cannot send a body. Use `POST`, `PUT`, `PATCH` or `DELETE` to send a hash.
+5. **`EMAIL` configuration errors.** Errors raised while sending set `ERR` = -1, but configuration problems are runtime errors: no `SET EMAIL PROVIDER`, an unsupported provider, or a missing required setting (`APIKEY` and `SENDER` for SendGrid; `APIKEY`, `SENDER` and `DOMAIN` for Mailgun; `HOST`, `PORT`, `USER`, `PASSWORD` and `SENDER` for SMTP).
+6. **SMTP and `TO`.** For SMTP, `EMAIL` does not check that a `TO` address was given.

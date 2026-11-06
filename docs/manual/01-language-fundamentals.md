@@ -42,7 +42,7 @@ Other chapters cover the rest of the language:
 14. [Operators and precedence](#114-operators-and-precedence)
 15. [Expressions and truth values](#115-expressions-and-truth-values)
 16. [Case sensitivity summary](#116-case-sensitivity-summary)
-17. [Implementation notes / discrepancies](#117-implementation-notes--discrepancies)
+17. [Notes](#117-notes)
 
 ---
 
@@ -177,7 +177,7 @@ Notes:
   (which gives `8`).
 - **A single quote (`'`) does not start a comment.** A lone `'` is a lexer error
   (`Unexpected character '''`). A pair of single quotes on a line becomes an
-  unusable token (see [1.17](#117-implementation-notes--discrepancies)).
+  unusable token (see [1.17](#117-notes)).
 
 ## 1.4 Source preprocessing
 
@@ -1383,54 +1383,10 @@ Output:
 **Recommendation:** spell each label the same way every time you use it, since
 labels are case-sensitive.
 
-## 1.17 Implementation notes / discrepancies
+## 1.17 Notes
 
-These were found while checking this chapter against the source and against
-the existing documentation:
+This section collects details of how DbBasic behaves that are easy to miss.
 
-1. **`'` comments are not supported.** The lexer has no apostrophe-comment rule.
-   A lone `'` stops the program with `Unexpected character '''`. Text between
-   two single quotes becomes a `SINGLE_Q_STRING` token, which no statement or
-   expression accepts. The scripts in `tests/` and `examples/` that used
-   `'` comments have been converted to `REM` and `--`.
-   The `SORT` entry in the built-in `HELP` uses `` ` `` as a trailing comment
-   (`` SORT items WITH sort_key$ ASC      ` UDF returns the key ``), but a
-   backtick starts a string, so that example does not work as written.
-2. **INCLUDE** (fixed): the preprocessor's marker lines used to start with
-   `'`, so every successful include failed (see item 1). They now use `REM`.
-   The main program file is also registered, so a circular include can no
-   longer pull it in a second time.
-3. **ECHO word boundary** (fixed). Any line starting with the letters `ECHO`
-   used to be rewritten, so `echo_count = 5` printed `_count = 5`.
-4. **Variable name case** (fixed). Reads ignored case but assignments, `DIM`,
-   `REDIM` and the array statements used the exact spelling, so
-   `count = 1: COUNT = 2` made two variables. Variable names are now
-   case-insensitive everywhere (`VariableTable`).
-5. **Reserved words** (fixed). `user`, `text`, `body`, `host`, `port`,
-   `email`, `subject`, `password` and the other `SET EMAIL`/`EMAIL` words
-   were keyword tokens, so `DIM user AS HASH` failed. They are now
-   recognised only inside those statements and are ordinary names
-   elsewhere. About 30 more (`size`, `type`, `title`, `label`, `message`,
-   `source`, `choice` and others) were reserved by the old FORM statements
-   and were freed when those were archived (see 7.8).
-6. **`SHIFT`/`UNSHIFT`** (changed to 0-based). They used to work on index 1,
-   treating element 0 as reserved, so on arrays from `ARRAY()`, `PUSH` or
-   `SPLIT` they skipped the real first element, and `SHIFT` refused a
-   one-element array. They now work on index 0, as the `HELP` text describes.
-7. **`DIM x AS <type>`** (fixed). Types other than `HASH` and `ARRAY` were accepted but created no variable. `AS STRING` (or `TEXT`) now creates `""`, and `AS INTEGER`, `LONG`, `SINGLE`, `DOUBLE`, `NUMBER`, `FLOAT` or `REAL` create 0. Any other type name is an error.
-8. **`SORT` modifiers** (fixed). `ON`, `ASC` and `DESC` were compared as uppercase text, so `sort a desc` failed or sorted ascending. They are now matched in any case.
-9. **Comparisons in assignments and `PRINT`** (fixed). `x = a > b` and
-   `PRINT 1 <> 2` failed with `Unknown statement: RELOP` unless the comparison
-   was in parentheses.
-10. **Label scanning** (fixed). Every `identifier:` pair used to be registered
-    as a label, which caused false `Duplicate label` errors on multi-statement
-    lines. Only a name at the start of a line is a label now (see
-    [1.2](#12-program-structure-and-source-format)).
-11. **Numeric literals** (fixed). A leading `.` and exponents (`.5`, `1e3`)
-    were not accepted.
-12. **NULL in expressions** (fixed). A SQL NULL used directly in an expression
-    was the Python `None`, so `(SELECT NULL) + 1` gave `"None1"`. It now acts
-    as `""`. Assignment still converts NULL to the variable's default.
-13. **`${...}` ends at the first `}`**, so an interpolated expression cannot
-    contain a `}` character, even inside a string literal.
-14. **Negative array indexes** (fixed). Reading `a(-1)` was an "out of bounds" error, but assigning `a(-1) = v` wrote to the last element. Both are now errors.
+1. **`'` comments are not supported.** Use `REM` or `--`. A lone `'` stops the
+   program with `Unexpected character '''`, and text between two single quotes is
+   not accepted by any statement or expression.

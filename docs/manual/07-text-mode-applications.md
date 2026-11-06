@@ -43,8 +43,7 @@ Related material in other chapters:
    * [EDIT TEXT](#edit-text) · [VIEW](#view)
 7. [The keyboard and mouse](#77-the-keyboard-and-mouse)
    * [INKEY$ and LASTKEY$](#inkey-and-lastkey) · [Hot keys: ON KEY](#hot-keys-on-key) · [The mouse](#the-mouse) · [Keyboard and terminal](#keyboard-and-terminal)
-8. [Replacing the old FORM statements](#78-replacing-the-old-form-statements)
-9. [Implementation notes](#79-implementation-notes)
+8. [Notes](#78-notes)
 
 ---
 
@@ -261,7 +260,7 @@ The test runner plays the whole program with scripted keystrokes (`tests/run_tes
 
 ## 7.2 The screen
 
-The screen is drawn with ANSI escape sequences, so `PRINT` keeps working between screen statements and no extra packages are needed. The code is in `src/dbscreen.py`. It has been tested in macOS terminals; Linux terminals work the same way. Windows 10 and later (Windows Terminal or the console) are supported by the code, but the Windows key handling has not been tested yet.
+The screen is drawn with ANSI escape sequences, so `PRINT` keeps working between screen statements and no extra packages are needed. The code is in `src/dbscreen.py`. It works in macOS and Linux terminals, and on Windows 10 and later in Windows Terminal or the console.
 
 **Coordinates** are `row, col`, counted from 1 at the top left, as with `LOCATE`.
 
@@ -676,7 +675,7 @@ BROWSE (SELECT id, customer, status FROM orders ORDER BY id) INTO o _
 
 The rule lives in the program, next to the screen it governs. A database can enforce the same rule as well (a `CHECK` constraint or, in SQLite, a trigger), as a second line of defence for changes made outside the program; `BROWSE` shows such a refusal as `Not saved: ...`.
 
-**Keys for the program: EXIT ON.** `EXIT ON "PgUp,PgDn,F2"` makes those keys end `BROWSE`, wherever the bar is, and `LASTKEY$` says which one it was (`"PGUP"`, `"PGDN"`, `"F2"`), so the program can act on it and show the grid again. The key names are those of `ON KEY`. A listed key no longer does its own job in the grid: with `EXIT ON "Ins"`, Ins is the program's to handle (to add a row its own way, say), not the grid's.
+**Keys for the program: EXIT ON.** `EXIT ON "PgUp,PgDn,F2"` makes those keys end `BROWSE`, wherever the bar is, and `LASTKEY$` says which one it was (`"PGUP"`, `"PGDN"`, `"F2"`), so the program can act on it and show the grid again. The key names are those of `ON KEY`. A listed key does not do its own job in the grid: with `EXIT ON "Ins"`, Ins is the program's to handle (to add a row its own way, say), not the grid's.
 
 ```basic
 DO
@@ -1004,7 +1003,7 @@ DO
 LOOP UNTIL k$ = CHR$(27)
 ```
 
-`SET MOUSE OFF` turns the mouse off (and `SET MOUSE ON` back on). It is on by default on macOS and Linux. On Windows it is off by default, because the console then has to deliver all keys in its VT input mode: `SET MOUSE ON` switches it on there; this has not been tested on Windows yet. While the mouse is on, a plain drag no longer selects text in the terminal; most terminals select text when you hold Shift (or Option, depending on the terminal) while dragging. The terminal's normal behaviour comes back when the program ends or when `INPUT` reads a line.
+`SET MOUSE OFF` turns the mouse off (and `SET MOUSE ON` back on). It is on by default on macOS and Linux. On Windows it is off by default, because the console then has to deliver all keys in its VT input mode: `SET MOUSE ON` switches it on there; the mouse has been tried less on Windows than on macOS and Linux. While the mouse is on, a plain drag does not select text in the terminal; most terminals select text when you hold Shift (or Option, depending on the terminal) while dragging. The terminal's normal behaviour comes back when the program ends or when `INPUT` reads a line.
 
 ### Keyboard and terminal
 
@@ -1020,28 +1019,10 @@ When standard input is not a terminal, keys are read from it as a stream, with a
 
 ---
 
-## 7.8 Replacing the old FORM statements
+## 7.8 Notes
 
-The declarative forms (`FORM ... ENDFORM`, `OPENFORM`, `GRIDEDIT`), built on the Textual library in `src/tui_runner.py`, have been removed from `main`. The statements in this chapter replace them with less code:
+This section collects details of how the text screen behaves that are easy to miss.
 
-| Old | New |
-|---|---|
-| `GRIDEDIT "orders"` | `BROWSE "orders" EDIT` (Enter edits a cell, Ins adds a row, Del deletes one) |
-| A list `FORM` with `OPENFORM` and `FORM_SELECTED_ID` | `BROWSE (SELECT ...) INTO row` |
-| An entry `FORM`, `FORM_RESULT$`, `FORM_DATA` and an `UPDATE` | `@ ... SAY ... GET`, `READ`, `LASTKEY$` and an `UPDATE` |
-| `BUTTON` actions | `MENU(...)` |
-
-`textual` is no longer a dependency. The last version with forms, including the form examples, is kept on the `archive/forms` branch.
-
----
-
-## 7.9 Implementation notes
-
-1. **Status.** The text-screen statements are new. Known limits:
-    - `SAVESCREEN` and `RESTSCREEN` (added) work from DbBasic's own copy of the screen, which does not include query tables, `SHELL` output or error messages;
-    - (added) `GET` edits hash fields and array elements as well as variables;
-    - a numeric field's `PICTURE` sets only its width;
-    - (changed) `BROWSE` fetches 500 rows at a time instead of the whole result;
-    - the Windows key handling has not been tested;
-    - (fixed) words such as `choice` and `title`, once reserved by the FORM statements, are ordinary variable names again.
-2. **The old forms** (archived). `FORM`, `OPENFORM` and `GRIDEDIT` have been moved to the `archive/forms` branch (see 7.8). Their open issues there were: `PLACEHOLDER` not displayed, debug output on every button press, field `TYPE NUMBER` doing no conversion, `MATCHES` not working with a `CHOICE`, non-numeric primary keys failing in `FORM_SELECTED_ID`, unescaped `WHERE`/`ORDER BY` text and no delete confirmation in `GRIDEDIT`.
+1. **The screen copy.** `SAVESCREEN`, `RESTSCREEN`, menus, `BROWSE` and the redraw after a resize work from DbBasic's own copy of the screen, since a terminal cannot be read back. `PRINT`, `INPUT` and `REPORT` output are kept in that copy; query tables, `SHELL` output and error messages are not.
+2. **Numeric templates.** A numeric field's `PICTURE` is a calculator mask only when it is made of `9`, `#`, `,` and `.` (see [Numeric masks](#--say--get)). Any other template on a numeric field sets only its width.
+3. **Large results.** `BROWSE` fetches 500 rows at a time rather than the whole result (see [BROWSE](#browse)).

@@ -36,7 +36,7 @@ All examples in this chapter were run against `src/dbbasic.py`. The output shown
 - [5.15 FOR ... IN file loops](#515-for--in-file-loops)
 - [5.16 ANALYZE statements](#516-analyze-statements)
 - [5.17 UPGRADE statements](#517-upgrade-statements)
-- [5.18 Implementation notes / discrepancies](#518-implementation-notes--discrepancies)
+- [5.18 Notes](#518-notes)
 
 ---
 
@@ -171,7 +171,7 @@ Runtime Error: An error occurred during the LOAD operation: UNIQUE constraint fa
 Because of this rule:
 
 - A value can contain commas, so `fields=a,b,c` works.
-- A value **must not contain `word=`**, because that would start a new key. For example, a `REGEX(...)` containing `x=` would be split.
+- An unquoted value **must not contain a comma, semicolon or space followed by `word=`**, because that starts a new key. Quote such a value, for example `constraints="[x]:REGEX(a b=c)"`.
 - Only the first `=` after a key matters. Repeating a key makes the later value win.
 - Boolean options accept `true`, `1` or `y` (case-insensitive) as true. Anything else is false.
 
@@ -653,13 +653,13 @@ SELECT * FROM emp;
 (4 rows returned)
 ```
 
-The older `fields=[id] as emp_id` syntax, used in `examples/loadinto.bas` and `examples/loadexcelex.bas`, is **not** supported and fails with `Field '[id] as emp_id' not found in source headers.`
+A `fields=[id] as emp_id` form is **not** supported and fails with `Field '[id] as emp_id' not found in source headers.`
 
 ---
 
 ## 5.7 Option-string transform and validate rules
 
-These rules are written inside `OPTIONS`. They are the original, declarative way to clean data. They run before `process_by` and before the `WITH fn` clauses ([5.10](#510-the-load-pipeline-and-rejected-rows)).
+These rules are written inside `OPTIONS`. They are the declarative way to clean data. They run before `process_by` and before the `WITH fn` clauses ([5.10](#510-the-load-pipeline-and-rejected-rows)).
 
 ### transform=
 
@@ -968,13 +968,13 @@ SHOW CREATE TABLE orders_items
 ```
 
 ```
-Normalizing JSON with Legacy Engine...
-Running Legacy Normalizer Engine...
+Normalizing JSON...
+Running the JSON normalizer...
   - Step 1: Flattening data structure...
   - Step 2: Analyzing structure and discovering schema...
   - Step 3: Creating database tables...
   - Step 4: Populating tables with data...
-Legacy Normalizer Engine finished.
+JSON normalizer finished.
   - Created 2 tables:
     * orders: 2 records
     * orders_items: 3 records
@@ -1110,14 +1110,14 @@ John
  2
 ```
 
-`PARSEJSON` is a function, not a statement: write `d = PARSEJSON(j$)`. (An older `PARSE JSON j$ INTO d` statement form appeared in some documents but was never implemented, and has been removed.)
+`PARSEJSON` is a function, not a statement: write `d = PARSEJSON(j$)`. There is no `PARSE JSON ... INTO` statement.
 
 ---
 
 ## 5.15 FOR ... IN file loops
 
 ```
-FOR rec   IN CSV filename_expr [OPTIONS "header=true"]  ... NEXT [rec]
+FOR rec   IN CSV filename_expr [OPTIONS "..."]          ... NEXT [rec]
 FOR rec   IN JSON(filename_expr)                        ... NEXT [rec]
 FOR rec   IN JSONL(filename_expr)                       ... NEXT [rec]
 FOR line$ IN TEXT(filename_expr)                        ... NEXT [line$]
@@ -1128,19 +1128,19 @@ These loops bind each record of a file to the loop variable and run the body onc
 Behaviour common to all four loops:
 
 - The filename must be a string, or the loop fails with `FOR...IN X requires a string filename.`
-- Files are opened as UTF-8. There is no `encoding` option.
+- Files are opened as UTF-8. Only the CSV loop takes an `encoding` option.
 - The system variable `RECNO` holds the record number inside the loop, counting from 1.
 - `EXIT FOR` leaves the loop (Chapter 2).
 - When the loop ends, the loop variable is restored to its earlier value, or deleted if it did not exist before, and `RECNO` is restored to the value it had before the loop (so an outer loop's `RECNO` comes back), or deleted.
 
 | Loop | Record value | Reading | `RECNO` |
 |---|---|---|---|
-| `CSV` | A hash. Keys `"1"`, `"2"`, ... hold the field by position. With `header=true`, header-name keys are added too. | The **entire file is read into memory** before the first iteration. Comma delimiter only. | 1, 2, ... (data rows; a header row is not counted) |
+| `CSV` | A hash. Keys `"1"`, `"2"`, ... hold the field by position. With `header=true`, header-name keys are added too. | Streams one row at a time. Blank lines are skipped. | 1, 2, ... (data rows; a header row is not counted) |
 | `JSON` | A hash, converted as for `PARSEJSON`, with nested hashes and arrays. | The whole file is parsed. It must be an array of objects or a single object. An empty array skips the body. | 1, 2, ... |
 | `JSONL` | Each line parsed, converted as for `PARSEJSON`. | Streams one line at a time. Blank lines are skipped. An invalid line is skipped with a warning. | the line number in the file (blank and skipped lines leave gaps) |
 | `TEXT` | A string, the line without its `CR`/`LF`. | Streams. Invalid bytes are replaced. Blank lines are included. | 1, 2, ... |
 
-**CSV loop details.** The `OPTIONS` text is only searched for the substring `header=true`, case-insensitively. Other keys are ignored, and the default is no header. Header names have every character other than `A-Z a-z 0-9 _` removed: `Product ID` becomes the key `ProductID`. Under `SET HASH_KEYS IGNORE_CASE`, they are also uppercased. Parentheses around the filename are optional, because they are simply a parenthesised expression.
+**CSV loop details.** `OPTIONS` is parsed as for `LOAD` ([5.4.1](#541-how-the-string-is-parsed)) and takes `header=`, `delimiter=` (including `tab` and `auto`), `skip=` and `encoding=`, with the same meanings as for `LOAD CSV`. Other keys are ignored. The default is no header, and `header=auto` is not supported. Header names have every character other than `A-Z a-z 0-9 _` removed: `Product ID` becomes the key `ProductID`. Under `SET HASH_KEYS IGNORE_CASE`, they are also uppercased. The exact header text is a key too, so `rec("Product ID")` also works. Parentheses around the filename are optional, because they are simply a parenthesised expression.
 
 ```basic
 FOR rec IN CSV "prices.csv" OPTIONS "header=true"
@@ -1183,13 +1183,13 @@ B7,"1,250.00",1
  1acme items= 2 city=Boston
  2globex items= 1 city=Austin
  1 login
- 2 view
+ 3 view
 ```
 
-Line 2 of `events.jsonl` is blank, so it is skipped and not counted: the second record has `RECNO` 2. Without the `EXIT FOR`, the same loop stops at line 4 with:
+Line 2 of `events.jsonl` is blank, so it is skipped. `RECNO` is the line number in the file, so the second record has `RECNO` 3. Without the `EXIT FOR`, the loop goes on to line 4, which is not valid JSON, skips it, and prints:
 
 ```
-Runtime Error: Invalid JSON in line of file 'events.jsonl': Expecting value: line 1 column 1 (char 0)
+Warning: Skipping invalid JSON on line 4 of 'events.jsonl'
 ```
 
 ---
@@ -1227,7 +1227,7 @@ For each column, a value is classified in this order:
 5. **date**: one of the formats `%Y-%m-%d`, `%m/%d/%Y`, `%m-%d-%Y`, `%Y%m%d`, `%Y-%m-%dT%H:%M:%S`;
 6. string.
 
-The `SUGGESTED_DATA_TYPE` is `TEXT` if any string was seen, otherwise `REAL` if any float, otherwise `INTEGER` if any integer or logical, otherwise `TEXT`. Dates do not produce a date type. A date column becomes `INTEGER` if one of its values looks like `20230101`, otherwise `TEXT`.
+The `SUGGESTED_DATA_TYPE` is `TEXT` if any string was seen. Otherwise, a column of dates (and empty fields) gives `DATE`, and dates mixed with numbers give `TEXT`. Otherwise it is `REAL` if any float, `INTEGER` if any integer or logical, and `TEXT` if the column is empty. Because integers are tested before dates, a value like `20230101` counts as an integer.
 
 ```basic
 ANALYZE CSV "sales.csv"
@@ -1288,7 +1288,7 @@ REAL  2  1  1  2  75.25  1200.5
 {"6": 4}
 ```
 
-`HEADERS` is stored internally as a Python tuple. It cannot be indexed, passed to `UBOUND`, or serialised from BASIC; trying gives `Unknown function: ...` or `must be a HASH or ARRAY`. To get the column names, iterate the keys of `COLUMN_STATISTICS` with `FOR EACH` instead.
+`HEADERS` is an array of the column names in file order, so it can be indexed and passed to `UBOUND`.
 
 **Constraints (single file only).** `constraints=[col]:RULE;[col]:RULE...` checks values before the statistics run. The rules are:
 
@@ -1789,68 +1789,21 @@ The `id` attribute from `o1.xml` became an `<id>` element, and the missing `<not
 
 ---
 
-## 5.18 Implementation notes / discrepancies
+## 5.18 Notes
 
-The following points were found while checking the source and running the examples. Line numbers refer to `src/dbbasic.py`.
+This section collects details of how loading and analysis behave that are easy to miss.
 
-**LOAD syntax and options**
+**LOAD**
 
-1. **No INTO-variable or TO-file destination.** `_parse_load_destination_clause` (7346) accepts only `CREATE [TABLE]` and `INTO [TABLE] ... APPEND|TRUNCATE|UPSERT|IGNORE`. `LOAD` always targets a database table. To write files, use `SET OUTPUT` (5.13).
-2. **The `INTO TABLE` mode** (fixed). It was mandatory; it now defaults to `APPEND`.
-3. **The README ETL example** (fixed). It wrote `LOAD ... CREATE TABLE leads` and `OPTIONS ...` / `TRANSFORM ...` on separate lines **without** `_` continuation, so it failed with `Unknown statement: OPTIONS`. The lines now end in `_`.
-4. **Examples updated to current syntax** (fixed). `examples/loadfixed.bas`, `loadinto.bas`, `loadexcelex.bas`, `analyzecsv.bas`, `loadhtmllink.bas`, `loadhtmlimage.bas` and `npilinks.bas` used `LOAD FIXED ... FIELDS`, `fields=[col] as new`, comma-separated transform rules, or `LOAD HTML LINKS/IMAGES`. They now use the syntax described in this chapter. `examples/loadinto.bas` also gained the `example.csv` file it reads. A commented-out line in `loadcsvnohead.bas` still shows the old `fields=` form.
-5. **`ANALYZE FIXED` example command** (fixed). It printed `FIELDS "..."`, which `LOAD FIXED` does not accept; it now prints `OPTIONS "fields=..."`.
-6. **Option values that contain `word=`** (fixed). Any `word=` anywhere in the string was taken as a new key, so a value such as `REGEX(a=b)` was cut in two, and quotes didn't protect it. A key now has to follow a comma, semicolon or space, and a quoted value is taken exactly as written. `LOAD`, `FOR ... IN CSV`, `ANALYZE CSV` and `SET OUTPUT ... OPTIONS` all use the same parser now.
-7. **The option `transform` rule split** (fixed). It split on every `:`, so `date()` and `format()` masks containing `:` silently did nothing. It now splits at the first `:`. The rule names `upper`, `lower`, `trim` and `proper` are also accepted in any case now.
-8. **Option `validate` column names** (fixed). They were case-sensitive, unlike `transform`, `fields` and `WITH`-clause names. They are case-insensitive now, in the normalizer too.
-9. **The `HELP LOAD JSON` / `LOAD FIXED` / `LOAD EXCEL` syntax lines** (fixed). They showed only `INTO TABLE "tbl"`; they now show `CREATE TABLE` and the modes, like `HELP LOAD CSV`.
-
-**LOAD formats**
-
-10. **`fields=` is ignored** for JSON, TEXT, XML, HTML and PARQUET (for FIXED it is the column layout). A warning is now printed: `Warning: the fields option is ignored by LOAD JSON.`
-11. **JSON values are inserted with their native types.** `NULL` is used for missing keys and booleans become 1/0. All other formats insert strings. Empty fields are stored as `NULL` unless `SET NULL_HANDLING` says otherwise (4.9.3).
-12. **XML record attributes** (fixed). The flat `LOAD XML` dropped the attributes of the record element, so `<book id="b1">` lost its `id`. They are now columns (the option `attributes=false` restores the old behaviour, for example for an `INTO TABLE` load into an existing table without those columns).
-13. **The XML `limit` option** (fixed). It stopped emitting rows but kept scanning to the end of the file; it now stops reading.
-14. **HTML `header=false`** (fixed). The header list stayed `['source']`, so every cell was dropped. Columns are now named `C1..Cn` after the widest row.
-15. **HTML `LINKS`** (fixed). It resolved `href` against the filename, so links in local files stayed relative. Links and images are now resolved against `base_url`, which defaults to `source_url`.
-16. **Excel `.xlsx` with `header=false`** (fixed). It failed with "Could not determine any columns", because the `C1..Cn` names were worked out only after the headers had been sent. They are now taken from the first data row.
-17. **Parquet nested columns** (fixed). Leaf names from `schema.names` were used, so a list column `tags` appeared as `element` with empty values. The top-level names from `schema_arrow` are used now, and list and struct values are stored as JSON text.
-18. **Blank lines in a CSV file are skipped** (fixed: a trailing blank line used to abort the load with `Incorrect number of bindings supplied`). Rows with fewer fields than the header (fixed) used to abort the whole load; the missing fields are now `NULL`, with a warning. Rows with more fields lose the extras, now with a warning. A failed `CREATE TABLE` load (fixed) used to leave an empty table behind; the table is now dropped.
-19. **`IGNORE` mode count** (fixed). It reported the rows sent, not the rows inserted. It now reports both: `0 records loaded into table emp (2 ignored)`.
-20. **`LOAD` and `ERR`** (fixed). A successful `LOAD` did not reset `ERR`, so `IF ERR <> 0` after it could see a stale value from an earlier statement.
-21. **`SET NULL_HANDLING`** (fixed). It used to be stored and never read. It now decides whether `LOAD` stores empty fields as `NULL` (the default) or `''` (see [4.9.3](04-database-sql-and-output.md#493-set-null_handling)).
+1. **There is no INTO-variable or TO-file destination.** The destination is always `CREATE [TABLE]` or `INTO [TABLE] ... APPEND|TRUNCATE|UPSERT|IGNORE`, so `LOAD` always targets a database table. To write files, use `SET OUTPUT` (5.13).
+2. **`fields=` is ignored** for JSON, TEXT, XML, HTML and PARQUET (for FIXED it is the column layout). A warning is printed, for example `Warning: the fields option is ignored by LOAD JSON.`
+3. **Only JSON keeps native value types.** `LOAD JSON` inserts values with their JSON types: `NULL` is used for missing keys and booleans become 1/0. All other formats insert strings. Empty fields are stored as `NULL` unless `SET NULL_HANDLING` says otherwise (4.9.3).
+4. **Blank lines in a CSV file are skipped**, including a trailing blank line at the end of the file.
 
 **Normalisation**
 
-22. **Normalizer validation** (fixed). A row that failed validation was inserted anyway, with its untransformed data, after the "Skipping row" message. It is now skipped, together with its child rows.
-23. **Scalar arrays** (fixed). `"tags": ["x","y"]` produced a `person_tags` table with 4 rows (`x`, NULL, `y`, NULL), because each element was wrapped in its own list. It now gives one row per value.
-24. **Primary keys come from one shared counter** across all tables, so child keys do not start at 1.
-25. **The table counts after a normalised load** (fixed). They listed every table in the database; now only the tables the load created.
-26. **`normalize=true` ignores the destination mode** and drops any existing tables with the generated names.
-27. **Dead code** (removed). An unreachable streaming XML normaliser (`_run_xml_normalize` and three helpers, about 335 lines, with leftover `DEBUG` prints) has been removed. `normalize=true` was always handled by `LegacyJsonNormalizer` before that code could run.
+5. **Primary keys come from one shared counter** across all tables, so the keys of a child table do not start at 1.
 
-**USING SCHEMA and UPGRADE**
+**Loops**
 
-28. **`UPGRADE CSV` and `ANALYZE CSV`'s saved schema** (fixed). `UPGRADE CSV` accepted only a JSON array and rejected the object that `ANALYZE CSV ... SAVE SCHEMA TO` writes, although the two are designed to work together. It now accepts both forms, including `process_by`. The duplicate docstring-only definition of `_parse_upgrade_csv_statement` has been merged, and `USING` must now be followed by `SCHEMA`.
-29. **Single quotes in schema `source` expressions.** The `ANALYZE CSV` docstring suggests expressions like `"FirstName & ' ' & LastName"`. Single quotes are only converted when the whole source is one quoted literal, so such expressions raise a parse error. Use backtick strings.
-30. **`UPGRADE JSON`** (fixed): it always failed with "Expected SCHEMA after USING" because the `SCHEMA` check compared the wrong token.
-
-**ANALYZE**
-
-31. **`ANALYZE CSV` `HEADERS`** (fixed). It was stored as a Python tuple, which BASIC could not index. Report lists are now arrays. `examples/csv2json.bas` also read a non-existent `SUGGESTED_SQL_TYPE` key; it now reads `SUGGESTED_DATA_TYPE`.
-32. **`ANALYZE CSV` date columns** (fixed). It counted dates but never suggested a date type. A column of dates (and empty fields) is now suggested as `DATE`; dates mixed with numbers give `TEXT`. A logical-only column is still suggested as `INTEGER`.
-33. **`ANALYZE JSON` wildcards** (fixed). It opened the pattern as a literal file name, although `HELP ANALYZE JSON` showed a wildcard example. A pattern now analyses the records of every matching file together.
-34. **Multi-file `ANALYZE XML ... INTO var`** (fixed). The clause was parsed but the report was never assigned. It now stores `FILE_COUNT`, `ROOT_ELEMENT`, `INFERRED_RECORD_TAG` and `TAG_OCCURRENCES`.
-35. **`ANALYZE JSONL` counts** (fixed). Non-object JSON lines were counted as valid records, and `TOTAL_RECORDS` included blank lines. Non-objects are now counted in `NON_OBJECT_RECORDS`, and blank lines are not counted.
-36. **`INTO` handling** (fixed). FIXED, TEXT, JSON, JSONL and XML required the `INTO` hash to be declared first (`DIM ... AS HASH`). Now none do, like `ANALYZE CSV`.
-37. **`ANALYZE XML` clause order** (fixed). It required `SAVE SCHEMA TO` before `INTO`; either order works now.
-
-**Loops and PARSEJSON**
-
-38. **The `FOR ... IN CSV` loop** (fixed). It read the whole file into memory, supported only the comma delimiter, recognised only the literal text `header=true` in its options, and turned blank lines into empty records. It now reads a row at a time, takes `header=`, `delimiter=` (including `tab` and `auto`), `skip=` and `encoding=` with the same rules as `LOAD CSV`, and skips blank lines. Header keys are still cleaned (`Unit Price` becomes `UnitPrice`), and the exact header text is a key too (`rec("Unit Price")`).
-
-    The help text shows `FOR row IN CSV("data.csv")`. The parentheses work, but only because they form a parenthesised expression.
-39. **`FOR ... IN JSONL`:**
-    - an invalid line (fixed) used to stop the program; it is now skipped with a warning giving its line number, as `LOAD JSONL` does;
-    - non-object lines are bound as arrays or scalars, without a check (kept on purpose: a loop may want them; use `TYPENAME$`).
-40. **`PARSE JSON ... INTO`** (removed). This statement form was never implemented. The unused `PARSE` keyword has been removed from the lexer, so `parse` is now an ordinary name. Use `PARSEJSON()`.
+6. **`FOR ... IN JSONL` does not check that a line is an object.** A line holding an array or a scalar is bound as an array or a scalar. A loop may want such lines; use `TYPENAME$` to tell them apart.

@@ -838,9 +838,11 @@ The following errors are **not** governed by `SQL_FATAL_ERRORS`. They always sto
 | `EMAIL` | `SET EMAIL keyword value [keyword value ...]` |
 | `AUTOADVANCE` | `SET AUTOADVANCE ON \| OFF`: whether filling an entry field moves to the next one (see [7.3](07-text-mode-applications.md#read)) |
 | `MOUSE` | `SET MOUSE ON \| OFF`: whether the screen statements take mouse clicks (on by default except on Windows; see [7.7](07-text-mode-applications.md#the-mouse)) |
+| `SHADOW` | `SET SHADOW ON \| OFF`: whether pop-ups (menus, message boxes, pick lists) have a drop shadow; on by default (see [7.2](07-text-mode-applications.md#cls-locate-color-and-box)) |
+| `THEME` | `SET THEME name$`: sets the four screen colours at once from a named theme such as `"classic"` or `"green"` (see [7.2](07-text-mode-applications.md#cls-locate-color-and-box)) |
 | `CONFIRM` | `SET CONFIRM ON \| OFF`: Clipper's name for the opposite of `AUTOADVANCE`. `SET CONFIRM OFF` is `SET AUTOADVANCE ON` |
 
-These are the only options. Any other word after `SET` is an error: `SET x = 5` gives `Unknown SET option 'x'. Expected OUTPUT, EMAIL, NULL_HANDLING, SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE, CONFIRM or MOUSE.` To change the database engine, use `DATABASE ENGINE DUCKDB` (4.1), not `SET DATABASE ENGINE`.
+These are the only options. Any other word after `SET` is an error: `SET x = 5` gives `Unknown SET option 'x'. Expected OUTPUT, EMAIL, NULL_HANDLING, SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE, CONFIRM, MOUSE, SHADOW or THEME.` To change the database engine, use `DATABASE ENGINE DUCKDB` (4.1), not `SET DATABASE ENGINE`.
 
 ### 4.9.1 SET SQL_FATAL_ERRORS
 
@@ -912,7 +914,7 @@ SELECT SUM(middle IS NULL) AS mid_nulls, SUM(salary IS NULL) AS sal_nulls FROM p
 (1 rows returned)
 ```
 
-With `SET NULL_HANDLING TO EMPTY` (the behaviour before this setting worked), the first query gives `cnt_mid` 3 and `avg_sal` 37000.0, because the empty salary is counted as 0.
+With `SET NULL_HANDLING TO EMPTY`, the first query gives `cnt_mid` 3 and `avg_sal` 37000.0, because the empty salary is counted as 0.
 
 ### 4.9.4 SET EMAIL
 
@@ -934,7 +936,7 @@ Stores email provider settings for the `EMAIL` statement. Keyword/value pairs ca
 | `file_path` | `""` | the target file for `FILE` mode |
 | `sql_options` | `{}` | options parsed from `OPTIONS` (used by all formats despite the name) |
 
-This configuration controls only **result sets**: line SQL queries, queries inside `EXECUTE` (SQLite), and `DESCRIBE`. `PRINT`, `WRITE`, `ECHO` and `SHOW` always write to the console (or to a file handle) and are not affected.
+This configuration controls only **result sets**: line SQL queries, queries inside `EXECUTE`, and `DESCRIBE`. `PRINT`, `WRITE`, `ECHO` and `SHOW` always write to the console (or to a file handle) and are not affected.
 
 **Mode part** (optional):
 
@@ -947,7 +949,7 @@ This configuration controls only **result sets**: line SQL queries, queries insi
 
 Any other word raises `Unknown output mode: X`.
 
-**FORMAT part** (optional): `FORMAT name` sets the format. An unknown name raises `Unknown format type 'X'`. The word `TABLE` gives `Missing or invalid format type after FORMAT`. Each `FORMAT` clause **clears the previous options**. If the format is `SQL`, one of the words `INSERT`, `UPDATE`, `MERGE`, `REPLACE`, `UPSERT` can follow and is stored as `mode`.
+**FORMAT part** (optional): `FORMAT name` sets the format. An unknown name raises `Unknown format type 'X'`. `TABLE` is another name for `TEXT`. A missing format name raises `Missing or invalid format type after FORMAT`. Each `FORMAT` clause **clears the previous options**. If the format is `SQL`, one of the words `INSERT`, `UPDATE`, `MERGE`, `REPLACE`, `UPSERT` can follow and is stored as `mode`.
 
 **OPTIONS part** (optional, valid only after `FORMAT`): `OPTIONS string_expr`. The string is scanned for `key=value` pairs. Keys are words matched by `\b(\w+)=` and lower-cased. Each value runs up to the next `key=` and is stripped of spaces, commas and quotes. Values can therefore contain spaces (`title=Customer List`), but cannot contain another `word=` sequence.
 
@@ -970,7 +972,7 @@ Every result set (the rows plus the column names) goes through `_handle_output(r
 - **FILE mode:** for `EXCEL` and `PARQUET`, the writer opens `file_path` itself. For every other format, the file is opened with `open(file_path, "w", encoding="utf-8", newline='')`. After writing, the console shows `N rows written to <file>`.
 - **OFF mode:** nothing is written.
 
-**Each query overwrites the output file** because the file is opened in `"w"` mode every time. Two `SELECT`s in a row leave only the second result in the file. `EXCEL` is the exception: if the workbook exists, each query adds a **new sheet** to it.
+**Each query overwrites the output file** because the file is opened in `"w"` mode every time. Two `SELECT`s in a row leave only the second result in the file. To keep every result, use `SET OUTPUT FILE "x" APPEND` (4.9.5), which opens the file in `"a"` mode and prints `N rows added to <file>`. `EXCEL` is an exception: if the workbook exists, each query adds a **new sheet** to it.
 
 ```basic
 CREATE TABLE c (id INTEGER, name TEXT);
@@ -1055,7 +1057,7 @@ id,name,note
 
 #### JSON
 
-A JSON array of objects (`indent=2`). NULL becomes `null`. No newline is written after the closing `]`.
+A JSON array of objects (`indent=2`). NULL becomes `null`.
 
 ```
 [
@@ -1105,7 +1107,7 @@ By default, a bare `<table>` with `<thead>`/`<tbody>`. Cells are escaped and NUL
 
 | Option | Effect |
 |---|---|
-| `full` | any non-empty value (even `false`) produces a complete HTML document with embedded CSS, `<title>`, an `<h1>` title and a footer paragraph |
+| `full` | `true`, `1`, `y` or `yes` produces a complete HTML document with embedded CSS, `<title>`, an `<h1>` title and a footer paragraph |
 | `title` | page `<title>` and `<h1>` (default `Query Result`) |
 | `subtitle` | `<h2>` below the title |
 | `footer` | footer paragraph text (default `(n rows returned)`) |
@@ -1221,7 +1223,7 @@ On **SQLite** connections, `_init_db` registers extra scalar functions through `
 - `SOUNDEX`
 - `INSTR` (2, 3 or 4 arguments)
 
-DuckDB connections do not get these functions. DuckDB already has native versions of most of them. See **Chapter 3** for their signatures and behaviour.
+On **DuckDB** connections, DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`, `ENDS_WITH`, `SPLIT_PART`, `TRANSLATE` and 2-argument `INSTR` are used, and the rest are added by DbBasic (4.12). See **Chapter 3** for their signatures and behaviour.
 
 ---
 
@@ -1328,7 +1330,7 @@ The mask is any string expression. Values are separated by **commas**. A trailin
 
 - Literal characters are copied to the output.
 - When the walker reaches a character from `# 0 9 * ! & \ $ < > ^`, it tries to match a field. The next value is formatted into that field.
-- **After the last value**, literal text is copied until the next field character, so `PRINT USING "Total: ### units"; 42` prints `Total:  42 units`. A mask with no values prints an empty line.
+- **After the last value**, literal text is copied until the next field character, so `PRINT USING "Total: ### units"; 42` prints `Total:  42 units`. A mask with no values prints its literal text.
 - **A numeric field directly followed by `%`** shows the value multiplied by 100: `PRINT USING "##.#%"; 0.256` prints `25.6%`.
 - If there are more values than fields, the mask is reused from the start for the remaining values (`PRINT USING "###"; 1, 2, 3` prints `  1  2  3`).
 
@@ -1524,50 +1526,14 @@ Column headings are the column names, so use `AS` to change them (`SELECT region
 
 ---
 
-## 4.15 Implementation notes / discrepancies
+## 4.15 Notes
 
-These were found by reading `src/dbbasic.py` and running test scripts. They describe current behaviour, which may differ from the built-in `HELP` text and the older documents.
+This section collects details of how DbBasic behaves that are easy to miss.
 
-**SQL recognition and text handling**
-
-1. **SQL statement termination** (fixed). Line-level SQL used to end at the first `;` in the source text, even inside `'...'` or a comment. It now skips string literals, quoted identifiers and comments (4.2.3).
-2. **SQL only at the start of a line** (fixed). SQL was not recognised after `THEN`, `ELSE`, `:` or a label, and only one SQL statement was allowed per line. It is now recognised wherever a statement starts.
-3. **Keyword joining inside string literals** (fixed). Multi-word keyword rewrites used to change text inside strings and SQL literals (`'for each'` became `'FOREACH'`). They now apply only to code (4.2.2).
-4. **`END TRANSACTION;`** (fixed). It was not recognised as SQL, because the keyword list held `'END TRANSACTION'` while the lexer sees the joined token `ENDTRANSACTION`. Joined keywords in SQL code are now also split back apart before the statement is sent, so `FOR EACH ROW` in a trigger reaches the engine intact.
-5. **Bind-variable scanning** (fixed). It used to be purely textual, so `'x:y'`, `':memory:'` and DuckDB `::TYPE` casts were taken as variable references. A missing bind variable is fatal even with `SQL_FATAL_ERRORS OFF`.
-6. **Numeric bind values** (fixed). They were always floats, so `SELECT :i` showed `1.0`. Whole numbers are now bound as integers.
-
-**SET**
-
-7. **Unknown `SET` options** (fixed). They used to be skipped silently, with the rest of the line run as a new statement (`SET DATABASE ENGINE DUCKDB` in `examples/setoutputsql.bas` only worked by accident, and `SET x = 5` was an assignment). They now raise `Unknown SET option`.
-8. **`SET NULL_HANDLING`** (fixed). It had no effect: the settings were stored but never read, and the global form was not parsed. It now controls `LOAD`, with empty fields stored as `NULL` by default (4.9.3).
-9. **`SET OUTPUT FORMAT TABLE`** (fixed). It was rejected; `TABLE` is now another name for the default `TEXT` format. The `HELP SET OUTPUT` text now lists every format.
-10. **`SET OUTPUT FORMAT ...` without a mode forces `CONSOLE`**, which silently cancels an earlier `FILE` or `OFF`. `SET OUTPUT CONSOLE` resets the format to `TEXT`, and `FILE` without `FORMAT` keeps the old format.
-11. **`SET OUTPUT OFF`** (fixed). It stopped line-level `SELECT`/`WITH`/`SUMMARIZE`/`PRAGMA` statements from running at all, so a `PRAGMA` setting or an error in the query was silently skipped. The query now runs and only its rows are dropped.
-
-**Output writers**
-
-12. **FILE mode and several queries** (fixed). Each query overwrote the file, so only the last result was kept. `SET OUTPUT FILE "x" APPEND` now adds every result to the file; without `APPEND`, each query still replaces it.
-13. **HTML `full=false`** (fixed). Any non-empty value, including `false`, turned `full` on. Only `true`, `1`, `y` and `yes` do now.
-14. **Excel `title`/`subtitle`/`footer`** (fixed). The column-width pass read `column_letter` from a merged cell and crashed with `'MergedCell' object has no attribute 'column_letter'`, so the workbook was not saved.
-15. **JSON and JSONL output of DuckDB values** (fixed). `DATE`/`TIMESTAMP`/`DECIMAL` values failed with "not JSON serializable". They are now written as ISO text and numbers.
-16. **JSON trailing newline** (fixed). The JSON writer printed no newline after the closing `]`, so the next output ran on. CSV console output still uses `\r\n` line endings.
-
-**EXECUTE, SHOW and DESCRIBE**
-
-17. **`EXECUTE` on the two engines** (fixed). On DuckDB, `SELECT` results were never displayed; on SQLite, empty results printed nothing and `SUMMARIZE` was not a query. Both engines now split the string and display every query's result (4.6). `HELP EXECUTE` described it as running BASIC code (fixed: it now says SQL, and points to `EVAL` for dynamic BASIC).
-18. **`SHOW INDEXES` on DuckDB** (fixed). The DuckDB branch was empty, so it always printed `No indexes found.`. It now lists indexes and primary-key/unique constraints, and `FROM table` is accepted as well as `ON table`.
-19. **`HELP SHOW CREATE TABLE`** (fixed). It described only the all-tables form; it now shows the single-table form too.
-20. **`DESCRIBE` output does not match the older documents.** `docs/DbBasicCommandRerence.md` says `DESCRIBE` shows the `CREATE TABLE` statement. It actually shows `PRAGMA table_info` (SQLite) or `DESCRIBE` (DuckDB) output through the output pipeline. Use `SHOW CREATE TABLE` for the DDL.
-21. **`HELP INSERT`/`HELP UPDATE` examples** (fixed). They used double-quoted string literals (`"System Start"`, `"Active"`), which SQLite accepts only as a fallback and DuckDB treats as identifiers. They now use single quotes.
-
-**PRINT and PRINT USING**
-
-22. **`PRINT USING` has several gaps:**
-    - (Fixed) A mask with no values needed a `;` and printed an empty line; it now prints the literal text.
-    - (Fixed) Extra values are now formatted by reusing the mask.
-    - It treats spaces as part of numeric fields.
+1. **`SET OUTPUT FORMAT ...` without a mode switches to `CONSOLE`.** It cancels an earlier `FILE` or `OFF`, so to keep writing to a file, repeat the `FILE` clause: `SET OUTPUT FILE "x.csv" FORMAT CSV`. `SET OUTPUT CONSOLE` resets the format to `TEXT`, and `FILE` without `FORMAT` keeps the current format (4.9.5).
+2. **A missing bind variable always stops the program**, unless `ON ERROR GOTO` traps it. `Bind variable ':x' not found in internal state.` is not a database error, so `SET SQL_FATAL_ERRORS OFF` does not suppress it (4.3, 4.8).
+3. **`DESCRIBE` shows columns, not DDL.** It shows `PRAGMA table_info` (SQLite) or `DESCRIBE` (DuckDB) output through the output pipeline. Use `SHOW CREATE TABLE` to see the `CREATE TABLE` statement (4.7).
+4. **`PRINT USING` limitations** (4.13.2):
+    - It treats spaces as part of numeric fields, so `"## ##"` is one field.
     - It does not accept `9` after the decimal point.
     - It gives no overflow indicator.
-23. **`PRINT #n, USING ...`** (fixed). Without a trailing `;` it crashed with `cannot access local variable 'parts'`, and with one it never wrote a line ending to the file.
-24. **A trailing `,` in `PRINT`** (fixed). It printed a tab and then ended the line; it now keeps the cursor on the line, as in classic BASIC.

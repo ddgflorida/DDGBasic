@@ -709,8 +709,8 @@ class HelpRegistry:
             "examples": [
                 'SORT names ASC',
                 'SORT users ON "age" DESC',
-                'SORT items WITH sort_key$ ASC      ` UDF returns the key',
-                'SORT names WITH UCASE$             ` case-insensitive sort'
+                'SORT items WITH sort_key$ ASC',
+                'SORT names WITH UCASE$'
             ]
         },
         "FILTER": {
@@ -1874,7 +1874,7 @@ class LegacyJsonNormalizer:
             
            
     def run(self):
-        print("Running Legacy Normalizer Engine...")
+        print("Running the JSON normalizer...")
 
         # <<< FIX: Re-introduced the data transformation from json2dbcmd.py >>>
         # The original script always processes a top-level list. If our data is a single
@@ -1901,7 +1901,7 @@ class LegacyJsonNormalizer:
 
         print("  - Step 4: Populating tables with data...")
         self._insert_rows()
-        print("Legacy Normalizer Engine finished.")
+        print("JSON normalizer finished.")
 
     def _parse_processing_rules(self):
         """Parses TRANSFORM and VALIDATE rules from the options string."""
@@ -10907,7 +10907,7 @@ class Interpreter:
             if load_type not in ['JSON', 'XML']:
                 self._error("The NORMALIZE option is only supported for LOAD JSON and LOAD XML.")
             
-            print(f"Normalizing {load_type} with Legacy Engine...")
+            print(f"Normalizing {load_type}...")
             try:
                 data = None
                 with open(filename, 'r', encoding='utf-8') as f:

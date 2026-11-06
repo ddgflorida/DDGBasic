@@ -21,7 +21,7 @@ This chapter covers the statements that decide which code runs, how often it run
 - [2.15 Program control: END, RUN, CHAIN, EVAL, EXECUTE, CLEAR](#215-program-control-end-run-chain-eval-execute-clear)
 - [2.16 Debugging: TRON, TROFF, DUMP, SHOW VARIABLES](#216-debugging-tron-troff-dump-show-variables)
 - [2.17 Running DbBasic](#217-running-dbbasic)
-- [2.18 Implementation notes and discrepancies](#218-implementation-notes-and-discrepancies)
+- [2.18 Notes](#218-notes)
 
 Lexical rules, data types, variables, arrays, hashes and operators are covered in Chapter 1. The built-in function catalog is in Chapter 3. SQL statements, `PRINT` and `SET` are in Chapter 4. `LOAD` and `ANALYZE` are in Chapter 5. File I/O, networking and forms are in Chapter 6.
 
@@ -217,8 +217,6 @@ after loop, i = 4
 skipped loop leaves i = 5
 ```
 
-> **Caution:** Do not put a `FOR EACH ... NEXT` loop directly inside a `FOR ... TO` loop. See 2.18.
-
 ---
 
 ## 2.5 The FOR ... IN family
@@ -239,7 +237,7 @@ Rules shared by every member of the family:
 - **Scope of the loop variable.** If the variable existed before the loop, its earlier value is restored when the loop ends. If it did not exist, it is deleted when the loop ends.
 - **`RECNO`.** All loops except `FILES` set the numeric variable `RECNO` to the current record number, counting from 1. When the loop ends, `RECNO` goes back to the value it had before the loop, so after an inner `FOR ... IN` loop the outer loop's `RECNO` is still correct. Outside any loop it is deleted (reading it gives `0`).
 - **Empty sources.** If there are no rows, the body is skipped.
-- `EXIT FOR` leaves any of these loops. See 2.9 for a caution about `NEXT var` combined with `EXIT FOR`.
+- `EXIT FOR` leaves any of these loops (see 2.9).
 - `NEXT` can be followed by the loop variable name. The name is not checked.
 
 Chapters 4, 5 and 6 cover the data formats, CSV options and SQL in depth. This section covers only the loop syntax and what the loop variable contains.
@@ -480,8 +478,6 @@ Years: 5 Balance: 161.05
 n = 3
 ```
 
-> **Caution:** Do not put a `DO WHILE` or `LOOP WHILE` inside a `WHILE ... WEND` body. See 2.18.
-
 ---
 
 ## 2.8 DO ... LOOP
@@ -607,8 +603,6 @@ PRINT "stopped at r ="; r
 r = 1 c = 2
 stopped at r = 2
 ```
-
-> **Caution:** For `FOR ... IN` and `FOR EACH` loops, end the loop with a plain `NEXT`, not `NEXT var`, if the body can run `EXIT FOR`. With `NEXT var`, the exit leaves `var` behind and it is parsed as a statement, which causes `Invalid assignment statement`. `FOR ... TO` loops do not have this problem.
 
 ---
 
@@ -1361,7 +1355,7 @@ python dbbasic.py [--repl]
 
 Before the program is tokenized, the source goes through two preprocessing steps:
 
-1. `INCLUDE "file"` lines are replaced by the contents of the named file. The path is relative to the including file, and circular includes are skipped. This feature is currently broken; see 2.18.
+1. `INCLUDE "file"` lines are replaced by the contents of the named file. The path is relative to the including file, and circular includes are skipped. See [1.4.1](01-language-fundamentals.md#141-include).
 2. Line continuations (a trailing `_`) are joined. This is described in Chapter 1.
 
 If the file does not exist, the interpreter prints `Error: File 'x' not found.` If the file is empty, it prints `No source code provided.`
@@ -1439,7 +1433,7 @@ HELP "topic name"
 
 If no topic matches exactly but some topics start with the name you gave, they are listed as suggestions. Otherwise `HELP` prints `No help available for 'X'. Type HELP to see list.`
 
-The help topics related to this chapter are `IF`, `FOR`, `FOR IN`, `WHILE`, `GOSUB`, `ERROR`, `ON ERROR`, `RESUME`, `END`, `RUN`, `CHAIN`, `EXECUTE`, `EXIT`, `TRON`, `TROFF`, `SHOW VARIABLES`, `MAP`, `FILTER`, `REDUCE` and `SORT`. Several of them are inaccurate (see 2.18).
+The help topics related to this chapter are `IF`, `FOR`, `FOR IN`, `WHILE`, `GOSUB`, `ERROR`, `ON ERROR`, `RESUME`, `END`, `RUN`, `CHAIN`, `EXECUTE`, `EXIT`, `TRON`, `TROFF`, `SHOW VARIABLES`, `MAP`, `FILTER`, `REDUCE` and `SORT`.
 
 ```
 DbBasic> HELP GOSUB
@@ -1454,38 +1448,11 @@ Examples:
 
 ---
 
-## 2.18 Implementation notes and discrepancies
+## 2.18 Notes
 
-Each of the following was confirmed by running the interpreter.
+This section collects details of how DbBasic behaves that are easy to miss.
 
-**Bugs and limitations**
-
-1. **Nested loops** (fixed). Skipping to the end of a loop used to count every `FOR`, `WHILE` and `DO` token. As a result:
-   - `FOR EACH` inside `FOR ... TO` failed with `Unexpected 'NEXT'`.
-   - `DO WHILE` or `LOOP WHILE` inside `WHILE ... WEND` silently skipped the rest of the program.
-   - A second `EXIT DO` or `EXIT LOOP` in a loop body jumped to the wrong place.
-
-   Only keywords that begin a statement now open a block, and `NEXT` closes `FOR`, `FOR EACH` and `FOR ... IN` alike.
-2. *(merged into item 1)*
-3. *(merged into item 1)*
-4. **`EXIT FOR` with `NEXT var`** (fixed). In `FOR ... IN` and `FOR EACH` loops, the variable name after `NEXT` used to be left unconsumed, which caused `Invalid assignment statement`.
-5. **Labels** (fixed). Any `identifier :` sequence used to be recorded as a label, even mid-line (`a = b : ...`, `GOSUB s : ...`), so duplicates stopped the program from loading. Only a name at the start of a line is a label now.
-6. **`GOTO` out of a loop or block `IF`** (fixed). A `GOTO` out of a loop left the loop running, which ended in `Expected token NEXT but got None`. Repeated jumps eventually hit Python's recursion limit. A `GOTO` out of a block `IF` was silently redirected to just after `END IF`. `GOTO` now ends the blocks it leaves (see 2.10).
-7. **Return value case** (fixed). The return value had to be assigned with the exact case used in the `FUNCTION` line, or the function returned `0`/`""`. Variable names are now case-insensitive everywhere, so any spelling works.
-8. **Functions in `RUN`/`CHAIN` targets, `EVAL` strings and the REPL** (fixed). These never registered `FUNCTION` definitions, so calls failed with `Unknown function`. Each function now records the token list it was defined in, and each of these entry points registers the new source's functions (see 2.12).
-9. **`RUN` arguments** (fixed). They were converted with Python `str()`, so `42` arrived as `"42.0"`; they now arrive as `PRINT` shows them (`"42"`).
-10. **`END` inside a `RUN` child or an `EVAL` string** (fixed). `END` called `sys.exit`, so anywhere except a bare top-level `END` line it killed the whole process, including from a `RUN` child, the REPL or the web runner. It now stops just the running program (see 2.15).
-11. **`INCLUDE`** (fixed): it used to fail for every file that existed, because its marker lines began with `'`. See [1.4.1](01-language-fundamentals.md#141-include).
-12. **`RECNO` numbering** (fixed). In `FOR ... IN CSV` it started at 2 even without a header row, and an inner loop deleted the outer loop's `RECNO`. It now counts records from 1 and is restored after a nested loop. In `FOR ... IN JSONL` it is the line number in the file, so it matches the skipped-line warnings.
-13. **Exit status** (fixed): it was always 0, even after a runtime error; it is now 1 (see 2.17). `EXIT FUNCTION` outside a function still gives an empty `Runtime Error:` message.
-14. **`HELP` debug output** (fixed). `HELP` printed the raw token tuple, for example `('GOSUB', 'GOSUB', 5)`, before every entry.
-15. **`PRINT x;` followed by `:` or `ELSE`** (fixed). It was a syntax error (`Unexpected token in factor: COLON`), so `FOR i = 1 TO 3: PRINT i;: NEXT` failed. It now works, as do `PRINT: PRINT "x"` and `IF c THEN PRINT a; ELSE PRINT b`.
-16. **`CHAIN` status lines** (fixed). `CHAIN` always printed `CHAIN: ...` status lines to standard output.
-
-**Documentation that does not match the code**
-
-- **Built-in `HELP` texts** (fixed). `HELP IF` gave the failing example `IF x=1 THEN: PRINT 1: END IF`. `HELP EXECUTE` said it ran DbBasic code, with examples that failed; `EXECUTE` runs SQL only, and `EVAL` runs DbBasic code. `HELP RUN` said control returned "to the prompt" and omitted arguments. `HELP CHAIN` omitted `PRESERVE` and arguments. `HELP EXIT` described only leaving the REPL. `HELP RESUME` said "line" for *statement*. `HELP FOR IN` showed a non-existent `SQL(...)` form and omitted `FILES`. All of these now match this manual, and multi-line examples are indented.
-- A bare `RESUME` is not supported, although classic BASIC allows it. Use `RESUME NEXT` or `RESUME label`.
-- `README.md` says `CLEAR` "resets all user variables (and user-defined functions)". `CLEAR` deletes only variables; functions remain callable.
-- `docs/DbBasicCommandRerence.md` describes `EXIT` as applying only to loops. It also applies to `EXIT FUNCTION`.
-- `examples/errorhandling.bas` uses `ERROR Number` followed by `ON ERROR GOTO 0` inside the handler, expecting the error to be re-raised and the handler turned off. Because errors inside a handler are not trapped, `ERROR Number` stops the program immediately and `ON ERROR GOTO 0` never runs.
+1. **Bare `RESUME`.** A bare `RESUME`, which classic BASIC allows, is not supported. Use `RESUME NEXT` or `RESUME label` (see 2.14).
+2. **`ERROR` inside a handler.** Errors inside an `ON ERROR` handler are not trapped, so `ERROR code` in a handler stops the program at once, and any statement after it, such as `ON ERROR GOTO 0`, never runs. To stop with an error the handler cannot deal with, `ERROR code` on its own is enough.
+3. **`EXIT FUNCTION` outside a function** stops the program with an empty `Runtime Error:` message.
+4. **`PRINT x;` before `:` or `ELSE`.** A `PRINT` that ends with `;` can be followed by `:` or `ELSE`, so `FOR i = 1 TO 3: PRINT i;: NEXT` and `IF c THEN PRINT a; ELSE PRINT b` work, as does `PRINT: PRINT "x"`.
