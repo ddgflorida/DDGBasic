@@ -1453,6 +1453,6 @@ Examples:
 This section collects details of how DbBasic behaves that are easy to miss.
 
 1. **Bare `RESUME`.** A bare `RESUME`, which classic BASIC allows, is not supported. Use `RESUME NEXT` or `RESUME label` (see 2.14).
-2. **`ERROR` inside a handler.** Errors inside an `ON ERROR` handler are not trapped, so `ERROR code` in a handler stops the program at once, and any statement after it, such as `ON ERROR GOTO 0`, never runs. To stop with an error the handler cannot deal with, `ERROR code` on its own is enough.
+2. **`ERROR` inside a handler.** Errors inside an `ON ERROR` handler are not trapped, so `ERROR code` in a handler stops the program at once, and any statement after it, such as `ON ERROR GOTO 0`, never runs. To stop with an error the handler cannot deal with, `ERROR code` on its own is enough: `ERROR ERR, ERRMSG$` passes the error on unchanged, as `examples/errorhandling.bas` does.
 3. **`EXIT FUNCTION` outside a function** stops the program with an empty `Runtime Error:` message.
 4. **`PRINT x;` before `:` or `ELSE`.** A `PRINT` that ends with `;` can be followed by `:` or `ELSE`, so `FOR i = 1 TO 3: PRINT i;: NEXT` and `IF c THEN PRINT a; ELSE PRINT b` work, as does `PRINT: PRINT "x"`.
