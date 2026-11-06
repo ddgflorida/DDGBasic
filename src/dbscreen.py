@@ -247,7 +247,12 @@ class KeyReader:
         if ch is None:
             return '' if (timeout is not None and self.is_tty) else None
         if self.windows and self.is_tty and ch in ('\x00', '\xe0'):
-            return _WIN_KEYS.get(self._read_char() or '', '')
+            # An arrow or function key: a prefix, then its code. The C runtime holds the code
+            # back after handing over the prefix, where msvcrt.kbhit() can't see it, so it is
+            # fetched with getwch() directly; waiting on kbhit() (as _read_char does) would
+            # lose it and swallow the next key press.
+            import msvcrt
+            return _WIN_KEYS.get(msvcrt.getwch(), '')
         if ch == '\x1b':
             nxt = self._read_char(0.05)
             if nxt == '[':
