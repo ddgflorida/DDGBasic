@@ -12,6 +12,7 @@ Example programs in `examples/`, each short enough to read in a minute:
 | `menu_demo.bas` | `MENUBAR$` with pull-downs, a pop-up `MENU` that changes the colours, and `ALERT` |
 | `grid_demo.bas` | `BROWSE` as a picker and as an editor (`EDIT`, Ins, Del) on 10,000 rows, with sorting, type-ahead, `FREEZE`, `FORMAT` and row colours (`COLOR`) |
 | `orders_demo.bas` | A master-detail screen: orders on top, their lines below (`BROWSE ... DETAIL`), editable, with totals that follow |
+| `themes_demo.bas` | The same form in each `SET THEME` colour scheme |
 | `progress_demo.bas` | A `PROGRESS` bar while a table loads, a `MENU` longer than the screen that scrolls, and drop shadows |
 | `report_demo.bas` | `REPORT` with nested groups and totals, on the screen, in the viewer and in a paged file |
 | `notes_demo.bas` | `EDIT TEXT` and `VIEW`, including `VIEW FILE` |
@@ -294,6 +295,7 @@ IF LASTKEY$ = CHR$(27) THEN GOTO cancelled
 | `LOCATE row [, col]` | Moves the cursor. The next `PRINT` or `INPUT` starts there. `col` defaults to 1. |
 | `COLOR [fg] [, bg] [, field_fg] [, field_bg]` | Sets the text colours. Any value can be left out (`COLOR , 4` changes only the background). `field_fg`/`field_bg` colour `GET` fields, the menu bar and the `BROWSE` bar; they start as black on white. |
 | `BOX top, left, bottom, right [, title$] [DOUBLE] [SHADOW]` | Draws a single- or double-line box, clears its inside in the current colours, and centres the title in the top line. `SHADOW` adds a drop shadow (see below). |
+| `SET THEME name$` | Sets all four colours of `COLOR` from a named theme (see below). `CLS` afterwards repaints the screen in it. |
 | `SET SHADOW ON` / `OFF` | Whether pop-ups (`MENU`, `ALERT`, pull-downs, `LIST` and `LOOKUP` pickers, `EDIT RECORD` and `PROGRESS`) have a drop shadow. On by default. |
 
 The colour numbers are those of QBasic:
@@ -302,6 +304,25 @@ The colour numbers are those of QBasic:
 |---|---|---|---|---|---|---|---|
 | 0 black | 1 blue | 2 green | 3 cyan | 4 red | 5 magenta | 6 brown | 7 white |
 | 8 grey | 9 light blue | 10 light green | 11 light cyan | 12 light red | 13 light magenta | 14 yellow | 15 bright white |
+
+**Themes.** `SET THEME` picks a whole colour scheme in one line, so a program can change its look, or let the user choose, without a set of `COLOR` numbers:
+
+| Theme | Text | Fields, menu bar, `BROWSE` bar | Looks like |
+|---|---|---|---|
+| `default` | white on black | black on white | the terminal; DbBasic's start-up colours |
+| `classic` | bright white on blue | black on cyan | the blue screens of 1990s business software |
+| `norton` | light cyan on blue | black on cyan | file managers of the same years |
+| `green` | light green on black | black on light green | a green-screen terminal |
+| `amber` | yellow on black | black on brown | an amber monitor |
+| `paper` | black on white | bright white on blue | a printed form |
+| `mono` | bright white on black | black on bright white | no colour at all |
+
+```basic
+SET THEME "classic"
+CLS
+```
+
+The names can be in any case. An unknown name is an error that lists the themes. `MAKE FORM` programs start with `SET THEME "classic"`, so one word changes their look. `examples/themes_demo.bas` shows the same screen in each theme.
 
 **Shadows.** A drop shadow darkens what is under the box: the two columns to its right and the row below it, offset as if the light came from the top left. The characters stay readable, drawn in grey on black. The pop-ups have one unless `SET SHADOW OFF`; a `BOX` has one when it says `SHADOW`. When a pop-up closes, the shadowed area is put back with the rest. A `BOX ... SHADOW` is part of the screen until something is drawn over it, so save the area with its shadow (two columns wider and one row taller) if you want to put it back.
 

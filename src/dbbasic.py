@@ -854,9 +854,14 @@ class HelpRegistry:
         
         # --- CONFIGURATION (SET) ---
         "SET": {
-            "syntax": 'SET [OUTPUT|EMAIL|NULL_HANDLING|SQL_FATAL_ERRORS|HASH_KEYS|AUTOADVANCE|CONFIRM|MOUSE|SHADOW] ...',
+            "syntax": 'SET [OUTPUT|EMAIL|NULL_HANDLING|SQL_FATAL_ERRORS|HASH_KEYS|AUTOADVANCE|CONFIRM|MOUSE|SHADOW|THEME] ...',
             "desc": "Configures system behavior. Type HELP SET OUTPUT or HELP SET EMAIL for details.",
             "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE', 'SET AUTOADVANCE ON']
+        },
+        "SET THEME": {
+            "syntax": 'SET THEME name$',
+            "desc": "Sets the four screen colours of COLOR at once from a named theme: default (white on black), classic (white on blue, the 1990s business look), norton (cyan on blue), green (a green screen), amber (an amber monitor), paper (black on white) or mono. Use CLS afterwards to repaint the screen in it.",
+            "examples": ['SET THEME "classic"\nCLS', 'SET THEME "green"']
         },
         "SET OUTPUT": {
             "syntax": 'SET OUTPUT [CONSOLE|FILE "path" [APPEND]|OFF] FORMAT fmt [OPTIONS "..."]',
@@ -6494,6 +6499,13 @@ class Interpreter:
                 self._error("Expected ON or OFF after SET MOUSE")
             SCREEN.keys.set_mouse(setting_token[1].upper() == 'ON')
             self._next_token()
+        elif token[0] == 'ID' and token[1].upper() == 'THEME':
+            # SET THEME "classic": the four colours of COLOR at once (see THEMES in dbscreen.py)
+            self._next_token()
+            try:
+                SCREEN.theme(self._to_string(self._parse_expression()))
+            except ScreenError as e:
+                self._error(str(e))
         elif token[0] == 'ID' and token[1].upper() == 'SHADOW':
             self._next_token()
             setting_token = self._current_token()
@@ -6599,7 +6611,7 @@ class Interpreter:
         else:
             option = token[1] if token and token[0] not in ('NEWLINE', 'COLON') else '(nothing)'
             self._error(f"Unknown SET option '{option}'. Expected OUTPUT, EMAIL, NULL_HANDLING, "
-                        "SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE, CONFIRM, MOUSE or SHADOW.")
+                        "SQL_FATAL_ERRORS, HASH_KEYS, AUTOADVANCE, CONFIRM, MOUSE, SHADOW or THEME.")
 
 
     def _handle_output(self, results, column_names):
@@ -8954,7 +8966,8 @@ class Interpreter:
                         'ENGINE', 'OPEN', 'TABLES', 'VARIABLES', 'INDEXES', 'BROWSER', # IDs
                         'CREATE', 'TABLE', # SQL Keywords
                         'KEY', 'ERROR', # ON KEY, ON ERROR
-                        'FORM' # MAKE FORM
+                        'FORM', # MAKE FORM
+                        'THEME', 'SHADOW' # SET THEME, SET SHADOW
                     ]
 
                     if sub_word in valid_sub_words:

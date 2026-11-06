@@ -37,7 +37,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * **Composition:** Pipelines like `REDUCE(MAP(FILTER(nums, is_even), square), add, 0)` work cleanly.
 
 * ### 1990s-Style Text Screens
-    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `progress_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
+    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
@@ -219,7 +219,7 @@ A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the fu
 | REVERSE                 | Reverses the order of elements in an array. |
 | RMDIR                   | Removes an empty directory. |
 | RUN                     | Executes another DbBasic script as a subroutine and returns control to the calling script upon completion. |
-| SET                     | Configures global settings for the interpreter, such as OUTPUT redirection, output FORMAT, EMAIL provider, SQL_FATAL_ERRORS, or HASH_KEYS handling. |
+| SET                     | Configures global settings for the interpreter, such as OUTPUT redirection, output FORMAT, EMAIL provider, SQL_FATAL_ERRORS, or HASH_KEYS handling. `SET THEME "classic"` sets the screen colours from a named theme. |
 | SHELL                   | Executes a command in the underlying operating system shell. |
 | SHIFT                   | Removes the first element from an array, optionally storing it in a variable. |
 | SHOW                    | Displays database schema information, such as `SHOW TABLES` or `SHOW INDEXES`. Also `SHOW VARIABLES`. |

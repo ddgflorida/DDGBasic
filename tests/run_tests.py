@@ -65,6 +65,7 @@ NETWORK = {
 # Scripts whose correct behaviour is a non-zero exit.
 EXPECTED_EXIT = {
     'examples/onerror': 1,   # ends with a deliberate fatal division by zero
+    'tests/themes': 1,       # ends with a deliberately unknown theme
 }
 
 # Keyboard input fed to scripts that use INPUT.
@@ -74,6 +75,7 @@ STDIN = {
     'examples/menu_demo': 'vccha\rvt\rfq',
     'examples/grid_demo': '\x1bORmi\r\r\x1b[F\x1b[C\x1b[C0\r\x1b',   # F3 sorts by city, "mi" finds Miami
     'examples/progress_demo': '\x1b[F\r\r',
+    'examples/themes_demo': 'ag\x1b',   # Amber, Green, Esc
     'examples/orders_demo': '\x1b[B\x1b[B\t\x1b[C\x1b[C5\r\x1b[2~\tBolt\t4\t0.5\r\x1b\r',   # lines of order 3: edit a qty, add a line
     'examples/contact': 'Ann Lee\r5551234567\rann@example.com\rn\r \r\r',   # State NY, Active off, Save
     'examples/report_demo': 'q',

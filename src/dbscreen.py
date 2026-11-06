@@ -43,6 +43,17 @@ ENTER, ESC, TAB, BACKSPACE = '\r', '\x1b', '\t', '\x08'
 
 SAVED_PREFIX = '\x00SCREEN:'   # marks a string made by SAVESCREEN
 
+# SET THEME: (text fg, text bg, field fg, field bg), the four values of COLOR
+THEMES = {
+    'DEFAULT': (7, 0, 0, 7),       # the terminal's look: white on black, black-on-white fields
+    'CLASSIC': (15, 1, 0, 3),      # the blue screen of 1990s business software
+    'NORTON':  (11, 1, 0, 3),      # light cyan on blue, as in file managers of the time
+    'GREEN':   (10, 0, 0, 10),     # a green-screen terminal
+    'AMBER':   (14, 0, 0, 6),      # an amber monitor
+    'PAPER':   (0, 7, 15, 1),      # black on white, white-on-blue fields
+    'MONO':    (15, 0, 0, 15),     # bright white on black, no colour at all
+}
+
 
 class ScreenError(Exception):
     pass
@@ -807,6 +818,14 @@ class Screen:
         if field_fg is not None: self.field_fg = field_fg
         if field_bg is not None: self.field_bg = field_bg
         self._w(self._normal())
+
+    def theme(self, name):
+        """SET THEME: sets the four colours of COLOR from a named theme."""
+        colours = THEMES.get(str(name).strip().upper())
+        if colours is None:
+            raise ScreenError(f"There is no theme called {name}. The themes are: " +
+                              ', '.join(t.lower() for t in THEMES) + '.')
+        self.color(*colours)
 
     def cls(self):
         self.gets = []

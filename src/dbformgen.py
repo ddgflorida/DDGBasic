@@ -142,7 +142,7 @@ def build_form_program(table, columns, key, engine, database, title="", made_on=
     add('')
 
     # --- main loop ---------------------------------------------------
-    add('COLOR 15, 1, 0, 3')
+    add('SET THEME "classic"                REM or default, norton, green, amber, paper, mono')
     add('DO')
     add('    GOSUB desktop')
     menu = re.sub(r'[^A-Za-z0-9 ]', '', title).strip() or 'Records'
@@ -153,7 +153,7 @@ def build_form_program(table, columns, key, engine, database, title="", made_on=
     add(f'    IF choice$ = "{menu}.Delete" THEN GOSUB delete_record')
     add('    IF choice$ = "Help.Keys" THEN x = show_help()')
     add('LOOP UNTIL choice$ = "File.Quit" OR choice$ = ""')
-    add('COLOR 7, 0')
+    add('SET THEME "default"')
     add('CLS')
     add('END')
     add('')
