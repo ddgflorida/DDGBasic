@@ -62,7 +62,8 @@ Ctrl-F             find                      F3       find the next one
 Tab / Shift-Tab    indent / unindent         Ins      insert or overwrite
 Home / End         start / end of the line   Ctrl-Home / Ctrl-End   start / end of the program
 PgUp / PgDn        a screen up / down        Ctrl-Left / Ctrl-Right a word left / right
-The mouse          click to move the cursor; the wheel scrolls"""
+The mouse          click to move the cursor or open a menu; the wheel scrolls
+                   (Options > Mouse off gives the terminal its own text selection back)"""
 
 
 class Editor:
@@ -609,7 +610,7 @@ class Editor:
         ('Edit', ['Undo           Ctrl-Z', '-', 'Delete line    Ctrl-Y', 'Duplicate line Ctrl-D', '-',
                   'Find...        Ctrl-F', 'Find next      F3', 'Go to line...  Ctrl-G']),
         ('Run', ['Start          F5']),
-        ('Options', ['Blue screen', 'Black screen']),
+        ('Options', ['Blue screen', 'Black screen', '-', 'Mouse on', 'Mouse off']),
         ('Help', ['Help on word   F1', 'Topics...      Shift-F1', 'Keys', '-', 'About']),
     ]
 
@@ -652,6 +653,9 @@ class Editor:
             self.set_scheme('blue')
         elif name == 'Options.Black screen':
             self.set_scheme('black')
+        elif name in ('Options.Mouse on', 'Options.Mouse off'):
+            SCREEN.keys.set_mouse(name.endswith('on'))
+            self.message = 'The mouse is ' + ('on' if name.endswith('on') else 'off')
         elif name == 'Help.Help on word':
             topic = self.help_topic_at_cursor()
             if topic:
@@ -749,7 +753,9 @@ class Editor:
                     self.row = min(len(self.lines) - 1, self.top + r - first)
                     self.col = max(0, self.left + c - 2)
                 elif r == 1:
-                    SCREEN.keys.pending.insert(0, '\r')  # a click on the menu bar opens it
+                    # A click on the menu bar: hand the same click to the menu bar, which opens
+                    # the menu under it
+                    SCREEN.keys.pending[0:0] = list(f'\x1b[<0;{c};1M')
                     name = self.menu()
                     if name and not self.command(name):
                         return
@@ -784,9 +790,12 @@ def run_ide(path, runner, help_topics, get_help):
         print("The IDE needs an interactive terminal.", file=sys.stderr)
         return 1
     editor = Editor(path, runner, help_topics, get_help)
+    mouse_before = SCREEN.keys.mouse_wanted
+    SCREEN.keys.set_mouse(True)              # off by default on Windows; the IDE wants clicks
     try:
         editor.loop()
     finally:
+        SCREEN.keys.set_mouse(mouse_before)
         SCREEN.keys.block_suspend = False
         SCREEN.restore()
         sys.stdout.write('\x1b[0m\x1b[2J\x1b[H')

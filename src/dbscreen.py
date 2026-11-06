@@ -130,8 +130,9 @@ class KeyReader:
                     if not k32.GetConsoleMode(handle, ctypes.byref(mode)):
                         return
                     self._win_saved_mode = mode.value
-                    # VT input (0x0200) and extended flags (0x0080), without quick-edit (0x0040)
-                    k32.SetConsoleMode(handle, (mode.value | 0x0200 | 0x0080) & ~0x0040)
+                    # VT input (0x0200), mouse input (0x0010) and extended flags (0x0080), without
+                    # quick-edit (0x0040), which would take clicks for selecting text
+                    k32.SetConsoleMode(handle, (mode.value | 0x0200 | 0x0080 | 0x0010) & ~0x0040)
                 elif self._win_saved_mode is not None:
                     k32.SetConsoleMode(handle, self._win_saved_mode)
                     self._win_saved_mode = None
