@@ -189,6 +189,15 @@ check(e.execute_immediate('? total') == [' 100'], 'and can change them')
 check(program.tokens is tokens and program.token_index == index, "the paused program's place is kept")
 check(e.session is None, 'no separate session is made while a program is paused')
 
+# Every menu item and shortcut key gives a command the IDE knows
+for menu, items in Editor.MENUS:
+    for item in items:
+        if item.strip() != '-':
+            name = Editor.command_name(menu, item)
+            check(name in Editor.COMMANDS, f'the menu item {menu} > {item.strip()} gives an unknown command: {name}')
+for key, name in Editor.KEY_COMMANDS.items():
+    check(name in Editor.COMMANDS, f'the key {key!r} gives an unknown command: {name}')
+
 if failures:
     for f in failures:
         print('FAIL:', f)

@@ -981,6 +981,13 @@ class Editor:
         ('Help', ['Help on word   F1', 'Topics...      Shift-F1', 'Keys', '-', 'About']),
     ]
 
+    @staticmethod
+    def command_name(menu, item):
+        """The command of a menu item: 'Run.Start/Continue' for Run's 'Start/Continue  F5'
+        (the shortcut at the end is not part of it)."""
+        item = re.sub(r'\s+(F\d+|(Ctrl|Alt|Shift)-\S+)$', '', item.strip())
+        return f'{menu}.{item.strip()}'
+
     def menu(self, first_letter=None):
         if first_letter:
             SCREEN.keys.pending.insert(0, first_letter)
@@ -988,7 +995,7 @@ class Editor:
         if not choice:
             return None
         menu, item = choice.split('.', 1)
-        return f'{menu}.{item.split("  ")[0].strip()}'
+        return self.command_name(menu, item)
 
     def command(self, name):
         """Runs a menu command; returns False to leave the IDE."""
@@ -1045,7 +1052,7 @@ class Editor:
             self.set_scheme('blue')
         elif name == 'Options.Black screen':
             self.set_scheme('black')
-        elif name == 'Options.Immediate window F6' or name == 'Options.Immediate window':
+        elif name == 'Options.Immediate window':
             if self.new_session is None:
                 bell()
             elif self.show_immediate and self.focus == 'editor':
@@ -1072,6 +1079,16 @@ class Editor:
             SCREEN.alert('DbBasic IDE;A BASIC with SQLite and DuckDB built in.;Press F1 on any keyword for its help.',
                          ['OK'])
         return True
+
+    # Every command a menu item or a key can give (tests/ide_check.py checks the menus against it)
+    COMMANDS = {
+        'File.New', 'File.Open...', 'File.Save', 'File.Save As...', 'File.Exit',
+        'Edit.Undo', 'Edit.Delete line', 'Edit.Duplicate line', 'Edit.Find...', 'Edit.Find next',
+        'Edit.Go to line...', 'Run.Start/Continue', 'Run.Step', 'Run.Breakpoint', 'Run.Clear breakpoints',
+        'Run.Stop', 'Run.Output screen', 'Options.Blue screen', 'Options.Black screen', 'Options.Mouse on',
+        'Options.Mouse off', 'Options.Immediate window', 'Help.Help on word', 'Help.Topics...', 'Help.Keys',
+        'Help.About',
+    }
 
     # --- the main loop ---------------------------------------------------------------------
     KEY_COMMANDS = {
