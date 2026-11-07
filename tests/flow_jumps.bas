@@ -110,6 +110,23 @@ depth_log$ = ""
 GOSUB level1
 IF depth_log$ <> "1(2(3)2)1" THEN ERROR 1, "12: " & depth_log$
 
+REM 13. RESUME label after an error inside a FUNCTION leaves the function
+log$ = ""
+ON ERROR GOTO h_fn
+r = divides(5)
+log$ = log$ & "|not reached"
+fn_done:
+ON ERROR GOTO 0
+IF log$ <> "H" THEN ERROR 1, "13: " & log$
+
+REM 14. EXIT FOR in a single-line IF on a one-line FOR
+FOR i = 1 TO 5 : IF i = 2 THEN EXIT FOR : NEXT
+IF i <> 2 THEN ERROR 1, "14: " & i
+
+REM 15. END on its own line followed by IF is not END IF
+r = after_end(4)
+IF r <> 8 THEN ERROR 1, "15: " & r
+
 PRINT "flow_jumps: all checks passed"
 REM EXPECT: flow_jumps: all checks passed
 END
@@ -175,7 +192,22 @@ level3:
         RETURN
     LOOP
 
+h_fn:
+    log$ = log$ & "H"
+    RESUME fn_done
+
+FUNCTION divides(v)
+    divides = v / 0
+END FUNCTION
+
 FUNCTION has_return(v)
     has_return = v * 2
     RETURN
+END FUNCTION
+FUNCTION after_end(v)
+    IF v > 100 THEN
+        END
+        IF v > 200 THEN v = 0
+    END IF
+    after_end = v * 2
 END FUNCTION

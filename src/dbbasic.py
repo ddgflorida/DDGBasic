@@ -1093,6 +1093,11 @@ class GotoJump(BaseException):
         super().__init__(target)
         self.target = target
 
+class ResumeJump(GotoJump):
+    """RESUME label: a GOTO that may also leave a FUNCTION, since the handler and its label
+    belong to the main program even when the error happened inside a function."""
+    pass
+
 class ProgramEnd(BaseException):
     """Raised by END to stop the running program: the main program, a RUN child (control
     returns to the caller) or the current REPL input. A BaseException, so generic
@@ -2755,7 +2760,7 @@ class Interpreter:
                     self._error("Cannot RESUME NEXT here: the program location was lost.")
                 self.token_index = self.error_resume_index
             else:
-                raise GotoJump(resume.target)
+                raise ResumeJump(resume.target)
 
     def _skip_reached_branch(self):
         """Reaching an ELSE, ELSEIF or END IF while running (after a GOTO into an IF's THEN
@@ -3831,7 +3836,7 @@ class Interpreter:
                 if body_start <= jump.target < self._block_end_index(body_start, end_token):
                     self.token_index = jump.target      # target is inside this block: keep going
                     continue
-                if end_token == 'END FUNCTION':
+                if end_token == 'END FUNCTION' and not isinstance(jump, ResumeJump):
                     self._error("GOTO cannot jump out of a FUNCTION.")
                 raise                                   # target is outside: end this block
             if self.program_terminated: break
@@ -7357,7 +7362,9 @@ class Interpreter:
         if_depth, previous = 0, None
         while self._current_token() and self._current_token()[0] != 'NEWLINE':
             kind = self._current_token()[0]
-            if kind in ('FOR', 'FOR EACH'):
+            if previous and previous[0] == 'EXIT':
+                pass                        # EXIT FOR / EXIT DO / EXIT WHILE open no loop
+            elif kind in ('FOR', 'FOR EACH'):
                 open_loops['NEXT'] += 1
             elif kind == 'WHILE' and not (previous and previous[0] in ('DO', 'LOOP')):
                 open_loops['WEND'] += 1
