@@ -1326,7 +1326,7 @@ CLOSE #1
 PRINT [#n,] USING mask_expr; expr [, expr ...] [;]
 ```
 
-The mask is any string expression. Values are separated by **commas**. A trailing `;` suppresses the newline. With no values, the `;` can be left out (`PRINT USING "Totals:"` prints the literal text). `Formatter.format` walks the mask from left to right:
+The mask is any string expression. Values are separated by commas or semicolons. A trailing `;` suppresses the newline. A SQL NULL prints as an empty field. With no values, the `;` can be left out (`PRINT USING "Totals:"` prints the literal text). `Formatter.format` walks the mask from left to right:
 
 - Literal characters are copied to the output.
 - When the walker reaches a character from `# 0 9 * ! & \ $ < > ^`, it tries to match a field. The next value is formatted into that field.
