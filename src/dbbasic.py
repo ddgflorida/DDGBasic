@@ -1102,6 +1102,18 @@ class ProgramEnd(BaseException):
 class FunctionReturn(Exception):
     """Exception raised by EXIT FUNCTION to return early from a user-defined function."""
     pass
+
+class GosubReturn(BaseException):
+    """Raised by RETURN: the GOSUB that called the subroutine catches it and goes on after
+    itself, so loops and IF blocks the RETURN leaves (inside the subroutine) end properly."""
+    pass
+
+class ResumeSignal(BaseException):
+    """Raised by RESUME: the error handler's caller catches it. target is a label's token
+    index for RESUME label, or None for RESUME NEXT."""
+    def __init__(self, target=None):
+        super().__init__(target)
+        self.target = target
     
 # =================================================================
 # APPLICATION LOGIC
@@ -1163,10 +1175,10 @@ class Lexer:
         #print("DEBUG BEFORE:",self.raw_source_code)
         processed_code = preprocess_echo_statements(self.raw_source_code)
         #print("DEBUG AFTER:", processed_code)
+        # Token positions are offsets in the text that was tokenized (_tokenize sets
+        # token_line_starts from it); its lines are the source's lines, since ECHO rewriting
+        # and keyword joining keep them
         self.tokens = self._tokenize(processed_code)
-        # Token positions are offsets in the text that was tokenized; its lines are the source's
-        # lines (ECHO rewriting and keyword joining keep them), so line numbers come from it
-        self.token_line_starts = [0] + [m.end() for m in re.finditer(r"\n", self.modified_source_code)]
 
     def get_line_col(self, pos):
         """The line and column (from 1) of a token position."""
@@ -1289,7 +1301,10 @@ class Lexer:
             r'\bWITH\s+FILESONLY\b': 'WITHFILESONLY', 
             
         }
-        compiled = [(re.compile(pattern, re.IGNORECASE), repl) for pattern, repl in replacements.items()]
+        # The two words must be on one line: END at the end of a line and IF, FUNCTION or LOOP
+        # starting the next are separate statements, not END IF / END FUNCTION / END LOOP
+        compiled = [(re.compile(pattern.replace(r'\s+', r'[ \t]+'), re.IGNORECASE), repl)
+                    for pattern, repl in replacements.items()]
         # Reverse map (ENDTRANSACTION -> END TRANSACTION) so SQL text cut from the
         # joined source can be restored before it is sent to the database.
         spaced = {repl: pattern.replace(r'\b', '').replace(r'\s+', ' ') for pattern, repl in replacements.items()}
@@ -1301,12 +1316,13 @@ class Lexer:
             # Padded to the original length (END IF -> 'ENDIF '), so the positions of the tokens
             # after it still match the source and error messages give the right line and column
             for regex, repl in compiled:
-                chunk = regex.sub(lambda m, repl=repl: repl if '\n' in m.group(0)
-                                  else repl + ' ' * max(0, len(m.group(0)) - len(repl)), chunk)
+                chunk = regex.sub(lambda m, repl=repl: repl + ' ' * max(0, len(m.group(0)) - len(repl)), chunk)
             return chunk
 
         code = self._outside_literals(source_code_to_process, join_keywords)
         self.modified_source_code = code
+        # Line numbers of token positions (get_line_col), needed already for lexer errors
+        self.token_line_starts = [0] + [m.end() for m in re.finditer(r"\n", code)]
 
         token_specification = [
             ('BELL', r'\bBELL\b(?!\$)'), 
@@ -2423,6 +2439,7 @@ class Interpreter:
         self.file_handles = {}
         self.command_args = cmd_args if cmd_args is not None else []
         self.gosub_stack = []
+        self.gosub_floor = 0      # gosub_stack depth when the current FUNCTION was called
         self.labels = {}
         self.user_functions = {}  # {NAME_UPPER: (body_token_index, [param_names], orig_name, tokens)}
         # Stack of active UDF call frames. Each frame is a dict with:
@@ -2469,6 +2486,7 @@ class Interpreter:
         Scans the token list to map all control structures.
         """
         stack = []
+        self.branch_endif = {}            # a block IF's ELSE / ELSEIF token index -> its END IF
         
         for index, token in enumerate(self.tokens):
             token_type = token[0]
@@ -2532,6 +2550,9 @@ class Interpreter:
                     continue  # Let parser handle the error
                 if_type, if_index = stack.pop()
                 self.jump_map[if_index]['endif'] = index
+                for branch in self.jump_map[if_index]['elseifs'] + [self.jump_map[if_index]['else']]:
+                    if branch is not None:
+                        self.branch_endif[branch] = index
             
         if stack:
             start_type, start_index = stack[-1]
@@ -2713,6 +2734,66 @@ class Interpreter:
             
         return statements
     
+    def _run_error_handler(self):
+        """Runs the ON ERROR handler until its RESUME. RESUME NEXT leaves token_index at the
+        resume point; RESUME label raises GotoJump, so the blocks between here and the label
+        end as they do for GOTO. A GOTO inside the handler stays inside it."""
+        self.token_index = self.labels[self.error_handler_label]
+        try:
+            while True:
+                try:
+                    if not self._parse_line():
+                        raise ProgramEnd()        # the handler ran off the end of the program
+                except GotoJump as jump:
+                    self.token_index = jump.target
+                if self.program_terminated:
+                    raise ProgramEnd()
+        except ResumeSignal as resume:
+            self.in_error_handler = False
+            if resume.target is None:
+                if self.error_resume_index is None:
+                    self._error("Cannot RESUME NEXT here: the program location was lost.")
+                self.token_index = self.error_resume_index
+            else:
+                raise GotoJump(resume.target)
+
+    def _skip_reached_branch(self):
+        """Reaching an ELSE, ELSEIF or END IF while running (after a GOTO into an IF's THEN
+        part, or a RESUME NEXT into it) means that part is done: a block IF's ELSE/ELSEIF goes
+        to after its END IF, a single-line IF's ELSE to the end of the line, and END IF is
+        passed over. Returns False when the word is not part of an IF (a real error)."""
+        index = self.token_index
+        word = self.tokens[index][0]
+        if word == 'END IF':
+            self._next_token()
+            return True
+        if index in self.branch_endif:
+            self.token_index = self.branch_endif[index] + 1
+            return True
+        if word == 'ELSE' and index > 0 and self.tokens[index - 1][0] != 'NEWLINE':
+            while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'EOF'):
+                self._next_token()                   # the ELSE part of a single-line IF
+            return True
+        return False
+
+    def _resume_point(self, index):
+        """Where RESUME NEXT goes after an error in the statement at index: the next statement,
+        or, for a statement that opens a block (an IF, FOR, WHILE or DO whose own line failed),
+        the statement after the whole block."""
+        token = self.tokens[index] if index < len(self.tokens) else None
+        try:
+            if token and token[0] == 'IF' and self.jump_map.get(index, {}).get('endif') is not None:
+                return self._find_next_statement_index(self.jump_map[index]['endif'])
+            if token and token[0] == 'DO' and self.jump_map.get(index, {}).get('loop') is not None:
+                return self._find_next_statement_index(self.jump_map[index]['loop'])
+            if token and token[0] in ('FOR', 'WHILE'):
+                end = self._block_end_index(index + 1, 'NEXT' if token[0] == 'FOR' else 'WEND')
+                if end < len(self.tokens):
+                    return self._find_next_statement_index(end)
+        except Exception:
+            pass
+        return self._find_next_statement_index(index)
+
     def _find_next_statement_index(self, start_index):
         """Find the index of the next statement (after a COLON or NEWLINE token)"""
         index = start_index
@@ -3163,6 +3244,7 @@ class Interpreter:
         saved_index = self.token_index
         saved_tokens = self.tokens
         saved_gosub_depth = len(self.gosub_stack)
+        saved_gosub_floor, self.gosub_floor = self.gosub_floor, saved_gosub_depth
         self.tokens = body_tokens
         self.token_index = body_index
 
@@ -3185,6 +3267,7 @@ class Interpreter:
             # Trim gosub_stack to its pre-call depth in case the UDF didn't balance GOSUB/RETURN
             if len(self.gosub_stack) > saved_gosub_depth:
                 self.gosub_stack = self.gosub_stack[:saved_gosub_depth]
+            self.gosub_floor = saved_gosub_floor
             # Pop the call frame and restore variables from it.
             popped = self._fn_call_stack.pop()
             # Remove anything created during the call that didn't exist before
@@ -3856,7 +3939,7 @@ class Interpreter:
                 continue
 
             # Store the resume point BEFORE parsing the statement
-            resume_point = self._find_next_statement_index(self.token_index)
+            resume_point = self._resume_point(self.token_index)
             
             try:
                 self._parse_statement()
@@ -3868,13 +3951,15 @@ class Interpreter:
                 if not self.error_handler_label or self.in_error_handler:
                     raise e
                     
-                # Set error state with the saved resume point
+                # Set error state with the saved resume point, and run the handler here: RESUME
+                # NEXT comes back to this line's next statement; RESUME label is a GOTO
                 self.in_error_handler = True
                 self.error_resume_index = resume_point
                 if self.variables.get('ERR', 0.0) == 0.0:
                     self.variables['ERR'] = 1.0
-                self.variables['ERRMSG$'] = str(e)
-                self.token_index = self.labels[self.error_handler_label]
+                self.variables['ERRMSG$'] = getattr(e, 'basic_message', str(e))
+                self._run_error_handler()
+                continue
             
             # (Note: The old colon check here is now redundant but harmless)
             if self._current_token() and self._current_token()[0] == 'COLON':
@@ -4096,6 +4181,8 @@ class Interpreter:
             self._parse_tron_statement()
         elif token[0] == 'TROFF':                                 # trace off
             self._parse_troff_statement()
+        elif token[0] in ('ELSE', 'ELSEIF', 'END IF') and self._skip_reached_branch():
+            pass
         elif token[0] in ['ELSE', 'ELSEIF', 'END IF', 'NEXT', 'WEND', 'END LOOP', 'LOOP']:
             self._error(f"Unexpected '{token[0]}'")
         elif token[0] == 'COPY':
@@ -5274,39 +5361,52 @@ class Interpreter:
         return None
 
     def run(self):
-        try:
-            while self._current_token() and self._current_token()[0] != 'END':
-                if not self._parse_top_line():
-                    break
-                if self.program_terminated:
-                    break
-        except ProgramEnd:
-            return
-        except LoopExit as e:
-            self._error(f"'{e.args[0]}' without matching loop structure")
-        except Exception as e:
-            # If we get here and there's an error handler but we're not in it, jump to it
-            if self.error_handler_label and not self.in_error_handler:
-                self.in_error_handler = True
-                self.variables['ERR'] = 1.0
-                self.variables['ERRMSG$'] = str(e)
-                self.token_index = self.labels[self.error_handler_label]
-                # Continue execution from error handler
+        while True:
+            try:
+                while self._current_token() and self._current_token()[0] != 'END':
+                    if not self._parse_top_line():
+                        break
+                    if self.program_terminated:
+                        break
+                return
+            except ProgramEnd:
+                return
+            except LoopExit as e:
                 try:
-                    while self._current_token() and self._current_token()[0] != 'END':
-                        if not self._parse_top_line():
-                            break
-                        if self.program_terminated:
-                            break
-                except ProgramEnd:
-                    pass
-                except Exception as handler_error:
-                    # Errors raised inside the handler are not trapped again
-                    print(f"Runtime Error: {handler_error}", file=sys.stderr)
+                    self._error(f"'{e.args[0]}' without matching loop structure")
+                except Exception as error:
+                    print(f"Runtime Error: {error}", file=sys.stderr)
                     self.exit_code = 1
-            else:
+                return
+            except (GosubReturn, ResumeSignal) as e:
+                word = 'RETURN' if isinstance(e, GosubReturn) else 'RESUME'
+                print(f"Runtime Error: {word} without {'GOSUB' if word == 'RETURN' else 'an active error'}.",
+                      file=sys.stderr)
+                self.exit_code = 1
+                return
+            except Exception as e:
+                # An error outside any statement's own handling: run the ON ERROR handler here
+                if self.error_handler_label and not self.in_error_handler:
+                    self.in_error_handler = True
+                    self.error_resume_index = None
+                    self.variables['ERR'] = 1.0
+                    self.variables['ERRMSG$'] = str(e)
+                    try:
+                        self._run_error_handler()
+                    except GotoJump as jump:      # RESUME label
+                        self.token_index = jump.target
+                        continue
+                    except ProgramEnd:
+                        return
+                    except Exception as handler_error:
+                        # Errors raised inside the handler are not trapped again
+                        print(f"Runtime Error: {handler_error}", file=sys.stderr)
+                        self.exit_code = 1
+                        return
+                    continue
                 print(f"Runtime Error: {e}", file=sys.stderr)
                 self.exit_code = 1
+                return
 
     def _parse_execute_statement(self):
         self._expect('EXECUTE')
@@ -5365,8 +5465,7 @@ class Interpreter:
             #print(f"DEBUG: Resuming at token index {self.error_resume_index}")
             #print(f"DEBUG: Token at resume index: {self.tokens[self.error_resume_index] if self.error_resume_index < len(self.tokens) else 'END'}")
             
-            self.token_index = self.error_resume_index
-            self.in_error_handler = False
+            raise ResumeSignal(None)
         elif self._current_token() and self._current_token()[0] == 'ID':
             # Resume at a specific label
             label_name = self._current_token()[1]
@@ -5376,9 +5475,7 @@ class Interpreter:
                 self._error("RESUME without an active error.")
             if label_name not in self.labels:
                 self._error(f"Label '{label_name}' not found for RESUME.")
-            
-            self.token_index = self.labels[label_name]
-            self.in_error_handler = False
+            raise ResumeSignal(self.labels[label_name])
         else:
             self._error("Expected NEXT after RESUME.")
  
@@ -7374,11 +7471,9 @@ class Interpreter:
     def _run_if_branch(self, stop_at):
         """Run the statements of a block-IF branch up to stop_at (its ELSEIF/ELSE/END IF).
         A GOTO to a label inside the branch continues there; one outside leaves the IF.
-        A GOSUB runs its subroutine, wherever it is, and its RETURN comes back into the branch.
         Returns True if the program terminated."""
         branch_start = self.token_index
-        depth = len(self.gosub_stack)
-        while self.token_index < stop_at or len(self.gosub_stack) > depth:
+        while self.token_index < stop_at:
             if self.program_terminated:
                 return True
             try:
@@ -8440,14 +8535,11 @@ class Interpreter:
         self.variables['ERR'] = float(error_num)
         self.variables['ERRMSG$'] = error_message
         
-        # Only raise if there's no error handler, otherwise let the normal error handling take over
-        if not self.error_handler_label or self.in_error_handler:
-            raise RuntimeError(f"Error {error_num}: {error_message}")
-        else:
-            # Jump to error handler (same logic as other errors)
-            self.in_error_handler = True
-            self.error_resume_index = self._find_next_statement_index(self.token_index)
-            self.token_index = self.labels[self.error_handler_label]
+        # Raised like any other error: an ON ERROR handler gets it (with ERR and ERRMSG$ as
+        # set above), otherwise it stops the program
+        error = RuntimeError(f"Error {error_num}: {error_message}")
+        error.basic_message = error_message
+        raise error
         
     def _parse_run_statement(self):
         """
@@ -14137,14 +14229,35 @@ class Interpreter:
                 
         
     def _parse_gosub_statement(self):
+        """GOSUB label: runs the subroutine until its RETURN, then goes on after the GOSUB.
+        The subroutine runs here, as a call, so a RETURN from inside a loop or IF block in
+        it ends those blocks, and a GOTO inside it stays inside it."""
         self._expect('GOSUB'); label_name = self._expect('ID')[1]
         if label_name not in self.labels: self._error(f"Label '{label_name}' not found.")
-        self.gosub_stack.append(self.token_index); self.token_index = self.labels[label_name]
-        
+        return_index = self.token_index
+        self.gosub_stack.append(return_index)
+        depth = len(self.gosub_stack)
+        self.token_index = self.labels[label_name]
+        try:
+            while True:
+                try:
+                    if not self._parse_line():
+                        raise ProgramEnd()        # the subroutine ran off the end of the program
+                except GotoJump as jump:
+                    self.token_index = jump.target
+                if self.program_terminated:
+                    raise ProgramEnd()
+        except GosubReturn:
+            pass
+        finally:
+            del self.gosub_stack[depth - 1:]
+        self.token_index = return_index
+
     def _parse_return_statement(self):
         self._expect('RETURN')
-        if not self.gosub_stack: self._error("RETURN without GOSUB.")
-        self.token_index = self.gosub_stack.pop()
+        if len(self.gosub_stack) <= self.gosub_floor:
+            self._error("RETURN without GOSUB.")
+        raise GosubReturn()
 
     EMAIL_WORDS = ('TO', 'CC', 'BCC', 'SUBJECT', 'BODY', 'HTMLBODY', 'ATTACH')
 
