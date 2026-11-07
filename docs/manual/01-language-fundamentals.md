@@ -876,7 +876,7 @@ h.key = value        -- also creates h automatically if it is not already a hash
 | Syntax | Read | Write | Key matching |
 |--------|------|-------|--------------|
 | `h("key")` / `h(expr)` | yes | yes (one level, `h` must already be a hash) | exact case, unless `SET HASH_KEYS IGNORE_CASE` |
-| `h.key` / `h.a.b.c` | yes | yes (auto-creates nested hashes) | reads: exact first, then case-insensitive; writes: key case kept as written |
+| `h.key` / `h.a.b.c` | yes | yes (auto-creates nested hashes) | reads: exact first, then without a trailing `$`, then case-insensitive; writes: key kept as written, unless only the key without `$` exists |
 
 - With parentheses, the key can be any expression. Whole numbers are converted
   to strings without `.0` (`m(1)` and `m(2.0)` use keys `"1"` and `"2"`).
@@ -887,6 +887,8 @@ h.key = value        -- also creates h automatically if it is not already a hash
 - After a dot, the key name can be an identifier or a keyword word
   (`h.size`, `h.user`, `h.type`). It cannot be punctuation, a number or a
   string.
+- `h.name$` finds a `"name"` key, so a `$` can mark text fields from a query
+  or `PARSEJSON` (`row.city$`), and `h.name$ = ...` updates that same key.
 - The two forms can be mixed: `person("address").zip`, `cfg.tags(0)`.
 - `PRINT h` shows the hash as indented JSON.
 

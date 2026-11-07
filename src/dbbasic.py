@@ -3629,14 +3629,18 @@ class Interpreter:
                 return None
             variable = self.variables[actual_var_key] = {}
 
-        # Hash key lookup: exact match first, then case-insensitive
-        if hash_key in variable:
-            return variable[hash_key]
-            
-        hash_key_upper = hash_key.upper()
-        for existing_key in variable:
-            if existing_key.upper() == hash_key_upper:
-                return variable[existing_key]
+        # Nested fields (:h.a.b): walk down to the last hash
+        *outer_keys, hash_key = hash_key.split('.')
+        for key in outer_keys:
+            match = self._dot_key(variable, key)
+            if match is None or not isinstance(variable[match], dict):
+                return None
+            variable = variable[match]
+
+        # Hash key lookup: as h.key reads it
+        match = self._dot_key(variable, hash_key)
+        if match is not None:
+            return variable[match]
         
         # --- 4. Auto-create Hash Key if Needed ---
         if auto_create:
@@ -4455,6 +4459,24 @@ class Interpreter:
             name += f'.{key}' if kind == 'dot' else f'({self._to_string(key)})'
         return name
 
+    @staticmethod
+    def _dot_key(hash_value, key_name, for_write=False):
+        """The existing key that h.key_name refers to, or None. The key as written comes
+        first, then without its $ suffix (h.name$ finds a "name" field from a query or
+        JSON); reads then also try both without regard to case."""
+        if key_name in hash_value:
+            return key_name
+        base = key_name[:-1] if key_name.endswith('$') else key_name
+        if base != key_name and base in hash_value:
+            return base
+        if for_write:
+            return None
+        for wanted in (key_name.lower(), base.lower()):
+            for existing in hash_value:
+                if str(existing).lower() == wanted:
+                    return existing
+        return None
+
     def _get_target_slot(self, target):
         """The (container, key) that holds a GET target's value. A missing hash is created,
         as assignment does; a hash field is found the way rec.name reads it (case-insensitively)."""
@@ -4475,9 +4497,8 @@ class Interpreter:
                     self._error("Array index out of bounds.")
                 container, key = value, index
             elif kind == 'dot':
-                base = str(step).rstrip('$')
-                match = base if base in value else next((k for k in value if str(k).lower() == base.lower()), None)
-                container, key = value, match if match is not None else self._normalize_hash_key(base)
+                match = self._dot_key(value, str(step))
+                container, key = value, match if match is not None else self._normalize_hash_key(step)
             else:
                 container, key = value, self._normalize_hash_key(step)
         return container, key
@@ -4946,7 +4967,9 @@ class Interpreter:
             else:
                 self._error(f"Unexpected '{tok[1]}' in REPORT; expected TITLE, GROUP BY, TOTAL, FORMAT, PAGE, TO FILE, TO VIEW or INTO")
 
-        rows = self._execute_sql(sql, is_query=True) or []
+        rows = self._execute_sql(sql, is_query=True)
+        if rows is None:
+            return  # the query failed with SQL_FATAL_ERRORS OFF: ERR is set
         columns = [d[0] for d in self.db_cursor.description] if self.db_cursor.description else []
         rows = [[float(v) if isinstance(v, Decimal) else v for v in r] for r in rows]
         try:
@@ -5653,7 +5676,7 @@ class Interpreter:
             elif lowercase_keys and isinstance(serializable_data, dict):
                 serializable_data = {k.lower(): v for k, v in serializable_data.items()}
 
-            return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys)
+            return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys, default=self._json_default)
         # --- HASH FUNCTIONS ---
         elif name == 'PARSEJSON':
             if len(args) != 1:
@@ -6339,9 +6362,11 @@ class Interpreter:
         elif token[0] == 'LPAREN':
             if self._peek_token() and self._peek_token()[0] == 'SQL_STRING':
                 results = self._execute_sql(self._extract_sql_from_parens(), is_query=True)
+                if results is None:
+                    return ""  # the query failed with SQL_FATAL_ERRORS OFF: ERR is set
                 if len(results) != 1 or len(results[0]) != 1:
                     self._error("Scalar subquery must return one row/column.")
-                return results[0][0]
+                return self._db_value(results[0][0])
             else: 
                 self._next_token()
                 res = self._parse_condition()
@@ -6350,8 +6375,10 @@ class Interpreter:
         elif token[0] == 'SQL_STRING':
             self._next_token()
             results = self._execute_sql(token[1], is_query=True)
+            if results is None:
+                return ""  # the query failed with SQL_FATAL_ERRORS OFF: ERR is set
             if len(results) == 1 and len(results[0]) == 1:
-                return results[0][0]
+                return self._db_value(results[0][0])
             else:
                 self._error("A subquery used as a value must return exactly one row and one column.")
             return results[0][0]
@@ -6468,28 +6495,11 @@ class Interpreter:
                     else:
                         self._error(f"Invalid key name '{key_token[1]}' after '.'")
                     
-                    is_string_access = key_name.endswith('$')
-                    base_key = key_name.rstrip('$')
-                    
-                    #print(f"DEBUG: Looking for key '{base_key}' in hash with keys: {list(current_value.keys())}", file=sys.stderr)
-                    
-                    # 1. Try exact match first (fastest)
-                    if base_key in current_value:
-                        current_value = current_value[base_key]
-                        #print(f"DEBUG: Found exact match", file=sys.stderr)
+                    match = self._dot_key(current_value, key_name)
+                    if match is not None:
+                        current_value = current_value[match]
                     else:
-                        # 2. Fall back to case-insensitive search for dot notation forgiveness
-                        found = False
-                        for candidate_key in current_value.keys():
-                            if candidate_key.lower() == base_key.lower():
-                                current_value = current_value[candidate_key]
-                                #print(f"DEBUG: Found case-insensitive match: '{candidate_key}'", file=sys.stderr)
-                                found = True
-                                break
-                        
-                        if not found:
-                            current_value = "" if is_string_access else 0.0
-                            #print(f"DEBUG: No match found, using default", file=sys.stderr)
+                        current_value = "" if key_name.endswith('$') else 0.0
                     continue
                 else: 
                     break
@@ -6618,7 +6628,7 @@ class Interpreter:
                 self._expect('RPAREN')
                 results = self._execute_sql(sql_query, is_query=True)
                 # Flatten list of tuples into a set for efficient lookup
-                value_set = {row[0] for row in results}
+                value_set = {self._db_value(row[0]) for row in results or []}
                 is_member = left in value_set
                 return -1.0 if is_member else 0.0
             
@@ -6928,6 +6938,22 @@ class Interpreter:
         if isinstance(value, (bytes, bytearray)):
             return base64.b64encode(bytes(value)).decode('ascii')
         return str(value)
+
+    @staticmethod
+    def _db_value(value):
+        """A database value as BASIC holds it: DECIMAL becomes a number, dates, times
+        and timestamps become ISO text, DuckDB lists and structs are converted inside."""
+        if isinstance(value, Decimal):
+            return float(value)
+        if isinstance(value, datetime):
+            return value.isoformat(sep=' ')
+        if hasattr(value, 'isoformat'):
+            return value.isoformat()
+        if isinstance(value, list):
+            return [Interpreter._db_value(v) for v in value]
+        if isinstance(value, dict):
+            return {k: Interpreter._db_value(v) for k, v in value.items()}
+        return value
 
     def _write_as_json(self, results, headers, stream, options={}):
         json.dump([dict(zip(headers, row)) for row in results], stream, indent=2, default=self._json_default)
@@ -7844,13 +7870,13 @@ class Interpreter:
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'ELSE']:
                 value = self._parse_condition()
                 if isinstance(value, dict): 
-                    parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2))
+                    parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2, default=self._json_default))
                 elif isinstance(value, list): 
                     formatted_list_items = []
                     for item in value:
                         if isinstance(item, dict):
                             # If the item is a hash, format it as a JSON string.
-                            formatted_list_items.append(json.dumps(self._basic_to_json_serializable(item)))
+                            formatted_list_items.append(json.dumps(self._basic_to_json_serializable(item), default=self._json_default))
                         else:
                             # Otherwise, use the standard formatting.
                             formatted_list_items.append(self._format_output_value(item))
@@ -11309,7 +11335,7 @@ class Interpreter:
                 # Set up the loop variable for this iteration
                 record_hash = {}
                 for i, cell_value in enumerate(row):
-                    final_value = cell_value if cell_value is not None else ""
+                    final_value = self._db_value(cell_value) if cell_value is not None else ""
                     record_hash[str(i + 1)] = final_value
                     if i < len(column_names):
                         record_hash[column_names[i]] = final_value
@@ -11683,6 +11709,7 @@ class Interpreter:
                     self._error(f"Invalid token '{key_token[1]}' used as a key name.")
                 self._next_token() # Consume the key token
                 current_key = self._normalize_hash_key(key_token[1])
+                current_key = self._dot_key(current_hash_level, current_key, for_write=True) or current_key
                 # Step 3: Check what token comes AFTER the key we just consumed.
                 if self._current_token() and self._current_token()[0] == 'DOT':
                     # If another dot follows, this key must lead to another hash.
