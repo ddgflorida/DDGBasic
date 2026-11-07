@@ -2487,6 +2487,7 @@ class Interpreter:
         self.gosub_floor = 0      # gosub_stack depth when the current FUNCTION was called
         self.labels = {}
         self.user_functions = {}  # {NAME_UPPER: (body_token_index, [param_names], orig_name, tokens)}
+        self._function_ends = {}  # (id(tokens), body_token_index) -> index of its END FUNCTION
         # Stack of active UDF call frames. Each frame is a dict with:
         #   'keys_to_restore' - {var_name: original_value} for names that existed pre-call
         #   'new_names'       - [var_name, ...] for names created by the call (delete on exit)
@@ -3024,6 +3025,10 @@ class Interpreter:
                         raise RuntimeError(f"Line {line}: Unexpected token in FUNCTION '{func_name}' parameter list: {self.tokens[j][1]}")
                 if j >= len(self.tokens):
                     raise Exception(f"Unterminated parameter list in FUNCTION '{func_name}'")
+                if any(p.upper() == func_key for p in params):
+                    line, _ = self.lexer.get_line_col(token[2] if len(token) > 2 else 0)
+                    raise RuntimeError(f"Line {line}: A parameter of FUNCTION '{func_name}' cannot have the "
+                                       f"function's name; the name holds the result")
                 j += 1  # consume RPAREN
                 # Skip optional trailing NEWLINE (body starts on next line typically)
                 if j < len(self.tokens) and self.tokens[j][0] == 'NEWLINE':
@@ -3218,6 +3223,21 @@ class Interpreter:
             return str(value)
         return str(value)
 
+    def _in_function_body(self):
+        """True if the statement being run is written inside a FUNCTION ... END FUNCTION."""
+        for body_index, _, _, tokens in self.user_functions.values():
+            if tokens is self.tokens and body_index <= self.token_index:
+                key = (id(tokens), body_index)
+                end = self._function_ends.get(key)
+                if end is None:
+                    end = body_index
+                    while end < len(tokens) and tokens[end][0] != 'END FUNCTION':
+                        end += 1
+                    self._function_ends[key] = end
+                if self.token_index < end:
+                    return True
+        return False
+
     def _shadow_variable(self, name):
         """Register `name` for save-on-entry / restore-on-exit handling in the current UDF call
         frame. Called by parameter binding, return-slot init, and (inside a function body) DIM.
@@ -3247,6 +3267,28 @@ class Interpreter:
                 frame['new_names'].append(name)
         return True
 
+    # Nested FUNCTION calls allowed at once. Each call uses about 18 Python stack frames;
+    # Python's limit of 1000 is kept, since the compiled program runs them on the C stack
+    # and Windows gives the main thread only 1 MB.
+    MAX_CALL_DEPTH = 40
+
+    _token_tables = {}   # id(tokens) -> (tokens, labels, jump_map, branch_endif)
+
+    def _tables_for(self, tokens):
+        """The labels, jump map and ELSE-to-END IF map of a token list (made once, then kept)."""
+        entry = Interpreter._token_tables.get(id(tokens))
+        if entry is None or entry[0] is not tokens:
+            saved = (self.tokens, self.labels, self.jump_map, self.branch_endif)
+            try:
+                self.tokens, self.labels, self.jump_map = tokens, {}, {}
+                self._pre_scan_for_jumps()
+                self._scan_for_labels()
+                entry = (tokens, self.labels, self.jump_map, self.branch_endif)
+            finally:
+                self.tokens, self.labels, self.jump_map, self.branch_endif = saved
+            Interpreter._token_tables[id(tokens)] = entry
+        return entry[1:]
+
     def _execute_user_function(self, name, args):
         """Execute a user-defined function with shadow-only parameter scoping.
         Returns the function's return value (the value of the variable named after the function)."""
@@ -3257,6 +3299,9 @@ class Interpreter:
 
         if len(args) != len(params):
             self._error(f"Function '{orig_name}' expects {len(params)} argument(s), got {len(args)}.")
+        if len(self._fn_call_stack) >= self.MAX_CALL_DEPTH:
+            # Stopped here, with Python stack to spare, so an ON ERROR handler can still run
+            self._error(f"Too many nested function calls in '{orig_name}' (the limit is {self.MAX_CALL_DEPTH}).")
 
         # Push a new call frame. _shadow_variable below records snapshots into this frame.
         frame = {'keys_to_restore': {}, 'new_names': []}
@@ -3291,6 +3336,12 @@ class Interpreter:
         saved_tokens = self.tokens
         saved_gosub_depth = len(self.gosub_stack)
         saved_gosub_floor, self.gosub_floor = self.gosub_floor, saved_gosub_depth
+        # A function written in another program (called from EVAL, RUN or ${...}) runs with
+        # that program's labels and block tables, which its GOSUB, GOTO and IF use
+        saved_tables = None
+        if body_tokens is not self.tokens:
+            saved_tables = (self.labels, self.jump_map, self.branch_endif)
+            self.labels, self.jump_map, self.branch_endif = self._tables_for(body_tokens)
         self.tokens = body_tokens
         self.token_index = body_index
 
@@ -3299,6 +3350,9 @@ class Interpreter:
                 self.run_block(end_tokens={'END FUNCTION'})
             except FunctionReturn:
                 pass
+            except RecursionError:
+                # A function body nested deeply enough to run out of stack before the limit
+                raise RuntimeError(f"Too many nested function calls in '{orig_name}'.") from None
             # Read the result (case-insensitive lookup of the function's own name)
             result_default = "" if orig_name.endswith('$') else 0.0
             result = result_default
@@ -3310,6 +3364,8 @@ class Interpreter:
             # Restore token list and position
             self.tokens = saved_tokens
             self.token_index = saved_index
+            if saved_tables:
+                self.labels, self.jump_map, self.branch_endif = saved_tables
             # Trim gosub_stack to its pre-call depth in case the UDF didn't balance GOSUB/RETURN
             if len(self.gosub_stack) > saved_gosub_depth:
                 self.gosub_stack = self.gosub_stack[:saved_gosub_depth]
@@ -11747,10 +11803,11 @@ class Interpreter:
         self._expect('DIM')
         while True:
             var_name = self._expect('ID')[1]
-            # If we're inside a UDF call, register the name for save-on-exit/restore-on-exit
-            # treatment. This makes DIM act as a local-scope declaration: the outer variable
-            # of the same name (if any) is preserved across the call.
-            self._shadow_variable(var_name)
+            # A DIM written inside a FUNCTION body declares a local: the outer variable of the
+            # same name (if any) is saved and restored around the call. A DIM in a main-program
+            # subroutine that a function reaches with GOSUB is an ordinary global.
+            if self._fn_call_stack and self._in_function_body():
+                self._shadow_variable(var_name)
             token_after_var = self._current_token()
 
             # Case 1: Array with specific size, e.g., DIM x(10)

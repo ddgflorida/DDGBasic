@@ -791,7 +791,8 @@ DbBasic functions use *shadow* scoping instead of a separate local symbol table:
 
 The consequences:
 
-- Parameters and `DIM`-declared names are local in effect. `DIM a, b` declares several at once.
+- Parameters and `DIM`-declared names are local in effect. `DIM a, b` declares several at once. Only a `DIM` written between `FUNCTION` and `END FUNCTION` does this; a `DIM` in a main-program subroutine that the function reaches with `GOSUB` makes an ordinary global.
+- A parameter cannot have the function's own name (`FUNCTION f(f)`), since that name holds the result.
 - **Every other variable is global.** Reading an undeclared name inside a function reads the global value. Assigning to it changes, or creates, the global variable, and the change remains after the call. The loop variable of a `FOR` inside a function is global too, unless you `DIM` it.
 - Arguments are passed **by value for numbers and strings**. Arrays and hashes are passed **by reference**. Changes to their contents, such as `PUSH`, element assignment and hash keys, are visible to the caller.
 
@@ -820,7 +821,7 @@ scratch leaked to global = 99
 
 ### Recursion, early exit and array arguments
 
-Functions can call themselves and each other. Each call saves and restores its own parameters and `DIM` names, so recursion is safe as long as every working variable is a parameter or declared with `DIM`.
+Functions can call themselves and each other. Each call saves and restores its own parameters and `DIM` names, so recursion is safe as long as every working variable is a parameter or declared with `DIM`. Calls can be nested 40 deep; one more gives the error `Too many nested function calls`, which `ON ERROR` can catch. For deeper work, use a loop with an array as a stack.
 
 ```basic
 FUNCTION fact(n)
