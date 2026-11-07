@@ -747,8 +747,6 @@ class Screen:
 
     def _put(self, row, col, text, fg, bg):
         """Records text in the screen copy and returns the ANSI output that draws it."""
-        if not self.deferred_wrap and row == self.rows and col - 1 + len(text) >= self.cols:
-            text = text[:max(0, self.cols - col)]       # the bottom-right cell would scroll the screen
         r = row - 1
         if 0 <= r < self.rows:
             line = self.cells[r]
@@ -757,6 +755,10 @@ class Screen:
                 if 0 <= c < self.cols:
                     line[c] = (ch, fg, bg)
         self.cur_row, self.cur_col = row, col + len(text)
+        if not self.deferred_wrap and row == self.rows and col - 1 + len(text) >= self.cols:
+            # The bottom-right cell would scroll the screen, so it isn't drawn. The screen
+            # copy above still has it, so SAVESCREEN and RESTSCREEN see the same contents
+            text = text[:max(0, self.cols - col)]
         return f'\x1b[{row};{col}H' + self._sgr(fg, bg) + text
 
     def track(self, text, emit=True):
@@ -792,6 +794,11 @@ class Screen:
         """ANSI output for a block of cells with its top-left corner at r1, c1."""
         out = []
         for n, line in enumerate(block):
+            row = r1 + n - 1
+            if 0 <= row < self.rows:
+                for i, cell in enumerate(line):
+                    if 0 <= c1 - 1 + i < self.cols:
+                        self.cells[row][c1 - 1 + i] = cell
             if not self.deferred_wrap and r1 + n == self.rows and c1 - 1 + len(line) >= self.cols:
                 line = line[:max(0, self.cols - c1)]    # as in _put: not the bottom-right cell
             out.append(f'\x1b[{r1 + n};{c1}H')
@@ -801,11 +808,6 @@ class Screen:
                     out.append(self._sgr(fg, bg))
                     colour = (fg, bg)
                 out.append(ch)
-            row = r1 + n - 1
-            if 0 <= row < self.rows:
-                for i, cell in enumerate(line):
-                    if 0 <= c1 - 1 + i < self.cols:
-                        self.cells[row][c1 - 1 + i] = cell
         return ''.join(out)
 
     def save(self, r1=None, c1=None, r2=None, c2=None):

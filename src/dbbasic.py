@@ -49,11 +49,18 @@ import pyarrow.parquet as pq
 csv.field_size_limit(1024 * 1024)
 
 
+def normalize_newlines(source_code):
+    """Program text with every line ending as LF: Windows (CRLF) and old Mac (CR) files
+    read the same as Unix ones."""
+    return source_code.replace('\r\n', '\n').replace('\r', '\n')
+
+
 def preprocess_includes(source_code, base_path='.', included_files=None):
     """
     Recursively finds all 'INCLUDE "filename"' statements and replaces them
     with the content of the specified file.
     """
+    source_code = normalize_newlines(source_code)
     if included_files is None:
         included_files = set()
 
@@ -1131,6 +1138,7 @@ def preprocess_continuations(source_code):
     """Joins lines that end in _ (outside strings and comments) to the next line. The line
     breaks taken out are put back after the joined statement, as empty lines, so the lines
     after it keep their numbers (for error messages, TRON and the IDE)."""
+    source_code = normalize_newlines(source_code)
     result, i, in_string, in_comment, string_char = [], 0, False, False, None
     pending = 0                                    # line breaks taken out by joins
     while i < len(source_code):
@@ -1173,7 +1181,7 @@ def preprocess_echo_statements(source_code):
         
 class Lexer:
     def __init__(self, source_code):
-        source_code = source_code.replace('\r\n', '\n')
+        source_code = normalize_newlines(source_code)
         lines = source_code.splitlines()
         numbered = [f"{i+1}: {line}" for i, line in enumerate(lines)]
         self.raw_source_code = source_code # "\n".join(numbered)
