@@ -30,8 +30,8 @@ NEXT
 To run a script:
 
 ```bash
-python3 src/dbbasic.py script.bas [args...]   # from source
-dbbasic script.bas [args...]                  # compiled build (see compilenuitka.sh)
+dbbasic script.bas [args...]                  # installed with pip, or a compiled build
+python3 src/dbbasic.py script.bas [args...]   # from a copy of the source
 ```
 
 Running with no script starts the interactive REPL. Type `HELP` there for the built-in help topics. See [2.17 Running DbBasic](02-control-flow-and-procedures.md#217-running-dbbasic).
@@ -52,7 +52,7 @@ A script can also require output: it passes only if its output contains the text
 
 ## Requirements
 
-Python 3.10 or newer. Install the dependencies with:
+Python 3.10 or newer. `pip install dbbasic` installs DbBasic, its dependencies and the `dbbasic` command. To run from a copy of the source instead, install the dependencies with:
 
 ```bash
 pip install -r requirements.txt
@@ -62,6 +62,7 @@ pip install -r requirements.txt
 
 - `requests`
 - `duckdb`
+- `numpy` (DuckDB needs it for the SQL functions DbBasic adds)
 - `xlrd3`
 - `openpyxl`
 - `beautifulsoup4`

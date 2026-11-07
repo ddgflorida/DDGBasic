@@ -15,3 +15,5 @@ sales.parquet
 sales.csv
 orders.parquet
 monthly.csv
+dist/
+*.egg-info/

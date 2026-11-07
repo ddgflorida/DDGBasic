@@ -3,7 +3,8 @@
 # Tested with Python 3.12 and the versions noted below.
 
 requests          # FETCH (tested 2.34)
-duckdb            # DATABASE ENGINE DUCKDB (tested 1.5)
+duckdb            # DATABASE ENGINE DUCKDB (tested 1.5 and 2.0)
+numpy             # DuckDB needs it for the SQL functions DbBasic adds (STUFF, SOUNDEX, ...)
 xlrd3             # LOAD EXCEL for .xls files (tested 1.1)
 openpyxl          # LOAD EXCEL for .xlsx files, SET OUTPUT FORMAT EXCEL (tested 3.1)
 beautifulsoup4    # LOAD HTML, STRIPHTML$ (tested 4.15)

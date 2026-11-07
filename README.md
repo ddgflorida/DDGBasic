@@ -76,11 +76,13 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
 DbBasic needs Python 3.10 or newer.
 
 ```bash
-pip install -r requirements.txt
-python3 src/dbbasic.py examples/hello.bas      # run a script
-python3 src/dbbasic.py                         # interactive REPL
-python3 src/dbbasic.py --ide examples/contact.bas   # the QBasic-style IDE: F5 runs, F1 helps
+pip install dbbasic
+dbbasic examples/hello.bas          # run a script
+dbbasic                             # interactive REPL
+dbbasic --ide examples/contact.bas  # the QBasic-style IDE: F5 runs, F1 helps
 ```
+
+To run from a copy of the source instead, install the dependencies with `pip install -r requirements.txt` and use `python3 src/dbbasic.py` in place of `dbbasic`. `pip install .` in the copy installs the `dbbasic` command from it.
 
 To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `dbbasic` from anywhere.
 

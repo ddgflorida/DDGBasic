@@ -1,3 +1,5 @@
+__version__ = "0.9.0"
+
 import sys
 import bisect
 import contextlib
@@ -14707,7 +14709,7 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
 
 
 def run_repl(debug=False):
-    print("DbBasic REPL (Type 'EXIT' to quit)")
+    print(f"DbBasic {__version__} REPL (Type 'EXIT' to quit)")
     print("Supports single-line loops (e.g., FOR I=1 TO 5: PRINT I: NEXT)")
     print("FUNCTION definitions may span lines, up to END FUNCTION")
     
@@ -14778,6 +14780,9 @@ def use_utf8_streams():
 
 def main():
     use_utf8_streams()
+    if len(sys.argv) == 2 and sys.argv[1] in ('--version', '-V'):
+        print(f"DbBasic {__version__}")
+        return 0
     # dbbasic --ide [file.bas]: the full-screen editor (see dbide.py)
     if len(sys.argv) >= 2 and sys.argv[1] == '--ide':
         from dbide import run_ide
