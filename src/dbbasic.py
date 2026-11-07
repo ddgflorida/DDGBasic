@@ -940,6 +940,11 @@ class HelpRegistry:
             "desc": "Run a command in the underlying operating system shell.",
             "examples": ['SHELL "dir/s"']
         },
+        "TIMER": {
+            "syntax": 'TIMER | TIMER()',
+            "desc": "The number of seconds since midnight, with fractions of a second, as in classic BASIC. Take it before and after some work to time it.",
+            "examples": ['start = TIMER\nSELECT COUNT(*) FROM big;\nPRINT "took"; ROUND(TIMER - start, 3); "s"']
+        },
         "TRON": {
             "syntax": 'TRON',
             "desc": "Turns TRace ON. The interpreter will print each line of code before executing it.",
@@ -1673,7 +1678,11 @@ class Formatter:
                 result = mask_char + result
 
         if int_idx >= 0:
-            result = int_part[:int_idx+1] + result
+            if ',' in integer_mask and not has_leading_asterisk:
+                # Wider than the mask: a comma in it means thousands, so group all the digits
+                result = f"{int(int_part):,}"
+            else:
+                result = int_part[:int_idx+1] + result
         if decimal_pos != -1:
             result += '.' + dec_part
         positive_result = result
@@ -2506,15 +2515,17 @@ class Interpreter:
                 do_type, do_index = stack.pop()
                 self.jump_map[do_index]['loop'] = index
 
-            elif token_type == 'ELSEIF':
+            elif token_type in ('ELSEIF', 'ELSE'):
+                # A block IF's ELSE and ELSEIF start their own line. An ELSE later in a line
+                # belongs to a single-line IF (IF a THEN x ELSE y) inside the block, not to it.
+                if index > 0 and self.tokens[index - 1][0] != 'NEWLINE':
+                    continue
                 if stack and stack[-1][0] == 'IF':
                     if_index = stack[-1][1]
-                    self.jump_map[if_index]['elseifs'].append(index)
-
-            elif token_type == 'ELSE':
-                if stack and stack[-1][0] == 'IF':
-                    if_index = stack[-1][1]
-                    self.jump_map[if_index]['else'] = index
+                    if token_type == 'ELSEIF':
+                        self.jump_map[if_index]['elseifs'].append(index)
+                    else:
+                        self.jump_map[if_index]['else'] = index
 
             elif token_type == 'END IF':
                 if not stack or stack[-1][0] != 'IF':
@@ -2856,20 +2867,23 @@ class Interpreter:
                 if i + 1 >= len(self.tokens) or self.tokens[i+1][0] != 'ID':
                     pos = token[2] if len(token) > 2 else 0
                     line, _ = self.lexer.get_line_col(pos)
-                    raise Exception(f"Line {line}: Expected function name after FUNCTION")
+                    found = self.tokens[i + 1][1] if i + 1 < len(self.tokens) else ''
+                    hint = f" ('{found}' is a DbBasic keyword; choose another name)" \
+                        if found and str(found).strip() and str(found)[0].isalpha() else ''
+                    raise RuntimeError(f"Line {line}: Expected function name after FUNCTION{hint}")
                 func_name = self.tokens[i+1][1]
                 func_key = func_name.upper()
                 if func_key in found:
                     pos = token[2] if len(token) > 2 else 0
                     line, _ = self.lexer.get_line_col(pos)
-                    raise Exception(f"Line {line}: Duplicate FUNCTION definition: '{func_name}'")
+                    raise RuntimeError(f"Line {line}: Duplicate FUNCTION definition: '{func_name}'")
                 j = i + 2
                 params = []
                 # Require parameter list parens (even for zero-arg: FUNCTION foo())
                 if j >= len(self.tokens) or self.tokens[j][0] != 'LPAREN':
                     pos = self.tokens[i+1][2] if len(self.tokens[i+1]) > 2 else 0
                     line, _ = self.lexer.get_line_col(pos)
-                    raise Exception(f"Line {line}: FUNCTION '{func_name}' requires parameter list in parentheses (use () for no params)")
+                    raise RuntimeError(f"Line {line}: FUNCTION '{func_name}' requires parameter list in parentheses (use () for no params)")
                 j += 1  # consume LPAREN
                 while j < len(self.tokens) and self.tokens[j][0] != 'RPAREN':
                     if self.tokens[j][0] == 'ID':
@@ -2880,7 +2894,7 @@ class Interpreter:
                     else:
                         pos = self.tokens[j][2] if len(self.tokens[j]) > 2 else 0
                         line, _ = self.lexer.get_line_col(pos)
-                        raise Exception(f"Line {line}: Unexpected token in FUNCTION '{func_name}' parameter list: {self.tokens[j][1]}")
+                        raise RuntimeError(f"Line {line}: Unexpected token in FUNCTION '{func_name}' parameter list: {self.tokens[j][1]}")
                 if j >= len(self.tokens):
                     raise Exception(f"Unterminated parameter list in FUNCTION '{func_name}'")
                 j += 1  # consume RPAREN
@@ -2950,7 +2964,7 @@ class Interpreter:
     # Used when _execute_function's source can't be read (e.g. a Nuitka build);
     # compilenuitka.sh checks this list against the source before building.
     BUILTIN_FN_NAMES = frozenset({
-        'ABS', 'ARRAY', 'ARRAY_JOIN', 'ARRAY_SIZE', 'ASC', 'ATAN2', 'ATN', 'BASENAME$', 'CEIL',
+        'TIMER', 'ABS', 'ARRAY', 'ARRAY_JOIN', 'ARRAY_SIZE', 'ASC', 'ATAN2', 'ATN', 'BASENAME$', 'CEIL',
         'CARDINAL$', 'CENTER$', 'CHR$', 'COMMAND$', 'CONTAINS', 'COS', 'CURDIR$', 'DATE$', 'DATEADD',
         'DATEDIFF', 'DATESERIAL', 'DAY', 'DAYSINMONTH', 'DAYSINYEAR', 'DEGREES', 'DISKSPACE',
         'ENDSWITH', 'ENVIRON$', 'EOF', 'EXP', 'EXTRACT$', 'FILEATTR', 'FILESIZE', 'FILETIME',
@@ -5738,6 +5752,12 @@ class Interpreter:
             return urlparse(url).scheme
         elif name == 'DATE$': return datetime.now().strftime('%Y-%m-%d')
         elif name == 'TIME$': return datetime.now().strftime('%H:%M:%S')
+        elif name == 'TIMER':
+            # Seconds since midnight, with fractions, as in classic BASIC: for timing code
+            if args:
+                self._error("TIMER takes no arguments.")
+            now = datetime.now()
+            return now.hour * 3600 + now.minute * 60 + now.second + now.microsecond / 1e6
         elif name == 'DATEADD': return (self._parse_date_string(args[0]) + timedelta(days=int(args[1]))).strftime('%Y-%m-%d')
         elif name == 'DATEDIFF': return float((self._parse_date_string(args[0]) - self._parse_date_string(args[1])).days)
         elif name == 'YEAR': return float(self._parse_date_string(args[0]).year)
@@ -6026,13 +6046,15 @@ class Interpreter:
 
         elif name == 'PADLEFT$':
             if len(args) != 3: self._error("PADLEFT$ requires 3 arguments.")
-            text, length, pad_char = str(args[0]), int(args[1]), str(args[2])
+            # Numbers as PRINT shows them (60, not 60.0): padding numbers is the common use
+            text, length, pad_char = self._to_string(args[0]), int(args[1]), str(args[2])
             if len(pad_char) == 0: pad_char = ' '
             return text.rjust(length, pad_char[0])
 
         elif name == 'PADRIGHT$':
             if len(args) != 3: self._error("PADRIGHT$ requires 3 arguments.")
-            text, length, pad_char = str(args[0]), int(args[1]), str(args[2])
+            # Numbers as PRINT shows them (60, not 60.0): padding numbers is the common use
+            text, length, pad_char = self._to_string(args[0]), int(args[1]), str(args[2])
             if len(pad_char) == 0: pad_char = ' '
             return text.ljust(length, pad_char[0])
 
@@ -6269,7 +6291,7 @@ class Interpreter:
             
             var_name = actual_var_name
             
-            if var_name.upper() in ['DATE$', 'TIME$', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$', 'SAVESCREEN', 'BUTTON$', 'MOUSEROW', 'MOUSECOL'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
+            if var_name.upper() in ['DATE$', 'TIME$', 'TIMER', 'FREEFILE', 'RND', 'CURDIR$', 'INKEY$', 'LASTKEY$', 'SAVESCREEN', 'BUTTON$', 'MOUSEROW', 'MOUSECOL'] and not (self._peek_token() and self._peek_token()[0] == 'LPAREN'):
                 self._next_token(); 
                 return self._call_builtin(var_name, [])
             

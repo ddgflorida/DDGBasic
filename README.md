@@ -5,8 +5,14 @@
 ![Status](https://img.shields.io/badge/status-Active-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 
-DbBasic is a custom, modern dialect of the BASIC programming language, built from the ground up in Python. It is designed with a strong focus on data processing, file manipulation, and direct database interaction, making it a powerful tool for scripting and data analysis tasks.
-You can think of it as either SQLite/DuckDb wrapped in a procedural language, or a BASIC with direct SQLite/DuckDb support.
+**DbBasic wraps a procedural language around SQLite and DuckDB.** SQL is written straight into the program, query results come back as rows you can loop over, and program variables go into queries as bind variables (`:name`). Around the SQL you get what SQL lacks: variables, `IF` rules, loops, functions, error handling, files, HTTP and a text-mode UI.
+
+- **Load, clean and check data in one statement:** `LOAD CSV` calls your own BASIC functions on every cell (`TRANSFORM phone WITH normalize_phone$`) and drops rows that fail a check (`VALIDATE email WITH is_valid_email`).
+- **Rules over query results:** `FOR row IN (SELECT ...)` loops apply logic that is awkward in SQL (tiers, allocations, alerts) and write back with bind variables, inside transactions.
+- **Two engines in one program:** SQLite for records (a file, constraints, transactions), DuckDB for analytics (columnar, fast, querying Parquet and CSV files directly), with `DATABASE ENGINE` to switch.
+- **Results anywhere:** the same query to the console, CSV, JSON, Excel, Parquet, HTML or SQL, or to a grouped `REPORT`.
+
+The language is a modern BASIC, and it comes with 1990s-style text screens and a QBasic-style IDE. See [Examples](#-examples) for programs that show this off.
 
 ---
 
@@ -149,6 +155,23 @@ LOAD CSV "raw_leads.csv" CREATE TABLE leads _
 
 PRINT `Imported ${(SELECT COUNT(*) FROM leads;)} clean rows.`
 ```
+
+---
+
+## 🗂️ Examples
+
+The `examples/` folder has some 60 programs; [`examples/README.md`](examples/README.md) lists them all. These show what DbBasic is for:
+
+| Example | Shows |
+|---|---|
+| [`etl_pipeline.bas`](examples/etl_pipeline.bas) | A messy CSV becomes a clean table: BASIC functions clean every cell as `LOAD` reads it and drop bad rows; BASIC rules flag duplicates and assign customer tiers; SQL totals; JSON, Excel and a grouped report out |
+| [`duckdb_analytics.bas`](examples/duckdb_analytics.bas) | Half a million rows in DuckDB, queried straight from Parquet and CSV files, window functions, and BASIC rules (targets per region, in a hash) over the results, with timings |
+| [`two_engines.bas`](examples/two_engines.bas) | SQLite keeps the records (constraints, a transaction), DuckDB analyses them from a Parquet file (median, best month), and the results go back to SQLite |
+| [`row_logic.bas`](examples/row_logic.bas) | Allocating limited stock to orders by priority, row by row, with all-or-nothing and partial rules, in a transaction that `ON ERROR` rolls back |
+| [`invoice_demo.bas`](examples/invoice_demo.bas) | A 1990s-style invoice screen on the Chinook database: a header form, a lines grid, business rules |
+| [`retro_contacts.bas`](examples/retro_contacts.bas) | A complete text-mode application: menu bar, editable grid, forms, memo editor, report |
+
+Run one with `dbbasic examples/etl_pipeline.bas`, or open it in the IDE with `dbbasic --ide examples/etl_pipeline.bas`.
 
 ---
 
@@ -366,6 +389,7 @@ This document provides a quick reference to all available functions in the DbBas
 | STRIPHTML$(string$)     | STRING      | Removes HTML tags from a string. |
 | TAN(number)             | MATH        | Returns the tangent of an angle given in radians. |
 | TIME$()                 | DATE/TIME   | Returns the current system time as an "HH:MI:SS" string. |
+| TIMER                   | DATE/TIME   | Seconds since midnight, with fractions of a second: take it before and after some work to time it. |
 | TRIM$(string$)          | STRING      | Removes whitespace from both the beginning and end of a string. |
 | TYPENAME$(value)        | UTILITY     | Returns the name of the value's type: "FLOAT", "STRING", "ARRAY" or "HASH". |
 | UBOUND(array)           | ARRAY       | Returns the upper bound (the highest index) of an array. Returns -1 for an empty array. |

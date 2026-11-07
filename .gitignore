@@ -7,3 +7,11 @@ venv/
 *.db
 *.duckdb
 customers_form.bas
+# ... and by the SQL showcase examples
+etl_raw.csv
+etl_summary.json
+etl_summary.xlsx
+sales.parquet
+sales.csv
+orders.parquet
+monthly.csv

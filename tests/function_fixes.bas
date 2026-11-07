@@ -21,4 +21,8 @@ IF ORDINAL$(100) <> "one hundredth" THEN ERROR 1, "ORDINAL$(100)"
 
 IF FORMAT$(0.256, "0.00%") <> "25.60%" THEN ERROR 1, "FORMAT$ percent = " + FORMAT$(0.256, "0.00%")
 IF FORMAT$(42, "### units") <> " 42 units" THEN ERROR 1, "FORMAT$ trailing text = [" + FORMAT$(42, "### units") + "]"
+REM FORMAT$: a number wider than a comma mask is grouped in thousands all the way
+IF FORMAT$(1168005, "#,##0") <> "1,168,005" THEN ERROR 1, "FORMAT$ grouping: " & FORMAT$(1168005, "#,##0")
+IF FORMAT$(-7654321.5, "#,##0.00") <> "-7,654,321.50" THEN ERROR 1, "FORMAT$ negative grouping: " & FORMAT$(-7654321.5, "#,##0.00")
+IF FORMAT$(1234567, "##0") <> "1234567" THEN ERROR 1, "FORMAT$ without a comma stays ungrouped"
 PRINT "function_fixes: all checks passed"

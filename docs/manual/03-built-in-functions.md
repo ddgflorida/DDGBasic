@@ -1,6 +1,6 @@
 # Chapter 3: Built-in Functions
 
-This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **133 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
+This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **134 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
 
 The examples in this chapter were run against the interpreter, and the output shown is what it printed. Output from functions that depend on the clock, the file system or the environment (`DATE$`, `FILETIME`, `CURDIR$` and so on) will differ on your machine.
 
@@ -38,7 +38,7 @@ Related chapters:
 
 **Names and case.** Function names are not case-sensitive: `left$("abc", 2)` and `LEFT$("abc", 2)` are the same call. By convention, a name that ends in `$` returns a string. Functions without `$` return a number, an array, a hash, or (for a few, such as `FILETIME` and `NOW`) a string.
 
-**Parentheses.** A function call needs parentheses, even when it has no arguments: `NOW()`. There are five exceptions. `DATE$`, `TIME$`, `FREEFILE`, `RND` and `CURDIR$` can be written with or without `()`. If you write any other function name without parentheses, such as `PRINT NOW`, DbBasic reads it as a variable and prints `0`.
+**Parentheses.** A function call needs parentheses, even when it has no arguments: `NOW()`. The exceptions, which can be written with or without `()`, are `DATE$`, `TIME$`, `TIMER`, `FREEFILE`, `RND` and `CURDIR$`, and the text-screen functions `INKEY$`, `LASTKEY$`, `SAVESCREEN`, `BUTTON$`, `MOUSEROW` and `MOUSECOL`. If you write any other function name without parentheses, such as `PRINT NOW`, DbBasic reads it as a variable and prints `0`.
 
 **How a call is recognised.** The expression parser (`_parse_factor`) handles a call like this:
 
@@ -50,7 +50,7 @@ Related chapters:
 
 **Boolean results.** Predicate functions return **-1 for true and 0 for false**, following BASIC convention. When a test such as `IF CONTAINS(a$, "x") THEN` is evaluated, any non-zero value counts as true.
 
-**Numbers are floating point.** Every numeric result is a Python `float`. `PRINT` shows whole-number floats without the decimal part, and `LEN`, `ARRAY_JOIN` and string-criteria `FILTER` use the same text form (`LEN(10)` is 2). Other string functions that are given a number convert it with Python's `str()` and so show the `.0`: `UCASE$(10)` returns `"10.0"`. If you need integer text, convert first with `STR$` and `TRIM$`, or with `FORMAT$`.
+**Numbers are floating point.** Every numeric result is a Python `float`. `PRINT` shows whole-number floats without the decimal part, and `LEN`, `ARRAY_JOIN`, `PADLEFT$`, `PADRIGHT$` and string-criteria `FILTER` use the same text form (`LEN(10)` is 2, `PADLEFT$(7, 3, "0")` is `"007"`). Other string functions that are given a number convert it with Python's `str()` and so show the `.0`: `UCASE$(10)` returns `"10.0"`. If you need integer text, convert first with `STR$` and `TRIM$`, or with `FORMAT$`.
 
 **Indexing.** String positions are **1-based**. This applies to `MID$`, `INSTR`, `INSTRREV` and `EXTRACT$`. Array indexes are **0-based**. This applies to `a(0)`, `FIND` and `UBOUND`.
 
@@ -182,6 +182,7 @@ Related chapters:
 | [`STRIPHTML$`](#fn-striphtml-str) | Encoding | String | Remove HTML tags |
 | [`TAN`](#fn-tan) | Math | Number | Tangent |
 | [`TIME$`](#fn-time-str) | Date | String | Time as `HH:MM:SS` |
+| [`TIMER`](#fn-timer) | Date | Number | Seconds since midnight, with fractions |
 | [`TRIM$`](#fn-trim-str) | String | String | Trim both sides |
 | [`TYPENAME$`](#fn-typename-str) | Type | String | Type name of a value |
 | [`UBOUND`](#fn-ubound) | Array | Number | Highest index |
@@ -937,6 +938,19 @@ Functions that return a date always return `YYYY-MM-DD`.
 ### TIME$
 
 `TIME$` or `TIME$()` returns a **String**: the current local time as `HH:MM:SS` in 24-hour form.
+
+<a id="fn-timer"></a>
+### TIMER
+
+`TIMER` or `TIMER()` returns a **Number**: the seconds since midnight, with fractions of a second (to the microsecond), as in classic BASIC. Its use is timing: take it before and after some work.
+
+```basic
+start = TIMER
+SELECT COUNT(*) FROM orders;
+PRINT "took "; FORMAT$(TIMER - start, "0.000"); " s"
+```
+
+It goes back to 0 at midnight, so a timing that spans midnight comes out negative.
 
 <a id="fn-now"></a>
 ### NOW
