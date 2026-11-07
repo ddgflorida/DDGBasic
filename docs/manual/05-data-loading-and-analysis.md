@@ -146,7 +146,7 @@ Here `emp.csv` holds ids 1 to 4, and `emp2.csv` holds id 2 (changed) and id 5 (n
 
 Both rows of the `IGNORE` load were duplicates, so nothing was inserted.
 
-**Transactions.** For `CREATE`, `APPEND`, `TRUNCATE` and `IGNORE`, the inserts run inside one transaction. If any insert fails, for example on a duplicate key with `APPEND`, the whole insert is rolled back. The `TRUNCATE` delete runs *before* that transaction starts, so it is not undone. A failed `CREATE TABLE` load drops the table it created.
+**Transactions.** A LOAD writes all its rows or none: the inserts (or, for `UPSERT`, the staging, update and insert steps) run inside one transaction. If any insert fails, for example on a duplicate key with `APPEND`, the whole load is rolled back. Inside the program's own transaction (`BEGIN; ... COMMIT;`) the load becomes part of it, so a later `ROLLBACK` undoes it too. The `TRUNCATE` delete runs *before* that transaction starts, so it is not undone. A failed `CREATE TABLE` load drops the table it created.
 
 **Short and long rows.** A row with fewer fields than the header is loaded with `NULL` in the missing columns. A row with more fields loses the extra ones. Both print a warning to stderr, for example `Warning: line 3 has 2 fields, expected 3; the missing fields are loaded as NULL.`
 

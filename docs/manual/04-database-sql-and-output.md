@@ -271,7 +271,7 @@ END;
 
 The parser receives the `SQL_STRING` token and records its text in `last_sql_statement` (`FORMAT SQL` uses it to infer a table name). It then branches on the first word:
 
-- If the text starts with `SELECT`, `WITH`, `SUMMARIZE` or `PRAGMA`, it is treated as a **query**. If `SET OUTPUT OFF` is active, the statement is **skipped without being executed**. Otherwise the statement runs, all rows are fetched, and the rows and column names go to the output pipeline (`_handle_output`, 4.10).
+- If the text starts with `SELECT`, `WITH`, `SUMMARIZE` or `PRAGMA`, it is treated as a **query**. The statement runs, all rows are fetched, and the rows and column names go to the output pipeline (`_handle_output`, 4.10). With `SET OUTPUT OFF` it still runs, so `ERR` and `PRAGMA` settings take effect, but its rows are not shown.
 - Any other text (`INSERT`, `UPDATE`, `DELETE`, `CREATE`, `DROP`, `ALTER`, `BEGIN`, `COMMIT`, `ROLLBACK`, `ATTACH`, `COPY`) runs as a **command**. No result is displayed, even when the statement could return rows (for example `INSERT ... RETURNING`).
 
 A `PRAGMA` that sets a value returns no rows, so it prints `(0 rows returned)` in the default format.

@@ -1,5 +1,6 @@
 import sys
 import bisect
+import contextlib
 import copy
 import re
 import math
@@ -1196,6 +1197,41 @@ class Lexer:
     _REM_RE = re.compile(r'\bREM\b', re.IGNORECASE)
 
     @classmethod
+    def _find_closing_paren(cls, text, open_pos):
+        """Index of the ')' that closes the '(' at text[open_pos], or -1. Brackets inside
+        '...' strings, "..." identifiers, -- comments and /* */ comments don't count."""
+        depth, i, n = 1, open_pos + 1, len(text)
+        while i < n:
+            c = text[i]
+            if c in ("'", '"'):
+                i += 1
+                while i < n:
+                    if text[i] == c:
+                        if i + 1 < n and text[i + 1] == c:
+                            i += 2
+                            continue
+                        break
+                    i += 1
+            elif c == '-' and text.startswith('--', i):
+                newline = text.find('\n', i)
+                if newline == -1:
+                    return -1
+                i = newline
+            elif c == '/' and text.startswith('/*', i):
+                close = text.find('*/', i + 2)
+                if close == -1:
+                    return -1
+                i = close + 1
+            elif c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+                if depth == 0:
+                    return i
+            i += 1
+        return -1
+
+    @classmethod
     def _outside_literals(cls, code, transform):
         """Apply transform() to the parts of code that are not inside a "...", '...' or
         `...` string (doubled quotes are escapes) or a REM / -- comment, and return the
@@ -1213,6 +1249,10 @@ class Lexer:
                         break
                     end += 1
                 end = min(end + 1, n)
+            elif c == '/' and code.startswith('/*', i):
+                # A SQL /* */ comment: its text may hold a quote ("it's")
+                end = code.find('*/', i + 2)
+                end = n if end == -1 else end + 2
             elif (c == '-' and code.startswith('--', i)) or \
                  (c in 'Rr' and cls._REM_RE.match(code, i) and (i == 0 or not (code[i - 1].isalnum() or code[i - 1] in '_$'))):
                 end = code.find('\n', i)
@@ -1311,13 +1351,6 @@ class Lexer:
         # starting the next are separate statements, not END IF / END FUNCTION / END LOOP
         compiled = [(re.compile(pattern.replace(r'\s+', r'[ \t]+'), re.IGNORECASE), repl)
                     for pattern, repl in replacements.items()]
-        # Reverse map (ENDTRANSACTION -> END TRANSACTION) so SQL text cut from the
-        # joined source can be restored before it is sent to the database.
-        spaced = {repl: pattern.replace(r'\b', '').replace(r'\s+', ' ') for pattern, repl in replacements.items()}
-        joined_re = re.compile(r'\b(' + '|'.join(spaced) + r')\b', re.IGNORECASE)
-        self._restore_sql_keywords = lambda sql: self._outside_literals(
-            sql, lambda chunk: joined_re.sub(lambda m: spaced[m.group(1).upper()], chunk))
-
         def join_keywords(chunk):
             # Padded to the original length (END IF -> 'ENDIF '), so the positions of the tokens
             # after it still match the source and error messages give the right line and column
@@ -1327,6 +1360,9 @@ class Lexer:
 
         code = self._outside_literals(source_code_to_process, join_keywords)
         self.modified_source_code = code
+        # Joining keeps every position, so SQL text is cut from the source as written
+        # (END TRANSACTION stays two words, and a column called readfile is left alone)
+        self.original_source_code = source_code_to_process
         # Line numbers of token positions (get_line_col), needed already for lexer errors
         self.token_line_starts = [0] + [m.end() for m in re.finditer(r"\n", code)]
 
@@ -1335,7 +1371,7 @@ class Lexer:
             # ---------------------------
             ('STRING', r'"([^"]|"")*"'), ('SINGLE_Q_STRING', r"'[^']*'"),
             ('BACKTICK_STRING', r'`[^`]*`'), ('ASSIGN', r'='),('NUMBER', r'\d+(\.\d*)?(?:[eE][+-]?\d+)?|(?<![\w)\]$.])\.\d+(?:[eE][+-]?\d+)?'),
-            ('REM', r'\bREM\b[^\n]*'), ('DASH_COMMENT', r'--[^\n]*'),
+            ('REM', r'\bREM\b[^\n]*'), ('DASH_COMMENT', r'--[^\n]*'), ('BLOCK_COMMENT', r'/\*[\s\S]*?\*/'),
             ('AND', r'\bAND\b(?!\$)'), ('OR', r'\bOR\b(?!\$)'), ('FOREACH', r'\bFOREACH\b(?!\$)'),
             ('ANALYZECSV', r'\bANALYZECSV\b'), ('ANALYZEJSON', r'\bANALYZEJSON\b'), ('ANALYZETEXT', r'\bANALYZETEXT\b'),
             ('LINEINPUT', r'\bLINEINPUT\b(?!\$)'), ('TOFILE', r'\bTOFILE\b(?!\$)'), ('READFILE', r'\bREADFILE\b(?!\$)'),
@@ -1394,7 +1430,7 @@ class Lexer:
         for mo in re.finditer(tok_regex, code, re.IGNORECASE):
             kind, value, pos = mo.lastgroup, mo.group(), mo.start()
             #print("DEBUG", kind, value, pos)
-            if kind in ['SKIP', 'REM', 'DASH_COMMENT']: continue
+            if kind in ['SKIP', 'REM', 'DASH_COMMENT', 'BLOCK_COMMENT']: continue
             # Characters BASIC doesn't know (e.g. the SQL operators || and ~) are kept for now:
             # they are fine inside a SQL statement, which is cut out of the source below.
             raw_tokens.append((kind, value, pos))
@@ -1417,7 +1453,7 @@ class Lexer:
                 semicolon_pos = self._find_sql_terminator(self.modified_source_code, pos)
                 if semicolon_pos != -1:
                     sql_end_pos = semicolon_pos + 1
-                    sql_text = self._restore_sql_keywords(self.modified_source_code[pos:sql_end_pos].strip())
+                    sql_text = self.original_source_code[pos:sql_end_pos].strip()
                     tokens.append(('SQL_STRING', sql_text, pos))
                     while i < len(raw_tokens) and raw_tokens[i][2] < sql_end_pos: i += 1
                     is_start_of_line = True    # the ';' ends it, so more SQL can follow on the line
@@ -1443,22 +1479,11 @@ class Lexer:
 
                         # Scan the raw source to find the matching closing parenthesis
                         lp_pos = raw_tokens[lparen_index][2]
-                        nesting, search_pos, end_paren_pos, in_string = 1, lp_pos + 1, -1, False
-                        while search_pos < len(self.modified_source_code):
-                            char = self.modified_source_code[search_pos]
-                            if char == "'": in_string = not in_string
-                            elif not in_string and char == '(': nesting += 1
-                            elif not in_string and char == ')':
-                                nesting -= 1
-                                if nesting == 0:
-                                    end_paren_pos = search_pos
-                                    break
-                            search_pos += 1
-
-                        if nesting != 0: self._error("Unmatched parenthesis in SQL subquery.")
+                        end_paren_pos = self._find_closing_paren(self.original_source_code, lp_pos)
+                        if end_paren_pos == -1: self._error("Unmatched parenthesis in SQL subquery.")
                         
                         # Create and add the subquery tokens
-                        sql_text = self._restore_sql_keywords(self.modified_source_code[lp_pos + 1 : end_paren_pos])
+                        sql_text = self.original_source_code[lp_pos + 1 : end_paren_pos]
                         tokens.append(('LPAREN', '(', lp_pos))
                         tokens.append(('SQL_STRING', sql_text.strip(), lp_pos + 1))
                         tokens.append(('RPAREN', ')', end_paren_pos))
@@ -2913,15 +2938,16 @@ class Interpreter:
             self._error("Expected OPEN, CLOSE, or ENGINE after DATABASE")
             
     def _init_db(self, filename=":memory:"):
-        if self.db_connection: 
-            self.db_connection.close()
-        self.db_filename = str(filename)      # MAKE FORM writes it into the program it makes
-        #print(f"(Connecting using {self.db_engine} engine...)") # Optional debug message
+        # Connect first: if the new database cannot be opened, the open one stays in use
         if self.db_engine == 'duckdb':
-            self.db_connection = duckdb.connect(database=filename, read_only=False)
+            connection = duckdb.connect(database=filename, read_only=False)
         else:
-            self.db_connection = sqlite3.connect(filename, isolation_level=None)
-            SqliteStringFunctions.register_all(self.db_connection)
+            connection = sqlite3.connect(filename, isolation_level=None)
+            SqliteStringFunctions.register_all(connection)
+        if self.db_connection:
+            self.db_connection.close()
+        self.db_connection = connection
+        self.db_filename = str(filename)      # MAKE FORM writes it into the program it makes
         self.db_cursor = self.db_connection.cursor()
         if self.db_engine == 'duckdb':
             # A DuckDB cursor is its own connection, and TEMP macros are per connection,
@@ -7164,7 +7190,13 @@ class Interpreter:
                 columns_as_lists = list(zip(*results))
 
                 # Create PyArrow Arrays for each column. PyArrow can often infer data types.
-                arrow_arrays = [pa.array(col) for col in columns_as_lists]
+                arrow_arrays = []
+                for col in columns_as_lists:
+                    try:
+                        arrow_arrays.append(pa.array(col))
+                    except (pa.ArrowInvalid, pa.ArrowTypeError, TypeError, OverflowError):
+                        # Mixed types in one column (SQLite allows it): store it as text
+                        arrow_arrays.append(pa.array([None if v is None else self._to_string(self._db_value(v)) for v in col]))
 
                 # Create a PyArrow Table from the arrays and headers.
                 table = pa.Table.from_arrays(arrow_arrays, names=headers)
@@ -7327,7 +7359,13 @@ class Interpreter:
         def format_value(value):
             if value is None: return "NULL"
             if isinstance(value, (int, float)): return str(value)
-            string_value = str(value)
+            if isinstance(value, (bytes, bytearray, memoryview)):
+                # A BLOB as a hex literal: X'00FF' (DuckDB reads it with from_hex)
+                hex_digits = bytes(value).hex().upper()
+                if vendor == 'duckdb': return f"from_hex('{hex_digits}')"
+                if vendor == 'oracle': return f"HEXTORAW('{hex_digits}')"
+                return f"X'{hex_digits}'"
+            string_value = self._to_string(self._db_value(value))
             escaped_string = string_value.replace("'", "''")
             return "'" + escaped_string + "'"
 
@@ -9520,48 +9558,48 @@ class Interpreter:
         quoted_staging_table = self._quote_identifier(staging_table)
         quoted_key_column = self._quote_identifier(key_column)
 
-        cols_def = ', '.join([f"{h} TEXT" for h in quoted_headers])
-        cursor.execute(f"CREATE TEMP TABLE {quoted_staging_table} ({cols_def});")
+        # The staging table takes the target's column types, so the key comparisons
+        # below compare like with like (DuckDB will not compare INTEGER with VARCHAR)
+        cursor.execute(f"CREATE TEMP TABLE {quoted_staging_table} AS "
+                       f"SELECT {', '.join(quoted_headers)} FROM {quoted_target_table} WHERE 1 = 0;")
 
         try:
-            # Step 1: Load all data into the staging table (same as before)
-            insert_sql = f"INSERT INTO {quoted_staging_table} ({', '.join(quoted_headers)}) VALUES ({', '.join(['?'] * len(headers))});"
-            batch = []
-            total_rows_processed = 0
-            for row in data_iterator:
-                batch.append(row)
-                total_rows_processed += 1
-                if len(batch) >= batch_size:
+            with self._load_transaction():
+                # Step 1: Load all data into the staging table (same as before)
+                insert_sql = f"INSERT INTO {quoted_staging_table} ({', '.join(quoted_headers)}) VALUES ({', '.join(['?'] * len(headers))});"
+                batch = []
+                total_rows_processed = 0
+                for row in data_iterator:
+                    batch.append(row)
+                    total_rows_processed += 1
+                    if len(batch) >= batch_size:
+                        cursor.executemany(insert_sql, batch)
+                        batch = []
+                if batch:
                     cursor.executemany(insert_sql, batch)
-                    batch = []
-            if batch:
-                cursor.executemany(insert_sql, batch)
 
-            # --- NEW, MORE COMPATIBLE LOGIC ---
+                # --- NEW, MORE COMPATIBLE LOGIC ---
 
-            # Step 2: UPDATE rows that already exist in the target table
-            update_set_clauses = [f"{h} = (SELECT {h} FROM {quoted_staging_table} WHERE {quoted_staging_table}.{quoted_key_column} = {quoted_target_table}.{quoted_key_column})"
-                                  for h in quoted_headers if h.lower() != quoted_key_column.lower()]
+                # Step 2: UPDATE rows that already exist in the target table
+                update_set_clauses = [f"{h} = (SELECT {h} FROM {quoted_staging_table} WHERE {quoted_staging_table}.{quoted_key_column} = {quoted_target_table}.{quoted_key_column})"
+                                      for h in quoted_headers if h.lower() != quoted_key_column.lower()]
             
-            if update_set_clauses: # Only run update if there are non-key columns
-                update_sql = (
-                    f"UPDATE {quoted_target_table} SET {', '.join(update_set_clauses)} "
-                    f"WHERE {quoted_key_column} IN (SELECT {quoted_key_column} FROM {quoted_staging_table})"
+                if update_set_clauses: # Only run update if there are non-key columns
+                    update_sql = (
+                        f"UPDATE {quoted_target_table} SET {', '.join(update_set_clauses)} "
+                        f"WHERE {quoted_key_column} IN (SELECT {quoted_key_column} FROM {quoted_staging_table})"
+                    )
+                    #print("DEBUG:", update_sql)
+                    cursor.execute(update_sql)
+
+                # Step 3: INSERT rows that are new
+                insert_new_sql = (
+                    f"INSERT INTO {quoted_target_table} ({', '.join(quoted_headers)}) "
+                    f"SELECT {', '.join(quoted_headers)} FROM {quoted_staging_table} "
+                    f"WHERE {quoted_key_column} NOT IN (SELECT {quoted_key_column} FROM {quoted_target_table})"
                 )
-                #print("DEBUG:", update_sql)
-                cursor.execute(update_sql)
-
-            # Step 3: INSERT rows that are new
-            insert_new_sql = (
-                f"INSERT INTO {quoted_target_table} ({', '.join(quoted_headers)}) "
-                f"SELECT {', '.join(quoted_headers)} FROM {quoted_staging_table} "
-                f"WHERE {quoted_key_column} NOT IN (SELECT {quoted_key_column} FROM {quoted_target_table})"
-            )
-            #print("DEBUG:", insert_new_sql)
-            cursor.execute(insert_new_sql)
-            
-            if self.db_engine == 'sqlite': self.db_connection.commit()
-            
+                #print("DEBUG:", insert_new_sql)
+                cursor.execute(insert_new_sql)
             return total_rows_processed
 
         finally:
@@ -10976,8 +11014,7 @@ class Interpreter:
                 count_sql = f"SELECT COUNT(*) FROM {self._quote_identifier(dest_info['target'])}"
                 if dest_info.get('db_mode') == 'IGNORE':
                     rows_before = cursor.execute(count_sql).fetchone()[0]
-                self.db_connection.execute('BEGIN TRANSACTION;')
-                try:
+                with self._load_transaction():
                     for processed_row in row_iterator:
                         batch.append(processed_row)
                         total_rows += 1
@@ -10986,15 +11023,11 @@ class Interpreter:
                             batch = []
                     
                     if batch: cursor.executemany(insert_sql, batch)
-                    self.db_connection.execute('COMMIT;')
-                    if dest_info.get('db_mode') == 'IGNORE':
-                        inserted = cursor.execute(count_sql).fetchone()[0] - rows_before
-                        print(f"{inserted} records loaded into table {dest_info['target']} ({total_rows - inserted} ignored)")
-                    else:
-                        print(f"{total_rows} records loaded into table {dest_info['target']}")
-                except Exception as e:
-                    self.db_connection.execute('ROLLBACK;')
-                    raise e
+                if dest_info.get('db_mode') == 'IGNORE':
+                    inserted = cursor.execute(count_sql).fetchone()[0] - rows_before
+                    print(f"{inserted} records loaded into table {dest_info['target']} ({total_rows - inserted} ignored)")
+                else:
+                    print(f"{total_rows} records loaded into table {dest_info['target']}")
             
         except FileNotFoundError:
             self._drop_failed_load_table(created_table)
@@ -11003,6 +11036,36 @@ class Interpreter:
             self._drop_failed_load_table(created_table)
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during the LOAD operation: {e}")
+
+    @contextlib.contextmanager
+    def _load_transaction(self):
+        """LOAD writes all its rows or none. Inside the program's own transaction the rows
+        join it (with SQLite, a savepoint lets a failed LOAD undo only itself); otherwise
+        LOAD runs as its own transaction. Everything goes through db_cursor, which is the
+        connection the program's BEGIN, COMMIT and ROLLBACK use."""
+        cursor = self.db_cursor
+        if self.db_engine == 'sqlite' and self.db_connection.in_transaction:
+            cursor.execute('SAVEPOINT dbbasic_load')
+            try:
+                yield
+            except BaseException:
+                cursor.execute('ROLLBACK TO dbbasic_load')
+                cursor.execute('RELEASE dbbasic_load')
+                raise
+            cursor.execute('RELEASE dbbasic_load')
+            return
+        try:
+            cursor.execute('BEGIN TRANSACTION')
+        except duckdb.Error:
+            # DuckDB inside the program's transaction: the rows are part of it
+            yield
+            return
+        try:
+            yield
+        except BaseException:
+            cursor.execute('ROLLBACK')
+            raise
+        cursor.execute('COMMIT')
 
     def _drop_failed_load_table(self, table):
         # Drop the table a failed CREATE TABLE load made, so no empty table is left behind
@@ -11200,8 +11263,7 @@ class Interpreter:
                 batch = []
                 total_rows = 0
                 empty_to_null = self._null_handling_rules(dest_info['target'], target_headers)
-                self.db_connection.execute('BEGIN TRANSACTION;')
-                try:
+                with self._load_transaction():
                     for transformed_row in transformer:
                         batch.append(apply_null_handling(empty_to_null, transformed_row))
                         total_rows += 1
@@ -11210,11 +11272,7 @@ class Interpreter:
                             batch = []
                     
                     if batch: cursor.executemany(insert_sql, batch)
-                    self.db_connection.execute('COMMIT;')
-                    print(f"{total_rows} records transformed and loaded into table {dest_info['target']}")
-                except Exception as e:
-                    self.db_connection.execute('ROLLBACK;')
-                    raise e
+                print(f"{total_rows} records transformed and loaded into table {dest_info['target']}")
             except Exception as e:
                 self._error(f"An error occurred during the schema-based LOAD operation: {e}")
 
@@ -14329,8 +14387,10 @@ class Interpreter:
             if results:
                 column_names = [desc[0] for desc in self.db_cursor.description]
                 self._handle_output(results, column_names)
-            else:
+            elif self.variables.get('ERR') == 0:
+                # SQLite's PRAGMA gives no rows for a missing table rather than an error
                 print(f"Table '{table_name}' not found.", file=sys.stderr)
+                self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, f"Table '{table_name}' not found."
                 
         except Exception as e:
             self.variables['ERR'] = 1.0
