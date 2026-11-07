@@ -50,7 +50,7 @@ Related chapters:
 
 **Boolean results.** Predicate functions return **-1 for true and 0 for false**, following BASIC convention. When a test such as `IF CONTAINS(a$, "x") THEN` is evaluated, any non-zero value counts as true.
 
-**Numbers are floating point.** Every numeric result is a Python `float`. `PRINT` shows whole-number floats without the decimal part, and `LEN`, `ARRAY_JOIN`, `PADLEFT$`, `PADRIGHT$` and string-criteria `FILTER` use the same text form (`LEN(10)` is 2, `PADLEFT$(7, 3, "0")` is `"007"`). Other string functions that are given a number convert it with Python's `str()` and so show the `.0`: `UCASE$(10)` returns `"10.0"`. If you need integer text, convert first with `STR$` and `TRIM$`, or with `FORMAT$`.
+**Numbers are floating point.** Every numeric result is a Python `float`. `PRINT` shows whole-number floats without the decimal part, and string functions given a number use the same text form (`LEN(10)` is 2, `PADLEFT$(7, 3, "0")` is `"007"`, `RIGHT$(12345, 2)` is `"45"`).
 
 **Indexing.** String positions are **1-based**. This applies to `MID$`, `INSTR`, `INSTRREV` and `EXTRACT$`. Array indexes are **0-based**. This applies to `a(0)`, `FIND` and `UBOUND`.
 
@@ -210,7 +210,7 @@ SQL-side functions (usable inside SQL statements on either engine): `CHARINDEX`,
 
 `LEFT$(s$, n)` returns a **String**.
 
-Returns the first `n` characters of `s$`. If `n` is larger than the length of the string, the whole string is returned. A negative `n` drops characters from the end (Python slice behaviour): `LEFT$("abc", -1)` is `"ab"`. A number passed as `s$` is first converted to text in float form (`"10.0"`). The function does not check its arguments.
+Returns the first `n` characters of `s$`. If `n` is larger than the length of the string, the whole string is returned. A negative `n` drops characters from the end (Python slice behaviour): `LEFT$("abc", -1)` is `"ab"`. A number passed as `s$` is first converted to text as `PRINT` shows it (`LEFT$(12345, 2)` is `"12"`). The function does not check its arguments.
 
 ```basic
 PRINT "[" + LEFT$("Hello World", 5) + "]"

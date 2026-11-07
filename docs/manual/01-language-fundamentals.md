@@ -969,8 +969,8 @@ Useful hash functions (Chapter 3): `HASH_COUNT`, `HASH_KEYS`, `HASH_EXISTS`,
 ## 1.12 Array statements
 
 All of these statements change the array **in place**. The array name must
-match an existing array variable **exactly** (including case), or the error is
-`'name' is not an array.`
+be an existing array variable (in any case, like every variable name), or the
+error is `'name' is not an array.`
 
 All array statements treat the first element as index 0. `UNSHIFT` and
 `SHIFT` work on the front of the array (index 0), and `PUSH` and `POP` work on
@@ -1367,7 +1367,7 @@ To test whether a string is empty, compare it explicitly:
 | `ON`, `ASC`, `DESC` in `SORT` | No |
 | Labels (`GOTO Done` vs `done:`) | **Yes** |
 | Hash keys with `h("key")` | Yes under `PRESERVE_CASE`. Keys are uppercased under `IGNORE_CASE`. |
-| Hash keys with `h.key` (read) | No (exact first, then case-insensitive) |
+| Hash keys with `h.key` (read) | No (exact first, then without a trailing `$`, then case-insensitive) |
 | String comparison (`"A" = "a"`) | Yes |
 
 ```basic

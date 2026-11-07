@@ -1,5 +1,6 @@
 import sys
 import bisect
+import copy
 import re
 import math
 import random
@@ -4491,6 +4492,13 @@ class Interpreter:
                     return existing
         return None
 
+    def _array_index(self, value):
+        """An array subscript as a whole number; text that is not a number is an error."""
+        try:
+            return int(self._number(value))
+        except ValueError:
+            self._error(f"Array index must be a number, not '{self._to_string(value)}'.")
+
     def _get_target_slot(self, target):
         """The (container, key) that holds a GET target's value. A missing hash is created,
         as assignment does; a hash field is found the way rec.name reads it (case-insensitively)."""
@@ -4506,7 +4514,7 @@ class Interpreter:
             if isinstance(value, list):
                 if kind == 'dot':
                     self._error("Dot notation only for HASH.")
-                index = int(step)
+                index = self._array_index(step)
                 if not 0 <= index < len(value):
                     self._error("Array index out of bounds.")
                 container, key = value, index
@@ -5690,7 +5698,7 @@ class Interpreter:
             elif lowercase_keys and isinstance(serializable_data, dict):
                 serializable_data = {k.lower(): v for k, v in serializable_data.items()}
 
-            return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys, default=self._json_default)
+            return json.dumps(serializable_data, indent=indent, sort_keys=sort_keys, default=self._json_default, ensure_ascii=False)
         # --- HASH FUNCTIONS ---
         elif name == 'PARSEJSON':
             if len(args) != 1:
@@ -5720,7 +5728,7 @@ class Interpreter:
             for h in args:
                 if not isinstance(h, dict):
                     self._error("All arguments to HASH_JOIN must be HASH variables.")
-                new_hash.update(h)
+                new_hash.update(copy.deepcopy(h))  # a new hash: nested values are not shared
             return new_hash
         elif name == 'HASH_KEYS':
             if len(args) != 1 or not isinstance(args[0], dict):
@@ -6489,7 +6497,7 @@ class Interpreter:
                     if self._current_token()[0] == 'RPAREN': self._expect('RPAREN'); break
                     key_or_index = self._parse_expression(); self._expect('RPAREN')
                     if isinstance(current_value, list):
-                        index = int(key_or_index)
+                        index = self._array_index(key_or_index)
                         if not 0 <= index < len(current_value): self._error("Array index out of bounds.")
                         current_value = current_value[index]
                     elif isinstance(current_value, dict):
@@ -7012,11 +7020,11 @@ class Interpreter:
         return value
 
     def _write_as_json(self, results, headers, stream, options={}):
-        json.dump([dict(zip(headers, row)) for row in results], stream, indent=2, default=self._json_default)
+        json.dump([dict(zip(headers, row)) for row in results], stream, indent=2, default=self._json_default, ensure_ascii=False)
         stream.write("\n")
     
     def _write_as_jsonl(self, results, headers, stream, options={}):
-        for row in results: stream.write(json.dumps(dict(zip(headers, row)), default=self._json_default) + "\n")
+        for row in results: stream.write(json.dumps(dict(zip(headers, row)), default=self._json_default, ensure_ascii=False) + "\n")
     
     def _write_as_xml(self, results, headers, stream, options={}):
         """Writes query results as XML."""
@@ -7939,13 +7947,13 @@ class Interpreter:
                     continue
                 value = self._parse_condition()
                 if isinstance(value, dict): 
-                    parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2, default=self._json_default))
+                    parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2, default=self._json_default, ensure_ascii=False))
                 elif isinstance(value, list): 
                     formatted_list_items = []
                     for item in value:
                         if isinstance(item, dict):
                             # If the item is a hash, format it as a JSON string.
-                            formatted_list_items.append(json.dumps(self._basic_to_json_serializable(item), default=self._json_default))
+                            formatted_list_items.append(json.dumps(self._basic_to_json_serializable(item), default=self._json_default, ensure_ascii=False))
                         else:
                             # Otherwise, use the standard formatting.
                             formatted_list_items.append(self._format_output_value(item))
@@ -8212,8 +8220,6 @@ class Interpreter:
             self._error(f"'{array_var_name}' is not a dimensioned array.")
         
         the_array = self.variables[array_var_name]
-        if not the_array:
-            return # Array is empty, nothing to do.
 
         sort_key = None
         sort_fn_name = None  # If set, use this function to compute each element's sort key.
@@ -8242,6 +8248,8 @@ class Interpreter:
                     reverse_order = True
                 self._next_token()
 
+        if not the_array:
+            return  # Empty: nothing to sort (the clauses above are still read)
         try:
             if sort_fn_name:
                 # Compute keys ahead of time (one call per element) so each item is mapped once.
@@ -8252,8 +8260,8 @@ class Interpreter:
                     paired.sort(key=lambda p: p[0], reverse=reverse_order)
                 except TypeError:
                     paired.sort(key=lambda p: str(p[0]), reverse=reverse_order)
-                # Write back into the original array slot
-                self.variables[array_var_name] = [item for _, item in paired]
+                # In place, so other names for the same array see the order too
+                the_array[:] = [item for _, item in paired]
             elif sort_key:
                 the_array.sort(key=lambda item: item.get(sort_key, 0) if isinstance(item, dict) else 0, reverse=reverse_order)
             else:
@@ -11747,7 +11755,7 @@ class Interpreter:
             if var_name not in self.variables or not isinstance(self.variables.get(var_name), (list, dict)): self._error(f"'{var_name}' is not an array or hash.")
             collection = self.variables[var_name]
             if isinstance(collection, list):
-                index = int(key_or_index_expr)
+                index = self._array_index(key_or_index_expr)
                 if index < 0:
                     self._error("Array index out of bounds.")
                 if index >= len(collection):

@@ -255,7 +255,7 @@ The query runs once, before the first pass. For each row, `row` becomes a HASH w
 - one key per column, named after the column in **upper case**, for example `NAME` and `DEPT`;
 - one key per column position, as the strings `"1"`, `"2"`, and so on.
 
-Hash keys are looked up without regard to case, so `row.name`, `row.NAME` and `row("name")` all work. SQL `NULL` values become `""`. `RECNO` counts from 1.
+Dot access ignores case, so `row.name` and `row.NAME` both work. With parentheses the key must match exactly (Chapter 1), so write it in upper case: `row("NAME")`. SQL `NULL` values become `""`. `RECNO` counts from 1.
 
 ```basic
 CREATE TABLE emp (id INTEGER, name TEXT, dept TEXT);
