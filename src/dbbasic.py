@@ -1590,7 +1590,7 @@ class Formatter:
             char = format_string[fmt_idx]
             if char in '#09*!&\\$<>^': # Check for '$' as a potential start of a mask
                 # <<< CORRECTED REGEX to properly match masks starting with '$' or '*' >>>
-                mask_regex = re.compile(r"([<>^]?\\ *\\[\s]*|!|&+|[\$*#09, ]+\.?[#0]*\^*)")
+                mask_regex = re.compile(r"([<>^]?\\ *\\[\s]*|!|&+|[\$*#09, ]+\.?[#09]*\^*)")
                 match = mask_regex.match(format_string, fmt_idx)
                 if match:
                     mask = match.group(0)
@@ -1620,14 +1620,28 @@ class Formatter:
     
     @staticmethod
     def _format_value(value, mask):
-        return Formatter._format_numeric(value, mask) if isinstance(value, (int, float)) else Formatter._format_string(str(value), mask)
+        if mask[0] in '!&\\<>^':
+            # A text field: numbers as PRINT shows them (5, not 5.0), SQL NULL as ""
+            if value is None:
+                value = ""
+            elif isinstance(value, float) and value.is_integer() and abs(value) < 1e16:
+                value = int(value)
+            return Formatter._format_string(str(value), mask)
+        if isinstance(value, str) and re.fullmatch(r'\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*', value):
+            value = float(value)
+        if not isinstance(value, (int, float)):
+            # A number field given text or SQL NULL: the text, right-aligned in the field
+            return ("" if value is None else str(value)).rjust(len(mask))
+        return Formatter._format_numeric(value, mask)
     
     @staticmethod
     def _format_scientific(value, mask, is_negative):
-        # (This function is unchanged)
         caret_pos = mask.find('^^^^')
         before_caret = mask[:caret_pos]
-        mantissa_str, exponent_str = f"{value:e}".split('e')
+        # Round to the mask's decimals here, so 9.99 with one decimal is 1.0E+01, not 10.0E+00
+        point = before_caret.find('.')
+        decimals = len(re.findall(r'[#09]', before_caret[point + 1:])) if point != -1 else 0
+        mantissa_str, exponent_str = f"{value:.{decimals}e}".split('e')
         mantissa, exponent = float(mantissa_str), int(exponent_str)
         mantissa_formatted = Formatter._format_numeric(mantissa, before_caret, force_positive=True)
         exp_sign = '+' if exponent >= 0 else '-'
@@ -1689,7 +1703,7 @@ class Formatter:
                 else:
                     result = ' ' + result
             elif mask_char == ',':
-                if digit_count > 0 and int_idx >= 0:
+                if digit_count > 0 and (int_idx >= 0 or '0' in integer_mask[:i]):
                     result = ',' + result
                 elif has_leading_asterisk:
                     result = '*' + result
@@ -3146,7 +3160,7 @@ class Interpreter:
         self.tokens = sub_tokens
         self.token_index = 0
         try:
-            value = self._parse_expression()
+            value = self._parse_condition()
             if self._current_token() is not None:
                 # Expression didn't consume the whole stream — extra tokens left over.
                 remaining = self._current_token()[1]
@@ -5572,22 +5586,22 @@ class Interpreter:
         elif name == 'UBOUND':
             if len(args) != 1 or not isinstance(args[0], list): self._error("UBOUND requires one array argument.")
             return float(len(args[0]) - 1 if args[0] else -1)
-        elif name == 'LEFT$': return str(args[0])[:int(args[1])]
+        elif name == 'LEFT$': return self._to_string(args[0])[:int(args[1])]
         elif name == 'RIGHT$':
             n = int(args[1])
-            return str(args[0])[-n:] if n > 0 else ""
-        elif name == 'MID$': s, st = str(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
-        elif name == 'UCASE$': return str(args[0]).upper()
-        elif name == 'LCASE$': return str(args[0]).lower()
+            return self._to_string(args[0])[-n:] if n > 0 else ""
+        elif name == 'MID$': s, st = self._to_string(args[0]), int(args[1])-1; ln = int(args[2]) if len(args)==3 else len(s); return s[st:st+ln]
+        elif name == 'UCASE$': return self._to_string(args[0]).upper()
+        elif name == 'LCASE$': return self._to_string(args[0]).lower()
         elif name == 'CENTER$':
             if not (2 <= len(args) <= 3):
                 self._error("CENTER$ requires 2 or 3 arguments: string$, width, [pad_char$].")
             
-            source_str = str(args[0])
+            source_str = self._to_string(args[0])
             width = int(args[1])
             pad_char = ' ' # Default padding character
             if len(args) == 3:
-                pad_char = str(args[2])
+                pad_char = self._to_string(args[2])
                 if len(pad_char) != 1:
                     self._error("Padding character for CENTER$ must be a single character.")
 
@@ -5597,12 +5611,12 @@ class Interpreter:
             if not (2 <= len(args) <= 3):
                 self._error("EXTRACT$ requires 2 or 3 arguments: source_string$, position, [delimiter$].")
             
-            source_str = str(args[0])
+            source_str = self._to_string(args[0])
             position = int(args[1])
             
             # Conditionally set the delimiter
             if len(args) == 3:
-                delimiter = str(args[2])
+                delimiter = self._to_string(args[2])
             else:
                 delimiter = "," # Default to a comma if not provided
 
@@ -5631,7 +5645,7 @@ class Interpreter:
         elif name == 'ARRAY_JOIN':
             if not (1 <= len(args) <= 2): self._error("ARRAY_JOIN requires 1 or 2 arguments: array, [delimiter$].")
             if not isinstance(args[0], list): self._error("First argument to ARRAY_JOIN must be an array.")
-            delimiter = str(args[1]) if len(args) >= 2 else ","
+            delimiter = self._to_string(args[1]) if len(args) >= 2 else ","
             return delimiter.join(self._to_string(item) for item in args[0])
         elif name == 'ARRAY':
             # The 'args' parameter is already a Python list of the evaluated arguments.
@@ -5682,7 +5696,7 @@ class Interpreter:
             if len(args) != 1:
                 self._error("PARSEJSON function requires 1 argument: the JSON string.")
             
-            json_string = str(args[0])
+            json_string = self._to_string(args[0])
             if not json_string.strip():
                 return {} # Return an empty hash for an empty string
 
@@ -5772,7 +5786,7 @@ class Interpreter:
         elif name == 'ENVIRON$':
             if len(args) != 1:
                 self._error("ENVIRON$ requires 1 argument.")
-            var_name = str(args[0])
+            var_name = self._to_string(args[0])
             return os.environ.get(var_name, "")
         elif name == 'CURDIR$':
             if args: 
@@ -5798,10 +5812,10 @@ class Interpreter:
             return -1.0 if is_eof else 0.0
         elif name == 'FILE_EXISTS':
             if len(args) != 1: self._error("FILE_EXISTS requires 1 argument.")
-            return -1.0 if os.path.exists(os.path.expanduser(str(args[0]))) else 0.0
+            return -1.0 if os.path.exists(os.path.expanduser(self._to_string(args[0]))) else 0.0
         elif name == 'FILESIZE':
             if len(args) != 1: self._error("FILESIZE requires 1 argument.")
-            filename = str(args[0])
+            filename = self._to_string(args[0])
             try:
                 return float(os.path.getsize(os.path.expanduser(filename)))
             except (FileNotFoundError, OSError):
@@ -5809,7 +5823,7 @@ class Interpreter:
 
         elif name == 'FILETIME':
             if len(args) != 1: self._error("FILETIME requires 1 argument.")
-            filename = str(args[0])
+            filename = self._to_string(args[0])
             try:
                 mtime = os.path.getmtime(os.path.expanduser(filename))
                 return datetime.fromtimestamp(mtime).strftime('%Y-%m-%d %H:%M:%S')
@@ -5818,7 +5832,7 @@ class Interpreter:
 
         elif name == 'FILEATTR':
             if len(args) != 1: self._error("FILEATTR requires 1 argument.")
-            filename = str(args[0])
+            filename = self._to_string(args[0])
             try:
                 filepath = os.path.expanduser(filename)
                 stat_info = os.stat(filepath)
@@ -5835,7 +5849,7 @@ class Interpreter:
 
         elif name == 'DISKSPACE':
             if len(args) != 1: self._error("DISKSPACE requires 1 argument.")
-            path = str(args[0])
+            path = self._to_string(args[0])
             try:
                 if os.name == 'nt':  # Windows
                     import shutil
@@ -5848,32 +5862,32 @@ class Interpreter:
                 return -1.0
         elif name == 'BASENAME$':
             if len(args) != 1: self._error("BASENAME$ requires 1 string argument.")
-            path = str(args[0])
+            path = self._to_string(args[0])
             return os.path.basename(path)
         elif name == 'PATHNAME$':
             if len(args) != 1: self._error("PATHNAME$ requires 1 string argument.")
-            path = str(args[0])
+            path = self._to_string(args[0])
             return os.path.dirname(path)
         elif name == 'URL_FILENAME$':
             if len(args) != 1: self._error("URL_FILENAME$ requires 1 string argument.")
-            url = str(args[0])
+            url = self._to_string(args[0])
             path = urlparse(url).path
             return os.path.basename(path)
 
         elif name == 'URL_PATH$':
             if len(args) != 1: self._error("URL_PATH$ requires 1 string argument.")
-            url = str(args[0])
+            url = self._to_string(args[0])
             path = urlparse(url).path
             return os.path.dirname(path)
 
         elif name == 'URL_HOSTNAME$':
             if len(args) != 1: self._error("URL_HOSTNAME$ requires 1 string argument.")
-            url = str(args[0])
+            url = self._to_string(args[0])
             return urlparse(url).hostname
 
         elif name == 'URL_SCHEME$':
             if len(args) != 1: self._error("URL_SCHEME$ requires 1 string argument.")
-            url = str(args[0])
+            url = self._to_string(args[0])
             return urlparse(url).scheme
         elif name == 'DATE$': return datetime.now().strftime('%Y-%m-%d')
         elif name == 'TIME$': return datetime.now().strftime('%H:%M:%S')
@@ -5969,19 +5983,19 @@ class Interpreter:
         elif name == 'FORMAT$':
             if len(args) != 2:
                 self._error("FORMAT$ requires 2 arguments: value, mask$.")
-            value, mask = args[0], str(args[1])
+            value, mask = args[0], self._to_string(args[1])
             # number/string formatting
             return Formatter.format(mask, [value])
         elif name == 'FORMATDATE$':
             if not (2 <= len(args) <= 3):
                 self._error("FORMATDATE$ requires 2 or 3 arguments: date_string$, output_mask$, [input_mask$].")
             
-            value, output_mask = args[0], str(args[1])
+            value, output_mask = args[0], self._to_string(args[1])
             date_obj = None
 
             if len(args) == 3:
                 # Case 1: User provided an explicit input mask
-                input_mask = str(args[2])
+                input_mask = self._to_string(args[2])
                 py_input_mask = self._convert_basic_to_python_date_mask(input_mask)
                 try:
                     date_obj = datetime.strptime(value, py_input_mask)
@@ -6002,7 +6016,7 @@ class Interpreter:
         elif name == 'HOUR' or name == 'MINUTE' or name == 'SECOND':
             if len(args) != 1:
                 self._error(f"{name} requires 1 time string argument.")
-            time_str = str(args[0]).strip()
+            time_str = self._to_string(args[0]).strip()
             # For a datetime ("2024-07-04 13:45:10" or "2024-07-04T13:45:10") use the time part
             if ' ' in time_str or 'T' in time_str:
                 time_str = re.split(r'[ T]', time_str)[-1]
@@ -6029,7 +6043,7 @@ class Interpreter:
         elif name == 'ISDATE':
             if len(args) != 1:
                 self._error("ISDATE requires 1 string argument.")
-            date_str = str(args[0])
+            date_str = self._to_string(args[0])
             # Try a few common formats
             return -1.0 if self._try_parse_date(date_str.strip()) else 0.0
 
@@ -6050,7 +6064,7 @@ class Interpreter:
         elif name == 'INSTRREV':
             if not (2 <= len(args) <= 3):
                 self._error("INSTRREV requires 2 or 3 arguments: haystack$, needle$, [start].")
-            haystack, needle = str(args[0]), str(args[1])
+            haystack, needle = self._to_string(args[0]), self._to_string(args[1])
             start = len(haystack)
             if len(args) == 3:
                 start = int(args[2])
@@ -6143,7 +6157,7 @@ class Interpreter:
         elif name == 'LEN': return float(len(self._to_string(args[0])))
         elif name == 'SPLIT':
             if not (2 <= len(args) <= 3): self._error("SPLIT requires 2 or 3 arguments.")
-            source_str, delimiter_str = str(args[0]), str(args[1])
+            source_str, delimiter_str = self._to_string(args[0]), self._to_string(args[1])
             if not delimiter_str: return list(source_str)
             if len(args) == 3: limit = int(args[2]); return source_str.split(delimiter_str, limit - 1) if limit > 0 else self._error("Limit must be > 0")
             return source_str.split(delimiter_str)
@@ -6151,64 +6165,64 @@ class Interpreter:
             if len(args) != 1: 
                 self._error("SOUNDEX$ requires one string argument.")
             # Reuse the existing logic from the SQL function implementation
-            return SqliteStringFunctions.soundex(str(args[0]))
+            return SqliteStringFunctions.soundex(self._to_string(args[0]))
         elif name == 'INSTR':
             if not (2 <= len(args) <= 3): self._error("INSTR requires 2 or 3 arguments.")
             if len(args) == 2:
-                haystack, needle = str(args[0]), str(args[1])
+                haystack, needle = self._to_string(args[0]), self._to_string(args[1])
                 pos = haystack.find(needle)
                 return float(pos + 1) if pos != -1 else 0.0
             else:  # 3 arguments: INSTR(start, haystack, needle)
-                start, haystack, needle = int(args[0]) - 1, str(args[1]), str(args[2])
+                start, haystack, needle = int(args[0]) - 1, self._to_string(args[1]), self._to_string(args[2])
                 pos = haystack.find(needle, max(0, start))
                 return float(pos + 1) if pos != -1 else 0.0
         elif name == 'REVERSE$': 
-            return str(args[0])[::-1]
+            return self._to_string(args[0])[::-1]
 
         elif name == 'REPEAT$': 
             if len(args) != 2: self._error("REPEAT$ requires 2 arguments.")
-            return str(args[0]) * int(args[1])
+            return self._to_string(args[0]) * int(args[1])
 
         elif name == 'PADLEFT$':
             if len(args) != 3: self._error("PADLEFT$ requires 3 arguments.")
             # Numbers as PRINT shows them (60, not 60.0): padding numbers is the common use
-            text, length, pad_char = self._to_string(args[0]), int(args[1]), str(args[2])
+            text, length, pad_char = self._to_string(args[0]), int(args[1]), self._to_string(args[2])
             if len(pad_char) == 0: pad_char = ' '
             return text.rjust(length, pad_char[0])
 
         elif name == 'PADRIGHT$':
             if len(args) != 3: self._error("PADRIGHT$ requires 3 arguments.")
             # Numbers as PRINT shows them (60, not 60.0): padding numbers is the common use
-            text, length, pad_char = self._to_string(args[0]), int(args[1]), str(args[2])
+            text, length, pad_char = self._to_string(args[0]), int(args[1]), self._to_string(args[2])
             if len(pad_char) == 0: pad_char = ' '
             return text.ljust(length, pad_char[0])
 
         elif name == 'STARTSWITH':
             if len(args) != 2: self._error("STARTSWITH requires 2 arguments.")
-            text, prefix = str(args[0]), str(args[1])
+            text, prefix = self._to_string(args[0]), self._to_string(args[1])
             return -1.0 if text.startswith(prefix) else 0.0
 
         elif name == 'ENDSWITH':
             if len(args) != 2: self._error("ENDSWITH requires 2 arguments.")
-            text, suffix = str(args[0]), str(args[1])
+            text, suffix = self._to_string(args[0]), self._to_string(args[1])
             return -1.0 if text.endswith(suffix) else 0.0
 
         elif name == 'CONTAINS':
             if len(args) != 2: self._error("CONTAINS requires 2 arguments.")
-            text, substring = str(args[0]), str(args[1])
+            text, substring = self._to_string(args[0]), self._to_string(args[1])
             return -1.0 if substring in text else 0.0
 
         elif name == 'PROPER$':
             if len(args) != 1: self._error("PROPER$ requires 1 argument.")
-            return str(args[0]).title()
+            return self._to_string(args[0]).title()
 
         elif name == 'ISALPHA':
             if len(args) != 1: self._error("ISALPHA requires 1 argument.")
-            return -1.0 if str(args[0]).isalpha() else 0.0
+            return -1.0 if self._to_string(args[0]).isalpha() else 0.0
 
         elif name == 'ISDIGIT':
             if len(args) != 1: self._error("ISDIGIT requires 1 argument.")
-            return -1.0 if str(args[0]).isdigit() else 0.0
+            return -1.0 if self._to_string(args[0]).isdigit() else 0.0
         elif name == 'ISNUMERIC':
             if len(args) != 1: self._error("ISNUMERIC requires 1 argument.")
             try:
@@ -6217,7 +6231,7 @@ class Interpreter:
                 return 0.0 # False
         elif name == 'ISALNUM':
             if len(args) != 1: self._error("ISALNUM requires 1 argument.")
-            return -1.0 if str(args[0]).isalnum() else 0.0
+            return -1.0 if self._to_string(args[0]).isalnum() else 0.0
         elif name == 'CHR$':
             if len(args) != 1: self._error("CHR$ requires one numeric argument.")
             return chr(int(args[0]))
@@ -6227,7 +6241,7 @@ class Interpreter:
             return float(ord(args[0][0]))
         elif name == 'REPLACE$':
             if not (3 <= len(args) <= 5): self._error("REPLACE$ requires 3 to 5 arguments.")
-            source_str, old_str, new_str = str(args[0]), str(args[1]), str(args[2])
+            source_str, old_str, new_str = self._to_string(args[0]), self._to_string(args[1]), self._to_string(args[2])
             count = int(args[3]) if len(args) >= 4 else -1
             ignore_case = (args[4] != 0) if len(args) == 5 else False
             if ignore_case: return re.sub(re.escape(old_str), new_str, source_str, count=count if count != -1 else 0, flags=re.IGNORECASE)
@@ -6238,54 +6252,54 @@ class Interpreter:
         elif name == 'TRIM$': 
             if len(args) == 1:
                 # Standard whitespace trim
-                return str(args[0]).strip()
+                return self._to_string(args[0]).strip()
             elif len(args) == 2:
                 # Trim a specific set of characters
-                return str(args[0]).strip(str(args[1]))
+                return self._to_string(args[0]).strip(self._to_string(args[1]))
             else:
                 self._error("TRIM$ requires 1 or 2 arguments.")
         elif name == 'LTRIM$': 
             if len(args) == 1:
                 # Standard whitespace trim from the left
-                return str(args[0]).lstrip()
+                return self._to_string(args[0]).lstrip()
             elif len(args) == 2:
                 # Trim a specific set of characters from the left
-                return str(args[0]).lstrip(str(args[1]))
+                return self._to_string(args[0]).lstrip(self._to_string(args[1]))
             else:
                 self._error("LTRIM$ requires 1 or 2 arguments.")
         elif name == 'RTRIM$': 
             if len(args) == 1:
                 # Standard whitespace trim from the right
-                return str(args[0]).rstrip()
+                return self._to_string(args[0]).rstrip()
             elif len(args) == 2:
                 # Trim a specific set of characters from the right
-                return str(args[0]).rstrip(str(args[1]))
+                return self._to_string(args[0]).rstrip(self._to_string(args[1]))
             else:
                 self._error("RTRIM$ requires 1 or 2 arguments.")
         elif name == 'STR$': return self._format_output_value(args[0])
         elif name == 'HTMLENCODE$':
             if len(args) != 1: self._error("HTMLENCODE$ requires one string argument.")
-            return html.escape(str(args[0]))
+            return html.escape(self._to_string(args[0]))
         elif name == 'HTMLDECODE$':
             if len(args) != 1: self._error("HTMLDECODE$ requires one string argument.")
-            return html.unescape(str(args[0]))
+            return html.unescape(self._to_string(args[0]))
         elif name == 'STRIPHTML$':
             if len(args) != 1: self._error("STRIPHTML$ requires one string argument.")
-            html_content = str(args[0])
+            html_content = self._to_string(args[0])
             # Use BeautifulSoup to parse the HTML and get the text
             soup = BeautifulSoup(html_content, 'lxml')
             return soup.get_text()
         elif name == 'URLENCODE$':
             if len(args) != 1: self._error("URLENCODE$ requires one string argument.")
-            return quote_plus(str(args[0]))
+            return quote_plus(self._to_string(args[0]))
         elif name == 'URLDECODE$':
             if len(args) != 1: self._error("URLDECODE$ requires one string argument.")
-            return unquote_plus(str(args[0]))
+            return unquote_plus(self._to_string(args[0]))
         elif name == 'VAL':
             # Like classic BASIC, read the number at the start of the text ("12abc" -> 12)
             if isinstance(args[0], (int, float)):
                 return float(args[0])
-            m = re.match(r'\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?', str(args[0]))
+            m = re.match(r'\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?', self._to_string(args[0]))
             return float(m.group(0)) if m else 0.0
         elif name == 'INT': return float(math.floor(args[0]))
         elif name == 'FIX': return float(math.trunc(args[0]))
@@ -6299,7 +6313,13 @@ class Interpreter:
         elif name == 'SQR': return math.sqrt(args[0])
         elif name == 'MOD':
             if len(args) != 2: self._error("MOD requires 2 arguments.")
-            return float(args[0] % args[1])
+            try:
+                dividend, divisor = self._number(args[0]), self._number(args[1])
+            except ValueError:
+                self._error("MOD requires two numbers.")
+            if divisor == 0:
+                raise RuntimeError("Division by zero")
+            return float(dividend % divisor)
 
         elif name == 'ROUND':
             if not (1 <= len(args) <= 2): self._error("ROUND requires 1 or 2 arguments.")
@@ -6349,7 +6369,12 @@ class Interpreter:
             op = token[1]
             self._next_token()
             res = self._parse_factor() 
-            return -res if op == '-' else res
+            if op == '+':
+                return res
+            try:
+                return -self._number(res)
+            except ValueError:
+                raise RuntimeError(f"Type mismatch: cannot negate '{res}'.")
         if token[0] == 'NUMBER': 
             self._next_token(); 
             return float(token[1])
@@ -6531,12 +6556,42 @@ class Interpreter:
         self.variables = VariableTable()
         #print("All variables have been cleared.") 
         
+    _NUMBER_TEXT_RE = re.compile(r'\s*[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?\s*')
+
+    @classmethod
+    def _number(cls, value):
+        """value as a number for arithmetic: a number, or text that reads as one ("12.5",
+        "1e3"). Raises ValueError otherwise; "nan", "inf" and "1_000" are text, not numbers."""
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str) and cls._NUMBER_TEXT_RE.fullmatch(value):
+            return float(value)
+        raise ValueError(value)
+
+    @staticmethod
+    def _checked(result):
+        """An arithmetic result, or an Overflow error when it is too large for a number."""
+        if isinstance(result, float) and math.isinf(result):
+            raise RuntimeError("Overflow")
+        return result
+
     def _parse_power(self):
         res = self._parse_factor()
         while self._current_token() and self._current_token()[0] == 'CARET':
             self._next_token()
             right = self._parse_factor()
-            res = pow(res, right)
+            try:
+                base, exponent = self._number(res), self._number(right)
+            except ValueError:
+                raise RuntimeError(f"Type mismatch: cannot raise '{res}' to the power '{right}'.")
+            if base < 0 and not exponent.is_integer():
+                raise RuntimeError("Illegal function call: a negative number to a fractional power.")
+            if base == 0 and exponent < 0:
+                raise RuntimeError("Division by zero")
+            try:
+                res = self._checked(math.pow(base, exponent))
+            except OverflowError:
+                raise RuntimeError("Overflow")
         return res 
         
     def _parse_term(self):
@@ -6547,15 +6602,13 @@ class Interpreter:
             right = self._parse_power()
             try:
                 # --- FIX: Convert both operands to numbers before the operation ---
-                numeric_res = float(res)
-                numeric_right = float(right)
+                numeric_res = self._number(res)
+                numeric_right = self._number(right)
 
                 if op == '*':
-                    # --- FIX: Perform numeric multiplication ---
-                    res = numeric_res * numeric_right
+                    res = self._checked(numeric_res * numeric_right)
                 elif op == '/':
-                    # --- FIX: Perform numeric division ---
-                    res = numeric_res / numeric_right
+                    res = self._checked(numeric_res / numeric_right)
             except ZeroDivisionError:
                 raise RuntimeError("Division by zero")
             except (ValueError, TypeError):
@@ -6576,7 +6629,7 @@ class Interpreter:
                 # '+' is special: could be for strings or numeric. Use & for strings.
                 try:
                     # Attempt numeric addition first, even with strings like "123.45"
-                    res = float(res) + float(right)
+                    res = self._checked(self._number(res) + self._number(right))
                 except (ValueError, TypeError):
                     # If conversion to float fails, perform string concatenation
                     res = self._to_string(res) + self._to_string(right)
@@ -6586,9 +6639,9 @@ class Interpreter:
             elif op == '-':
                 # --- FIX: Subtraction should attempt numeric conversion ---
                 try:
-                    numeric_res = float(res)
-                    numeric_right = float(right)
-                    res = numeric_res - numeric_right
+                    numeric_res = self._number(res)
+                    numeric_right = self._number(right)
+                    res = self._checked(numeric_res - numeric_right)
                 except (ValueError, TypeError):
                     raise RuntimeError(f"Type mismatch: cannot perform subtraction on '{res}' and '{right}'.")
         return res
@@ -6649,6 +6702,9 @@ class Interpreter:
             # A SQL NULL compares as ""
             if left is None: left = ""
             if right is None: right = ""
+            following = self._current_token()
+            if following and following[0] in ('RELOP', 'ASSIGN'):
+                self._error(f"Comparisons cannot be chained: write a {op} b AND b {following[1]} c.")
             if op == '=': return -1.0 if left == right else 0.0
             if op == '<>': return -1.0 if left != right else 0.0
             if op == '<': return -1.0 if left < right else 0.0
@@ -7523,7 +7579,9 @@ class Interpreter:
         A SQL NULL (None) becomes ""."""
         if value is None:
             return ""
-        if isinstance(value, float) and value.is_integer():
+        if isinstance(value, float) and value.is_integer() and abs(value) < 1e16:
+            # Whole numbers without ".0"; beyond 16 digits a float is not exact, so
+            # those keep the exponent form (1e+20, not 100000000000000000000)
             return str(int(value))
         return str(value)
         
@@ -7841,7 +7899,11 @@ class Interpreter:
                 self._error("Expected ; after the PRINT USING format string")
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'ELSE']:
                 values.append(self._parse_condition())
-                if self._current_token() and self._current_token()[0] == 'COMMA': self._next_token()
+                tok, nxt = self._current_token(), self._peek_token()
+                if tok and tok[0] == 'COMMA':
+                    self._next_token()
+                elif tok and tok[0] == 'SEMICOLON' and nxt and nxt[0] not in ('NEWLINE', 'END', 'COLON', 'ELSE'):
+                    self._next_token()  # PRINT USING mask; a; b -- ; between values, as , does
                 else: break
             suppress_nl = False
             if self._current_token() and self._current_token()[0] == 'SEMICOLON':
@@ -7868,6 +7930,13 @@ class Interpreter:
             parts.append('\n')
         else:
             while self._current_token() and self._current_token()[0] not in ['NEWLINE', 'END', 'COLON', 'ELSE']:
+                # A separator with no item before it (PRINT ; or PRINT a;;b)
+                if self._current_token()[0] == 'SEMICOLON':
+                    self._next_token(); suppress_nl = True
+                    continue
+                if self._current_token()[0] == 'COMMA':
+                    self._next_token(); parts.append('\t'); suppress_nl = True
+                    continue
                 value = self._parse_condition()
                 if isinstance(value, dict): 
                     parts.append(json.dumps(self._basic_to_json_serializable(value), indent=2, default=self._json_default))
