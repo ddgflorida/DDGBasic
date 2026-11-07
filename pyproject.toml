@@ -22,7 +22,7 @@ classifiers = [
 ]
 dependencies = [
     "requests",
-    "duckdb",
+    "duckdb>=1.2",
     "numpy",
     "xlrd3",
     "openpyxl",

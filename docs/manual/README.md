@@ -61,7 +61,7 @@ pip install -r requirements.txt
 [`requirements.txt`](../../requirements.txt) lists each package with the features it is used for:
 
 - `requests`
-- `duckdb`
+- `duckdb` (1.2 or newer)
 - `numpy` (DuckDB needs it for the SQL functions DbBasic adds)
 - `xlrd3`
 - `openpyxl`
