@@ -23,6 +23,9 @@ rem The compiled program can't read its own source, so it relies on
 rem Interpreter.BUILTIN_FN_NAMES for function references; make sure it's current.
 "%PYTHON%" "%REPO_DIR%tools\check_builtin_names.py"
 if errorlevel 1 exit /b 1
+rem The build bundles the DuckDB this Python has: stop if it is too old (or numpy is missing).
+"%PYTHON%" "%REPO_DIR%tools\check_dependencies.py"
+if errorlevel 1 exit /b 1
 
 pushd "%SRC_DIR%" || exit /b 1
 "%PYTHON%" -m nuitka ^

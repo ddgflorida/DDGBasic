@@ -84,7 +84,7 @@ dbbasic --ide examples/contact.bas  # the QBasic-style IDE: F5 runs, F1 helps
 
 To run from a copy of the source instead, install the dependencies with `pip install -r requirements.txt` and use `python3 src/dbbasic.py` in place of `dbbasic`. `pip install .` in the copy installs the `dbbasic` command from it.
 
-To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `dbbasic` from anywhere.
+To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `dbbasic` from anywhere. The build bundles the DuckDB of the Python that runs it, so both scripts stop if that DuckDB is older than 1.2 (`pip install --upgrade duckdb` fixes it).
 
 The full **Programmer's Reference Manual** is in [`docs/manual/`](docs/manual/README.md). Run the test suite with `python3 tests/run_tests.py`.
 

@@ -49,6 +49,26 @@ import pyarrow.parquet as pq
 csv.field_size_limit(1024 * 1024)
 
 
+MIN_DUCKDB = (1, 2)
+
+
+def duckdb_problem():
+    """Why the installed DuckDB can't be used, or None. Older versions keep their own
+    2-argument INSTR, and the SQL functions DbBasic adds need numpy."""
+    try:
+        version = tuple(int(part) for part in re.findall(r'\d+', duckdb.__version__)[:2])
+    except ValueError:
+        version = MIN_DUCKDB
+    if version < MIN_DUCKDB:
+        return (f"DbBasic needs DuckDB {'.'.join(map(str, MIN_DUCKDB))} or newer, but this is "
+                f"DuckDB {duckdb.__version__}. Upgrade it with: pip install --upgrade duckdb")
+    try:
+        import numpy  # noqa: F401  (also makes a compiled build include it)
+    except ImportError:
+        return "DbBasic's DuckDB functions need numpy. Install it with: pip install numpy"
+    return None
+
+
 def normalize_newlines(source_code):
     """Program text with every line ending as LF: Windows (CRLF) and old Mac (CR) files
     read the same as Unix ones."""
@@ -2951,6 +2971,9 @@ class Interpreter:
     def _init_db(self, filename=":memory:"):
         # Connect first: if the new database cannot be opened, the open one stays in use
         if self.db_engine == 'duckdb':
+            problem = duckdb_problem()
+            if problem:
+                raise RuntimeError(problem)
             connection = duckdb.connect(database=filename, read_only=False)
         else:
             connection = sqlite3.connect(filename, isolation_level=None)

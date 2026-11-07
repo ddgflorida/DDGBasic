@@ -24,6 +24,8 @@ cd "$SRC_DIR"
 # The compiled binary can't read its own source, so it relies on
 # Interpreter.BUILTIN_FN_NAMES for function references; make sure it's current.
 "$PYTHON" "$REPO_DIR/tools/check_builtin_names.py"
+# The build bundles the DuckDB this Python has: stop if it is too old (or numpy is missing).
+"$PYTHON" "$REPO_DIR/tools/check_dependencies.py"
 
 "$PYTHON" -m nuitka \
     --onefile \
