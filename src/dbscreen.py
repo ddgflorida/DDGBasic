@@ -1456,7 +1456,7 @@ class Screen:
             self._w('\x1b[?25h')
 
     # --- MENUBAR -------------------------------------------------------
-    def menubar(self, menus, row=1):
+    def menubar(self, menus, row=1, leave_easily=False):
         """A menu bar across the screen with pull-down menus. menus is a list of
         (title, [items]); an item '-' is a separator. Returns "Title.Item", "Title" for
         a title with no items, or "" for Esc. The bar stays drawn; the pull-downs don't."""
@@ -1570,6 +1570,8 @@ class Screen:
                                 return f'{menus[current][0]}.{menus[current][1][k].strip()}'
                             continue
                         close_menu()                   # a click elsewhere closes the pull-down
+                    if leave_easily:
+                        return ''                      # (the IDE: and gives the keys back)
                     continue
                 if key in ('WHEELDOWN', 'WHEELUP'):
                     if not opened:
@@ -1597,6 +1599,8 @@ class Screen:
                     continue
                 if key == ESC:
                     close_menu()
+                    if leave_easily:
+                        return ''                      # the IDE: Esc goes straight back to the editor
                 elif key == 'DOWN':
                     item = move(items, item, 1)
                 elif key == 'UP':

@@ -1,4 +1,5 @@
 import sys
+import bisect
 import re
 import math
 import random
@@ -1101,7 +1102,11 @@ class FunctionReturn(Exception):
 # APPLICATION LOGIC
 # =================================================================
 def preprocess_continuations(source_code):
+    """Joins lines that end in _ (outside strings and comments) to the next line. The line
+    breaks taken out are put back after the joined statement, as empty lines, so the lines
+    after it keep their numbers (for error messages, TRON and the IDE)."""
     result, i, in_string, in_comment, string_char = [], 0, False, False, None
+    pending = 0                                    # line breaks taken out by joins
     while i < len(source_code):
         char = source_code[i]
         if not in_string and not in_comment:
@@ -1115,9 +1120,11 @@ def preprocess_continuations(source_code):
             else: in_string, string_char = False, None
         elif char == '\n': in_comment = False
         if (char == '_' and not in_string and not in_comment and i + 1 < len(source_code) and source_code[i + 1] == '\n'):
-            result.append(' '); i += 2; continue
+            result.append(' '); i += 2; pending += 1; continue
         result.append(char); i += 1
-    return ''.join(result)
+        if char == '\n' and pending:
+            result.append('\n' * pending); pending = 0
+    return ''.join(result) + '\n' * pending
 
 def preprocess_echo_statements(source_code):
     lines = source_code.split('\n')
@@ -1152,13 +1159,15 @@ class Lexer:
         processed_code = preprocess_echo_statements(self.raw_source_code)
         #print("DEBUG AFTER:", processed_code)
         self.tokens = self._tokenize(processed_code)
-    
+        # Token positions are offsets in the text that was tokenized; its lines are the source's
+        # lines (ECHO rewriting and keyword joining keep them), so line numbers come from it
+        self.token_line_starts = [0] + [m.end() for m in re.finditer(r"\n", self.modified_source_code)]
+
     def get_line_col(self, pos):
-        line = 1
-        for i, start in enumerate(self.line_starts):
-            if start > pos: break
-            line = i + 1
-        col = pos - self.line_starts[line-1] + 1
+        """The line and column (from 1) of a token position."""
+        starts = self.token_line_starts
+        line = bisect.bisect_right(starts, pos)
+        col = pos - starts[line - 1] + 1
         return line, col
 
     _REM_RE = re.compile(r'\bREM\b', re.IGNORECASE)
@@ -1284,8 +1293,11 @@ class Lexer:
             sql, lambda chunk: joined_re.sub(lambda m: spaced[m.group(1).upper()], chunk))
 
         def join_keywords(chunk):
+            # Padded to the original length (END IF -> 'ENDIF '), so the positions of the tokens
+            # after it still match the source and error messages give the right line and column
             for regex, repl in compiled:
-                chunk = regex.sub(repl, chunk)
+                chunk = regex.sub(lambda m, repl=repl: repl if '\n' in m.group(0)
+                                  else repl + ' ' * max(0, len(m.group(0)) - len(repl)), chunk)
             return chunk
 
         code = self._outside_literals(source_code_to_process, join_keywords)
@@ -2414,6 +2426,7 @@ class Interpreter:
         self.db_engine = 'sqlite' # Set SQLite as the default engine
         self.sql_fatal_errors = True
         self.trace_mode = False   # FOR TRON AND TROFF
+        self.line_hook = None     # the IDE's debugger: called before each line with its number
         self.program_terminated = False # Termination flag
         self.exit_code = 0  # Process exit status; 1 after an unhandled runtime error
         self.hash_keys_mode = 'PRESERVE_CASE'  # Default to preserve case
@@ -3805,6 +3818,10 @@ class Interpreter:
                 if token[0] != 'TROFF':
                     print(f"[{line_num}]> {source_line}")
         # --- END OF TRACING LOGIC ---
+        if self.line_hook is not None:                # the IDE's debugger: breakpoints, stepping
+            token = self._current_token()
+            if token and token[0] not in ('NEWLINE', 'EOF'):
+                self.line_hook(self, self.lexer.get_line_col(token[2])[0])
         
         if not self._current_token():
             return False
@@ -14282,6 +14299,13 @@ class Interpreter:
             self.variables['ERR'] = -1.0; self.variables['ERRMSG$'] = str(e)
             
 
+def prepare_program(source_code, folder, cmd_args=None):
+    """An Interpreter ready to run source_code (INCLUDE paths relative to folder), for
+    the IDE's debugger, which runs it in its own process with a line hook."""
+    source = preprocess_includes(source_code, base_path=folder, included_files=set())
+    return Interpreter(Lexer(preprocess_continuations(source)), cmd_args or [])
+
+
 def run_interpreter(source_code, cmd_args=None, source_name="script", debug=False, dump_tokens=False):
     #print(f"--- Running {source_name} ---")
     if cmd_args is None: cmd_args = []
@@ -14398,7 +14422,8 @@ def main():
         runner = [sys.argv[0]] if '__compiled__' in globals() else [sys.executable, os.path.abspath(__file__)]
         sys.exit(run_ide(sys.argv[2] if len(sys.argv) > 2 else None, runner,
                          HelpRegistry.list_topics(), HelpRegistry.get_help,
-                         new_session=lambda: Interpreter(Lexer("\n"), cmd_args=[])))
+                         new_session=lambda: Interpreter(Lexer("\n"), cmd_args=[]),
+                         new_program=prepare_program))
     # If no args (or explicit flag), run REPL
     if len(sys.argv) < 2 or (len(sys.argv) == 2 and sys.argv[1] == '--repl'):
         run_repl(debug="--debug" in sys.argv)

@@ -1442,13 +1442,23 @@ Keywords, strings, numbers and comments have their own colours. The status line 
 - **F5 runs the program.** It is saved first, then runs in its own folder (so its relative file names work) with the whole terminal, so text-screen programs work as usual. When it ends, its output stays on the screen until you press a key. If it stopped with an error, the IDE puts the cursor on the error's line and column and shows the message.
 - **F1 shows the help** for the word under the cursor, the same text as `HELP`. Two-word topics are found from either word (`ON KEY`, `SET THEME`, `MAKE FORM`), and the clause words of a statement show the statement's help (`GET` and `PICTURE` show `@`, `NEXT` shows `FOR`, `THEN` shows `IF`). Shift-F1 lists every topic; type to jump to one.
 - **The Immediate window**, under the editor, runs one line at a time. F6 (or a click) moves between it and the editor. Type a statement and press Enter: it runs at once and its output appears in the window. `? x` is short for `PRINT x`. The window has a session of its own, as the REPL does: its variables, `FUNCTION`s, database connection and `SET` options stay from line to line until you leave the IDE, and it is separate from the program F5 runs. File names are relative to the program's folder, so `DATABASE OPEN "shop.db"` there opens the program's database. Up and Down bring back earlier lines, PgUp/PgDn (or the wheel) scroll back through the output, `CLS` clears the window, and Esc goes back to the editor. `INPUT` can't be used in it, since it has no keyboard prompt, and each line is a whole statement (a block `IF ... END IF` must fit on the line, as in the REPL). Options > Immediate window hides it to give the editor more room, or shows it again.
-- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Delete line, Duplicate line, Find, Find next, Go to line), Run, Options (blue or black screen, mouse on or off, Immediate window) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
+- **Debugging.** F9 sets a breakpoint on the cursor's line, shown in red, and F9 again clears it. With breakpoints set, F5 runs the program inside the IDE and stops before a breakpoint's line; F8 starts it stopped before its first line. At a stop the IDE comes back with that line highlighted:
+  - F8 runs the next line and stops again (it goes into a `GOSUB` or `FUNCTION`), F5 runs on to the next breakpoint or the end, F4 shows the program's screen until a key is pressed, and Run > Stop ends the program.
+  - The Immediate window works on the stopped program: `? total` shows its variable, and `total = 0` changes it before the program goes on.
+  - The text can't be changed while the program is stopped; Run > Stop first. Breakpoints can still be set and cleared, and the cursor and help work as usual.
+  - Ctrl-C while the program runs stops it before its next line.
+
+  A debug run uses the text in the editor, saved or not, and runs in the program's folder. It is a run inside the IDE, so a program that ends with `END` or an error comes back to the IDE as F5 does; breakpoints follow their lines as you edit, and Run > Clear breakpoints removes them all. Stopping is checked once per line, before it runs, so a line with several statements (`a = 1 : b = 2`) is one step.
+- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Delete line, Duplicate line, Find, Find next, Go to line), Run (start or continue, step, breakpoint, clear breakpoints, stop, output screen), Options (blue or black screen, mouse on or off, Immediate window) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
 
 | Key | Action |
 |---|---|
 | F1 / Shift-F1 | Help on the word under the cursor / all help topics |
-| F5 | Save and run the program |
+| F5 | Save and run the program (with breakpoints, run it in the IDE to the first one); when stopped, go on |
 | F6 | Move between the editor and the Immediate window |
+| F9 | Set or clear a breakpoint on the cursor's line |
+| F8 | Start the program stopped on its first line; when stopped, run the next line |
+| F4 | When stopped, show the program's screen |
 | F10, Alt+letter | The menu bar |
 | Ctrl-S, Ctrl-O, Ctrl-N | Save, open, new |
 | Alt-X, Ctrl-Q | Exit (it asks first if there are unsaved changes) |
@@ -1468,7 +1478,8 @@ Notes:
 
 - Files keep their line endings (CRLF or LF). Tabs in a file are shown and saved as 4 spaces.
 - The IDE turns the mouse on (also on Windows) and puts the setting back when it ends. While the mouse is on, a drag does not select text in the terminal; hold Shift while dragging, or choose Options > Mouse off.
-- Ctrl-Z is Undo, so it does not suspend the IDE as it would a program in a macOS or Linux terminal. Ctrl-C does nothing in the IDE; leave with Alt-X or Ctrl-Q.
+- Ctrl-Z is Undo, so it does not suspend the IDE as it would a program in a macOS or Linux terminal. Ctrl-C stops a program in a debug run; otherwise it does nothing in the IDE (leave with Alt-X or Ctrl-Q).
+- Esc, or a click outside the menus, closes the menu bar and goes back to the editor.
 - There is no text selection (cut, copy and paste of a block) yet.
 - The IDE needs an interactive terminal; with input or output redirected it stops with `The IDE needs an interactive terminal.`
 

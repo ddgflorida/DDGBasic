@@ -145,6 +145,50 @@ check(e.imm_lines[0] == '> ? 1 + 2' and e.imm_history[-1] == 'INPUT a$', 'typed 
 e.execute_immediate('CLS')
 check(e.imm_lines == [], 'CLS clears the Immediate window')
 
+# The debugger: the line hook sees the source's own line numbers (after _ continuations too)
+from dbbasic import prepare_program   # noqa: E402
+program = prepare_program('total = 0\nx = 1 + _\n    2\nFOR i = 1 TO 2\n    total = total + i\nNEXT i\n', folder)
+seen = []
+program.line_hook = lambda interp, line: seen.append(line)
+program.run()
+check(seen[:3] == [1, 2, 4] and seen.count(5) == 2, f'line hook: {seen}')
+
+# Breakpoints follow lines inserted and removed above them, and undo puts them back
+e = editor('a\nb\nc\nd')
+e.row = 2
+e.toggle_breakpoint()
+check(e.breakpoints == {2}, 'F9 sets a breakpoint')
+e.row, e.col = 0, 1
+e.enter()
+check(e.breakpoints == {3}, f'a line inserted above moves it down: {e.breakpoints}')
+e.row = 1
+e.delete_line()
+check(e.breakpoints == {2}, f'a line removed above moves it up: {e.breakpoints}')
+e.row = 2
+e.delete_line()
+check(e.breakpoints == set(), 'removing its line removes it')
+e.do_undo()
+check(e.breakpoints == {2}, f'undo brings it back: {e.breakpoints}')
+e.row, e.col = 2, 0
+e.enter()
+check(e.breakpoints == {3}, f'Enter at the start of its line pushes it down with the line: {e.breakpoints}')
+e.row = 3
+e.toggle_breakpoint()
+check(e.breakpoints == set(), 'F9 again clears it')
+
+# The Immediate window of a paused program sees its variables and leaves its place alone
+program = prepare_program('total = 0\nFOR i = 1 TO 3\n    total = total + i\nNEXT i\n', folder)
+program.run()
+e = Editor(None, ['dbbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help,
+           new_session=lambda: Interpreter(Lexer("\n"), cmd_args=[]))
+tokens, index = program.tokens, program.token_index
+e.program, e.paused_row = program, 2
+check(e.execute_immediate('? total') == [' 6'], "the Immediate window reads the paused program's variables")
+e.execute_immediate('total = 100')
+check(e.execute_immediate('? total') == [' 100'], 'and can change them')
+check(program.tokens is tokens and program.token_index == index, "the paused program's place is kept")
+check(e.session is None, 'no separate session is made while a program is paused')
+
 if failures:
     for f in failures:
         print('FAIL:', f)
