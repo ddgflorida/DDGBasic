@@ -86,7 +86,7 @@ To run from a copy of the source instead, install the dependencies with `pip ins
 
 To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `dbbasic` from anywhere. The build bundles the DuckDB of the Python that runs it, so both scripts stop if that DuckDB is older than 1.2 (`pip install --upgrade duckdb` fixes it).
 
-The full **Programmer's Reference Manual** is in [`docs/manual/`](docs/manual/README.md). Run the test suite with `python3 tests/run_tests.py`.
+The full **Programmer's Reference Manual** is in [`docs/manual/`](https://github.com/ddgflorida/DbBasic/blob/main/docs/manual/README.md). Run the test suite with `python3 tests/run_tests.py`.
 
 ---
 
@@ -162,16 +162,16 @@ PRINT `Imported ${(SELECT COUNT(*) FROM leads;)} clean rows.`
 
 ## 🗂️ Examples
 
-The `examples/` folder has some 60 programs; [`examples/README.md`](examples/README.md) lists them all. These show what DbBasic is for:
+The `examples/` folder has some 60 programs; [`examples/README.md`](https://github.com/ddgflorida/DbBasic/blob/main/examples/README.md) lists them all. These show what DbBasic is for:
 
 | Example | Shows |
 |---|---|
-| [`etl_pipeline.bas`](examples/etl_pipeline.bas) | A messy CSV becomes a clean table: BASIC functions clean every cell as `LOAD` reads it and drop bad rows; BASIC rules flag duplicates and assign customer tiers; SQL totals; JSON, Excel and a grouped report out |
-| [`duckdb_analytics.bas`](examples/duckdb_analytics.bas) | Half a million rows in DuckDB, queried straight from Parquet and CSV files, window functions, and BASIC rules (targets per region, in a hash) over the results, with timings |
-| [`two_engines.bas`](examples/two_engines.bas) | SQLite keeps the records (constraints, a transaction), DuckDB analyses them from a Parquet file (median, best month), and the results go back to SQLite |
-| [`row_logic.bas`](examples/row_logic.bas) | Allocating limited stock to orders by priority, row by row, with all-or-nothing and partial rules, in a transaction that `ON ERROR` rolls back |
-| [`invoice_demo.bas`](examples/invoice_demo.bas) | A 1990s-style invoice screen on the Chinook database: a header form, a lines grid, business rules |
-| [`retro_contacts.bas`](examples/retro_contacts.bas) | A complete text-mode application: menu bar, editable grid, forms, memo editor, report |
+| [`etl_pipeline.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/etl_pipeline.bas) | A messy CSV becomes a clean table: BASIC functions clean every cell as `LOAD` reads it and drop bad rows; BASIC rules flag duplicates and assign customer tiers; SQL totals; JSON, Excel and a grouped report out |
+| [`duckdb_analytics.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/duckdb_analytics.bas) | Half a million rows in DuckDB, queried straight from Parquet and CSV files, window functions, and BASIC rules (targets per region, in a hash) over the results, with timings |
+| [`two_engines.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/two_engines.bas) | SQLite keeps the records (constraints, a transaction), DuckDB analyses them from a Parquet file (median, best month), and the results go back to SQLite |
+| [`row_logic.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/row_logic.bas) | Allocating limited stock to orders by priority, row by row, with all-or-nothing and partial rules, in a transaction that `ON ERROR` rolls back |
+| [`invoice_demo.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/invoice_demo.bas) | A 1990s-style invoice screen on the Chinook database: a header form, a lines grid, business rules |
+| [`retro_contacts.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/retro_contacts.bas) | A complete text-mode application: menu bar, editable grid, forms, memo editor, report |
 
 Run one with `dbbasic examples/etl_pipeline.bas`, or open it in the IDE with `dbbasic --ide examples/etl_pipeline.bas`.
 
@@ -179,7 +179,7 @@ Run one with `dbbasic examples/etl_pipeline.bas`, or open it in the IDE with `db
 
 ## 📜 Statements Reference
 
-A summary. The [Programmer's Reference Manual](docs/manual/README.md) has the full syntax, options and examples for every statement and function.
+A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DbBasic/blob/main/docs/manual/README.md) has the full syntax, options and examples for every statement and function.
 
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
@@ -439,4 +439,4 @@ PRINT `Row ${i}: ${row("city$")} (${CARDINAL$(row("count"))})`
 
 ## 📄 License
 
-DbBasic is released under the [MIT License](LICENSE). The sample data in `examples/dotgov.csv` is the public list of .gov domains published by CISA, and `examples/data/chinook.sqlite` is the [Chinook sample database](https://github.com/lerocha/chinook-database) by Luis Rocha (MIT License).
+DbBasic is released under the [MIT License](https://github.com/ddgflorida/DbBasic/blob/main/LICENSE). The sample data in `examples/dotgov.csv` is the public list of .gov domains published by CISA, and `examples/data/chinook.sqlite` is the [Chinook sample database](https://github.com/lerocha/chinook-database) by Luis Rocha (MIT License).

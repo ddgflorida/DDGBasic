@@ -32,6 +32,12 @@ dependencies = [
     "pyarrow",
 ]
 
+[project.urls]
+Homepage = "https://github.com/ddgflorida/DbBasic"
+Documentation = "https://github.com/ddgflorida/DbBasic/blob/main/docs/manual/README.md"
+Examples = "https://github.com/ddgflorida/DbBasic/blob/main/examples/README.md"
+Issues = "https://github.com/ddgflorida/DbBasic/issues"
+
 [project.scripts]
 dbbasic = "dbbasic:main"
 
