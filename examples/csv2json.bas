@@ -9,13 +9,13 @@ REM - If a header exists, it is used for the JSON keys.
 REM - If no header exists, keys are generated (C1, C2, C3, ...).
 REM
 REM Usage:
-REM   python dbbasic.py csv2json.bas <input.csv> <output.json>
+REM   python ddgbasic.py csv2json.bas <input.csv> <output.json>
 REM -----------------------------------------------------------------
 PRINT PROGRAM$
 ON ERROR GOTO errhandler
 REM --- 1. Argument Handling ---
 IF COMMAND$(1) = "" OR COMMAND$(2) = "" THEN
-	PRINT "Usage: python dbbasic.py csv2json.bas <input.csv> <output.json>"
+	PRINT "Usage: python ddgbasic.py csv2json.bas <input.csv> <output.json>"
 	END
 END IF
 

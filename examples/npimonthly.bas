@@ -1,5 +1,5 @@
 REM ---
-REM DbBasic program to analyze the NPPES NPI Monthly Data file.
+REM DDGBasic program to analyze the NPPES NPI Monthly Data file.
 REM This script uses the ANALYZE CSV command to generate a detailed
 REM statistical report on the first 100,000 data records.
 REM ---

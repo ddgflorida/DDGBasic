@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a standalone DbBasic executable with Nuitka (macOS/Linux)
+# Build a standalone DDGBasic executable with Nuitka (macOS/Linux)
 # and install it somewhere on the PATH.
 #
 # Usage: ./compilenuitka.sh [install_dir]
@@ -29,15 +29,15 @@ cd "$SRC_DIR"
 
 "$PYTHON" -m nuitka \
     --onefile \
-    --onefile-tempdir-spec="{CACHE_DIR}/dbbasic/$BUILD_ID" \
+    --onefile-tempdir-spec="{CACHE_DIR}/ddgbasic/$BUILD_ID" \
     --follow-imports \
     --assume-yes-for-downloads \
     --static-libpython=no \
     --output-dir="$BUILD_DIR" \
-    --output-filename=dbbasic \
-    dbbasic.py
+    --output-filename=ddgbasic \
+    ddgbasic.py
 
-cp "$BUILD_DIR/dbbasic" "$INSTALL_DIR/dbbasic"
-chmod +x "$INSTALL_DIR/dbbasic"
+cp "$BUILD_DIR/ddgbasic" "$INSTALL_DIR/ddgbasic"
+chmod +x "$INSTALL_DIR/ddgbasic"
 
-echo "Installed: $INSTALL_DIR/dbbasic"
+echo "Installed: $INSTALL_DIR/ddgbasic"

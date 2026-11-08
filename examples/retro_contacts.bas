@@ -1,5 +1,5 @@
 REM ===================================================================
-REM Contacts: a 1990s-style DbBasic application.
+REM Contacts: a 1990s-style DDGBasic application.
 REM A menu bar, an editable grid that sorts and colours its rows, entry
 REM forms with drop-down lists, check boxes, dates and field hints, F1
 REM help from anywhere, a memo editor, a report and message boxes, in
@@ -41,7 +41,7 @@ DO
     IF choice$ = "Contacts.Notes" THEN GOSUB edit_notes
     IF choice$ = "Contacts.Delete" THEN GOSUB delete_contact
     IF choice$ = "Help.Keys" THEN x = show_help()
-    IF choice$ = "Help.About" THEN x = ALERT("Contacts;A DbBasic text-mode application")
+    IF choice$ = "Help.About" THEN x = ALERT("Contacts;A DDGBasic text-mode application")
 LOOP UNTIL choice$ = "File.Quit" OR choice$ = ""
 COLOR 7, 0
 CLS

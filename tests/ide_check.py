@@ -1,4 +1,4 @@
-"""Checks of the IDE's editing logic (src/dbide.py) that need no terminal: loading and
+"""Checks of the IDE's editing logic (src/ddgide.py) that need no terminal: loading and
 saving, typing, Enter's indent, Backspace, Delete, Tab, line commands, undo, find,
 syntax colouring, F1's choice of help topic and reading the line of an error.
 run_tests.py runs it with the BASIC test scripts (from source only)."""
@@ -7,8 +7,8 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'src'))
-from dbbasic import HelpRegistry          # noqa: E402
-from dbide import Editor, error_location  # noqa: E402
+from ddgbasic import HelpRegistry          # noqa: E402
+from ddgide import Editor, error_location  # noqa: E402
 
 failures = []
 
@@ -19,7 +19,7 @@ def check(condition, what):
 
 
 def editor(text=''):
-    e = Editor(None, ['dbbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help)
+    e = Editor(None, ['ddgbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help)
     e.lines = text.split('\n') if text else ['']
     return e
 
@@ -29,7 +29,7 @@ folder = tempfile.mkdtemp()
 path = os.path.join(folder, 'p.bas')
 with open(path, 'w', newline='') as f:
     f.write('FOR i = 1 TO 2\r\n\tPRINT i\r\nNEXT\r\n')
-e = Editor(path, ['dbbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help)
+e = Editor(path, ['ddgbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help)
 check(e.lines == ['FOR i = 1 TO 2', '    PRINT i', 'NEXT'], f'load: {e.lines}')
 check(e.newline == '\r\n', 'load: CRLF line endings')
 e.row, e.col = 2, 4
@@ -131,8 +131,8 @@ check(error_location("Error: Unexpected character '{' at line 2, col 5\n")
 check(error_location('all fine\n') is None, 'no error')
 
 # The Immediate window: its own session, ? for PRINT, variables kept, SQL, errors, CLS
-from dbbasic import Interpreter, Lexer   # noqa: E402
-e = Editor(None, ['dbbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help,
+from ddgbasic import Interpreter, Lexer   # noqa: E402
+e = Editor(None, ['ddgbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help,
            new_session=lambda: Interpreter(Lexer("\n"), cmd_args=[]))
 check(e.execute_immediate('? 1 + 2') == [' 3'], 'the Immediate window: ? 1 + 2')
 e.execute_immediate('x = 5')
@@ -146,7 +146,7 @@ e.execute_immediate('CLS')
 check(e.imm_lines == [], 'CLS clears the Immediate window')
 
 # The debugger: the line hook sees the source's own line numbers (after _ continuations too)
-from dbbasic import prepare_program   # noqa: E402
+from ddgbasic import prepare_program   # noqa: E402
 program = prepare_program('total = 0\nx = 1 + _\n    2\nFOR i = 1 TO 2\n    total = total + i\nNEXT i\n', folder)
 seen = []
 program.line_hook = lambda interp, line: seen.append(line)
@@ -179,7 +179,7 @@ check(e.breakpoints == set(), 'F9 again clears it')
 # The Immediate window of a paused program sees its variables and leaves its place alone
 program = prepare_program('total = 0\nFOR i = 1 TO 3\n    total = total + i\nNEXT i\n', folder)
 program.run()
-e = Editor(None, ['dbbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help,
+e = Editor(None, ['ddgbasic'], HelpRegistry.list_topics(), HelpRegistry.get_help,
            new_session=lambda: Interpreter(Lexer("\n"), cmd_args=[]))
 tokens, index = program.tokens, program.token_index
 e.program, e.paused_row = program, 2

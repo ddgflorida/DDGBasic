@@ -1,6 +1,6 @@
 # Chapter 2: Control Flow, Procedures & Program Control
 
-This chapter covers the statements that decide which code runs, how often it runs, and how a DbBasic program is structured into labels, subroutines and user-defined functions. It also covers error trapping, the statements that start or replace other programs, the debugging aids, and how to run the interpreter from the command line or the interactive REPL.
+This chapter covers the statements that decide which code runs, how often it runs, and how a DDGBasic program is structured into labels, subroutines and user-defined functions. It also covers error trapping, the statements that start or replace other programs, the debugging aids, and how to run the interpreter from the command line or the interactive REPL.
 
 **Contents**
 
@@ -20,12 +20,12 @@ This chapter covers the statements that decide which code runs, how often it run
 - [2.14 Error handling](#214-error-handling)
 - [2.15 Program control: END, RUN, CHAIN, EVAL, EXECUTE, CLEAR](#215-program-control-end-run-chain-eval-execute-clear)
 - [2.16 Debugging: TRON, TROFF, DUMP, SHOW VARIABLES](#216-debugging-tron-troff-dump-show-variables)
-- [2.17 Running DbBasic](#217-running-dbbasic)
+- [2.17 Running DDGBasic](#217-running-ddgbasic)
 - [2.18 Notes](#218-notes)
 
 Lexical rules, data types, variables, arrays, hashes and operators are covered in Chapter 1. The built-in function catalog is in Chapter 3. SQL statements, `PRINT` and `SET` are in Chapter 4. `LOAD` and `ANALYZE` are in Chapter 5. File I/O, networking and forms are in Chapter 6.
 
-All examples in this chapter were run against `src/dbbasic.py`. The output shown is what the interpreter printed.
+All examples in this chapter were run against `src/ddgbasic.py`. The output shown is what the interpreter printed.
 
 ---
 
@@ -58,7 +58,7 @@ These points about how the interpreter runs a program apply to every statement i
 | `expr IN (v1, v2, ...)` | True if `expr` equals one of the listed values. |
 | `expr IN (SELECT ...)` | True if `expr` equals a value in the first column of the query result. |
 
-SQL inside these conditions can use `:name` bind variables to refer to DbBasic variables. Bind variables are described in Chapter 4.
+SQL inside these conditions can use `:name` bind variables to refer to DDGBasic variables. Bind variables are described in Chapter 4.
 
 ---
 
@@ -328,7 +328,7 @@ FOR line$ IN TEXT(filename$) ... NEXT
 
 The file name must be in parentheses.
 
-- **JSON** reads the whole file. The top-level value must be an array; a single object is treated as an array of one. Each element is converted to DbBasic values (objects become HASHes and arrays become ARRAYs). JSON numbers stay numeric. `RECNO` counts from 1.
+- **JSON** reads the whole file. The top-level value must be an array; a single object is treated as an array of one. Each element is converted to DDGBasic values (objects become HASHes and arrays become ARRAYs). JSON numbers stay numeric. `RECNO` counts from 1.
 - **JSONL** reads one JSON document per line and skips blank lines. A line that is not valid JSON is skipped with `Warning: Skipping invalid JSON on line N of 'file'` on stderr, and the loop continues, as `LOAD JSONL` does. Lines holding an array or a plain value are passed to the loop as they are; check `TYPENAME$(obj)` if the file may contain them. `RECNO` is the record's line number in the file, so blank and skipped lines leave gaps, and it matches the line numbers in the warnings.
 - **TEXT** returns each line without its trailing `\n` or `\r\n`. The file is read as UTF-8, and undecodable bytes are replaced rather than causing an error. `RECNO` counts from 1.
 - A missing file causes the error `File not found for JSON loop: ...` (or `JSONL`/`TEXT`). Malformed JSON in a `JSON` file causes `Invalid JSON ...`.
@@ -783,7 +783,7 @@ log_msg returned 0
 
 ### Scope and shadowing
 
-DbBasic functions use *shadow* scoping instead of a separate local symbol table:
+DDGBasic functions use *shadow* scoping instead of a separate local symbol table:
 
 1. When a function is called, the current values of any global variables with the same names as the **parameters**, the **function name**, and any names **declared with `DIM` inside the body** are saved. Name matching here is case-insensitive.
 2. The parameters are bound to the argument values, and the function-name variable is set to its default.
@@ -1117,7 +1117,7 @@ PRINT "never"
 RUN filename$ [, arg1 [, arg2 ...]]
 ```
 
-Runs another DbBasic script as a sub-program, then returns to the statement after `RUN`.
+Runs another DDGBasic script as a sub-program, then returns to the statement after `RUN`.
 
 - `filename$` is a string expression; `~` is expanded. A missing file is a raised error, `RUN setup error: RUN: File not found: ...`, with `ERR = 2`.
 - The arguments are converted to strings and become the child's `COMMAND$(1)`, `COMMAND$(2)`, and so on. Numbers are converted as `PRINT` shows them, so `42` becomes `"42"`.
@@ -1192,7 +1192,7 @@ stage2: items_JSON$ = ["x", "y"]
 EVAL code$
 ```
 
-Runs a string of DbBasic source code. `code$` can contain several lines separated by `CHR$(10)` or by colons, including complete loops and block IFs.
+Runs a string of DDGBasic source code. `code$` can contain several lines separated by `CHR$(10)` or by colons, including complete loops and block IFs.
 
 - The code runs in a fresh interpreter that **shares** the caller's variables (the same variable table), open files, database connection and command-line arguments. Variables it creates or changes stay visible afterwards.
 - Labels belong only to the evaluated string, so it cannot `GOTO` the caller's labels. It can call the caller's `FUNCTION`s, as well as functions defined inside the same string.
@@ -1231,7 +1231,7 @@ caller continues after a failed EVAL
 EXECUTE sql$
 ```
 
-Runs a **SQL** string built at run time. On SQLite, `sql$` can hold several `;`-separated statements, and the results of each `SELECT`/`WITH`/`PRAGMA` are printed in the current output format. `EXECUTE` does not run DbBasic code; use `EVAL` for that. Errors follow `SQL_FATAL_ERRORS` and are reported as `SQL execution error: ...`. Chapter 4 has the full description.
+Runs a **SQL** string built at run time. On SQLite, `sql$` can hold several `;`-separated statements, and the results of each `SELECT`/`WITH`/`PRAGMA` are printed in the current output format. `EXECUTE` does not run DDGBasic code; use `EVAL` for that. Errors follow `SQL_FATAL_ERRORS` and are reported as `SQL execution error: ...`. Chapter 4 has the full description.
 
 ```basic
 CREATE TABLE log2024 (msg TEXT);
@@ -1336,15 +1336,15 @@ DUMP VARIABLES | LABELS | JUMPS | TOKENS
 
 ---
 
-## 2.17 Running DbBasic
+## 2.17 Running DDGBasic
 
 ### Command line
 
 ```
-python dbbasic.py [--debug] [--dump-tokens] program.bas [arg1 arg2 ...]
-python dbbasic.py [--debug] [--dump-tokens] - [arg1 arg2 ...]
-python dbbasic.py [--repl]
-python dbbasic.py --ide [program.bas]
+python ddgbasic.py [--debug] [--dump-tokens] program.bas [arg1 arg2 ...]
+python ddgbasic.py [--debug] [--dump-tokens] - [arg1 arg2 ...]
+python ddgbasic.py [--repl]
+python ddgbasic.py --ide [program.bas]
 ```
 
 | Form | Behaviour |
@@ -1387,7 +1387,7 @@ WEND
 ```
 
 ```
-$ python dbbasic.py args.bas report.csv "two words" 3
+$ python ddgbasic.py args.bas report.csv "two words" 3
  1: report.csv
  2: two words
  3: 3
@@ -1398,13 +1398,13 @@ $ python dbbasic.py args.bas report.csv "two words" 3
 ### The interactive REPL
 
 ```
-$ python dbbasic.py
-DbBasic REPL (Type 'EXIT' to quit)
+$ python ddgbasic.py
+DDGBasic REPL (Type 'EXIT' to quit)
 Supports single-line loops (e.g., FOR I=1 TO 5: PRINT I: NEXT)
-DbBasic> x = 5
-DbBasic> PRINT x * 2
+DDGBasic> x = 5
+DDGBasic> PRINT x * 2
  10
-DbBasic> FOR I=1 TO 3: PRINT I: NEXT
+DDGBasic> FOR I=1 TO 3: PRINT I: NEXT
  1
  2
  3
@@ -1418,7 +1418,7 @@ DbBasic> FOR I=1 TO 3: PRINT I: NEXT
 
 ### The IDE
 
-`dbbasic --ide program.bas` opens a full-screen editor in the style of QBasic, drawn with the same screen layer as the statements of [Chapter 7](07-text-mode-applications.md). Without a file name it starts an untitled program.
+`ddgbasic --ide program.bas` opens a full-screen editor in the style of QBasic, drawn with the same screen layer as the statements of [Chapter 7](07-text-mode-applications.md). Without a file name it starts an untitled program.
 
 ```
   File   Edit   Run   Options   Help
@@ -1507,7 +1507,7 @@ If no topic matches exactly but some topics start with the name you gave, they a
 The help topics related to this chapter are `IF`, `FOR`, `FOR IN`, `WHILE`, `GOSUB`, `ERROR`, `ON ERROR`, `RESUME`, `END`, `RUN`, `CHAIN`, `EXECUTE`, `EXIT`, `TRON`, `TROFF`, `SHOW VARIABLES`, `MAP`, `FILTER`, `REDUCE` and `SORT`.
 
 ```
-DbBasic> HELP GOSUB
+DDGBasic> HELP GOSUB
 
 === HELP: GOSUB ===
 Description: Jumps to a subroutine at the specified label. RETURN command jumps back.
@@ -1521,7 +1521,7 @@ Examples:
 
 ## 2.18 Notes
 
-This section collects details of how DbBasic behaves that are easy to miss.
+This section collects details of how DDGBasic behaves that are easy to miss.
 
 1. **Bare `RESUME`.** A bare `RESUME`, which classic BASIC allows, is not supported. Use `RESUME NEXT` or `RESUME label` (see 2.14).
 2. **`ERROR` inside a handler.** Errors inside an `ON ERROR` handler are not trapped, so `ERROR code` in a handler stops the program at once, and any statement after it, such as `ON ERROR GOTO 0`, never runs. To stop with an error the handler cannot deal with, `ERROR code` on its own is enough: `ERROR ERR, ERRMSG$` passes the error on unchanged, as `examples/errorhandling.bas` does.

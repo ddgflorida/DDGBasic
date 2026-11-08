@@ -1,5 +1,5 @@
 """
-Report layout for DbBasic's REPORT statement: a title line with date and page
+Report layout for DDGBasic's REPORT statement: a title line with date and page
 number, column headings, group headers and subtotal footers (nested for
 several GROUP BY columns), grand totals, and optional pagination.
 

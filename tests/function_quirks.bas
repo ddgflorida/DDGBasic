@@ -26,5 +26,5 @@ IF INSTR(ERRMSG$, "Invalid arguments for LEFT$()") THEN bad_args = 1
 RESUME after
 after:
 ON ERROR GOTO 0
-IF bad_args <> 1 THEN ERROR 1, "bad arguments were not reported as a DbBasic error"
+IF bad_args <> 1 THEN ERROR 1, "bad arguments were not reported as a DDGBasic error"
 PRINT "function_quirks: all checks passed"

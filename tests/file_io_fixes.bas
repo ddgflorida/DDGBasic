@@ -25,13 +25,13 @@ ON ERROR GOTO 0
 IF code <> 1 THEN ERROR 1, "OPEN of a directory: ERR = " + STR$(code)
 RMDIR "fio_dir"
 
-OPEN "~/dbbasic_fio_test.tmp" FOR OUTPUT AS #1
+OPEN "~/ddgbasic_fio_test.tmp" FOR OUTPUT AS #1
 WRITE #1, "a", 1
 PRINT #1, "b"
 CLOSE #1
-NAME "~/dbbasic_fio_test.tmp" AS "~/dbbasic_fio_test2.tmp"
-READ FILE "~/dbbasic_fio_test2.tmp" INTO f$
-KILL "~/dbbasic_fio_test2.tmp"
+NAME "~/ddgbasic_fio_test.tmp" AS "~/ddgbasic_fio_test2.tmp"
+READ FILE "~/ddgbasic_fio_test2.tmp" INTO f$
+KILL "~/ddgbasic_fio_test2.tmp"
 IF INSTR(f$, CHR$(13)) THEN ERROR 1, "WRITE # and PRINT # line endings differ"
 
 SET SQL_FATAL_ERRORS OFF

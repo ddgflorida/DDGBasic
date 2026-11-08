@@ -1,6 +1,6 @@
 """
-The DbBasic IDE: a full-screen editor in the style of QBasic, started with
-`dbbasic --ide [file.bas]`.
+The DDGBasic IDE: a full-screen editor in the style of QBasic, started with
+`ddgbasic --ide [file.bas]`.
 
 It edits one program with syntax colouring, runs it with F5 (the program gets the
 whole terminal; the IDE comes back when it ends and moves the cursor to the line of
@@ -8,7 +8,7 @@ an error), shows the built-in HELP for the keyword under the cursor with F1, and
 a menu bar (F10, or Alt and a menu's first letter) for files, editing, running,
 colours and help. Under the editor, the Immediate window (F6) runs one line at a
 time in a session of its own, as the REPL does. It is drawn with the same screen
-layer as the text-screen statements (dbscreen.py).
+layer as the text-screen statements (ddgscreen.py).
 """
 import io
 import os
@@ -17,9 +17,9 @@ import signal
 import subprocess
 import sys
 
-from dbscreen import SCREEN, ESC, ENTER, TAB, BACKSPACE, bell
+from ddgscreen import SCREEN, ESC, ENTER, TAB, BACKSPACE, bell
 
-# SQL words coloured like DbBasic's own keywords
+# SQL words coloured like DDGBasic's own keywords
 _SQL_WORDS = {
     'SELECT', 'FROM', 'WHERE', 'GROUP', 'BY', 'ORDER', 'HAVING', 'INSERT', 'INTO', 'VALUES', 'UPDATE',
     'SET', 'DELETE', 'CREATE', 'TABLE', 'DROP', 'ALTER', 'ADD', 'COLUMN', 'JOIN', 'LEFT', 'RIGHT',
@@ -1076,7 +1076,7 @@ class Editor:
             rows, cols = SCREEN.size()
             SCREEN.view(_HELP_KEYS, (4, 3, rows - 4, cols - 2), 'Keys  (Esc closes)')
         elif name == 'Help.About':
-            SCREEN.alert('DbBasic IDE;A BASIC with SQLite and DuckDB built in.;Press F1 on any keyword for its help.',
+            SCREEN.alert('DDGBasic IDE;A BASIC with SQLite and DuckDB built in.;Press F1 on any keyword for its help.',
                          ['OK'])
         return True
 

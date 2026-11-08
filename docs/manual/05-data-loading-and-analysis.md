@@ -1,10 +1,10 @@
 # Chapter 5: Data Loading, Conversion & Analysis
 
-This chapter covers getting data **into** DbBasic from files: the `LOAD` statement and its options, the row-level transform and validation hooks, JSON/XML normalisation into related tables, the streaming `FOR ... IN` file loops, the `PARSEJSON` function, the `ANALYZE` family of profiling statements, and the `UPGRADE` statements that rewrite files to match a schema.
+This chapter covers getting data **into** DDGBasic from files: the `LOAD` statement and its options, the row-level transform and validation hooks, JSON/XML normalisation into related tables, the streaming `FOR ... IN` file loops, the `PARSEJSON` function, the `ANALYZE` family of profiling statements, and the `UPGRADE` statements that rewrite files to match a schema.
 
 How to query loaded tables and how `SET OUTPUT` writes results back out to files are covered in **Chapter 4 (Database, SQL & Output)**. File handles, `READ FILE`, `FETCH` and `FOR ... IN FILES` are covered in **Chapter 6 (Files, System, Network & UI)**. User-defined `FUNCTION`s, `ON ERROR` and `EXIT FOR` are covered in **Chapter 2 (Control Flow & Procedures)**. Hashes, arrays and `SET HASH_KEYS` are covered in **Chapter 1 (Language Fundamentals)**.
 
-All examples in this chapter were run against `src/dbbasic.py`. The output shown is what the interpreter actually printed. Messages written to stderr (warnings, notices) are shown together with stdout.
+All examples in this chapter were run against `src/ddgbasic.py`. The output shown is what the interpreter actually printed. Messages written to stderr (warnings, notices) are shown together with stdout.
 
 ## Contents
 
@@ -885,7 +885,7 @@ Each column object has these keys:
 | Key | Meaning |
 |---|---|
 | `name` | The output column name. Defaults to `column_N`. |
-| `source` | A **DbBasic expression** evaluated for each row. The source CSV headers are available as variables. A header that clashes with a language keyword gets a `_` prefix. An empty `source` gives `""`. If the whole source is a single-quoted literal (`"'Active'"`), it is treated as a string constant. Inside larger expressions, write string literals with backticks, for example ``"name + `-` + id"``. Single quotes inside an expression cause a parse error. |
+| `source` | A **DDGBasic expression** evaluated for each row. The source CSV headers are available as variables. A header that clashes with a language keyword gets a `_` prefix. An empty `source` gives `""`. If the whole source is a single-quoted literal (`"'Active'"`), it is treated as a string constant. Inside larger expressions, write string literals with backticks, for example ``"name + `-` + id"``. Single quotes inside an expression cause a parse error. |
 | `transform` | Pipe-separated rules applied to the result: `trim`, `upper`, `lower`, `proper`, `round(n)`, `format('mask')`, `formatdate('mask')`. |
 | `analysis` | Ignored when loading. It is informational output from `ANALYZE CSV`. |
 
@@ -1020,7 +1020,7 @@ The root element becomes a table, `catalog`, that has only its primary key. Attr
 
 ## 5.13 File-to-file format conversion
 
-DbBasic has no single "convert" statement. To convert a file, you `LOAD` it into a table and then `SELECT` it with output redirected to a file in the target format. Chapter 4 documents `SET OUTPUT FILE ... FORMAT` in full, including the TEXT, CSV, JSON, JSONL, XML, HTML, FIXED, EXCEL, SQL, PARQUET and PLAIN formats and their options.
+DDGBasic has no single "convert" statement. To convert a file, you `LOAD` it into a table and then `SELECT` it with output redirected to a file in the target format. Chapter 4 documents `SET OUTPUT FILE ... FORMAT` in full, including the TEXT, CSV, JSON, JSONL, XML, HTML, FIXED, EXCEL, SQL, PARQUET and PLAIN formats and their options.
 
 ```basic
 LOAD CSV "emp.csv" CREATE TABLE emp OPTIONS "header=true, transform=trimall;name:proper"
@@ -1081,9 +1081,9 @@ For row-by-row conversion without a table, combine `FOR ... IN CSV` ([5.15](#515
 value = PARSEJSON(json_string$)
 ```
 
-`PARSEJSON` parses a JSON string and returns a DbBasic value:
+`PARSEJSON` parses a JSON string and returns a DDGBasic value:
 
-| JSON | DbBasic value |
+| JSON | DDGBasic value |
 |---|---|
 | object | hash. Keys are uppercased when `SET HASH_KEYS IGNORE_CASE` is active. |
 | array | array (0-based) |

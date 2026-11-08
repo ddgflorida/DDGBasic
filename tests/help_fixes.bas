@@ -4,7 +4,7 @@ IF r("FILE_COUNT") <> 2 THEN ERROR 1, "ANALYZE JSON wildcard file count"
 IF r("TOTAL_RECORDS") <> 3 THEN ERROR 1, "ANALYZE JSON wildcard record count"
 
 HELP EXECUTE
-REM EXPECT: To run DbBasic code from a string, use EVAL.
+REM EXPECT: To run DDGBasic code from a string, use EVAL.
 HELP CHAIN
 REM EXPECT: CHAIN "filename" [, arg1, arg2, ...] [PRESERVE]
 HELP FOR IN

@@ -1,9 +1,9 @@
 # Chapter 1: Language Fundamentals
 
-This chapter describes the core of the DbBasic language: how a source file is
+This chapter describes the core of the DDGBasic language: how a source file is
 read and prepared, how it is split into tokens, what kinds of values exist,
 how variables, arrays and hashes work, and how expressions are evaluated.
-Everything here comes from the interpreter source (`src/dbbasic.py`). Every
+Everything here comes from the interpreter source (`src/ddgbasic.py`). Every
 example was run against that interpreter, and the output shown is the real
 output.
 
@@ -49,10 +49,10 @@ Other chapters cover the rest of the language:
 ## 1.1 Running a program
 
 ```
-python src/dbbasic.py program.bas [arg1 arg2 ...]
-python src/dbbasic.py - [args]          # read program from standard input
-python src/dbbasic.py                   # interactive REPL
-python src/dbbasic.py --repl            # interactive REPL
+python src/ddgbasic.py program.bas [arg1 arg2 ...]
+python src/ddgbasic.py - [args]          # read program from standard input
+python src/ddgbasic.py                   # interactive REPL
+python src/ddgbasic.py --repl            # interactive REPL
 ```
 
 Flags that the command line (`main()`) recognises:
@@ -98,7 +98,7 @@ x = 1 + 2
 
 ## 1.2 Program structure and source format
 
-A DbBasic program is a plain text file. Statements run from top to bottom.
+A DDGBasic program is a plain text file. Statements run from top to bottom.
 
 - **No line numbers.** A line that starts with a number is an error
   (`Unknown statement: NUMBER`). Use labels for jump targets.
@@ -145,7 +145,7 @@ A **label** is a name followed by a colon at the very start of a line (leading s
 
 ## 1.3 Comments
 
-DbBasic has two comment forms. Both run to the end of the line, and both can
+DDGBasic has two comment forms. Both run to the end of the line, and both can
 start a line or follow a statement.
 
 | Form | Example |
@@ -469,9 +469,9 @@ line one
 line two
 ```
 
-Single-quoted text (`'abc'`) is **not** a DbBasic string literal. Single quotes
+Single-quoted text (`'abc'`) is **not** a DDGBasic string literal. Single quotes
 are only for SQL string literals inside embedded SQL (Chapter 4). Using one in
-a DbBasic expression gives `Unexpected token in factor: ('SINGLE_Q_STRING', ...)`.
+a DDGBasic expression gives `Unexpected token in factor: ('SINGLE_Q_STRING', ...)`.
 
 ### 1.5.5 Backtick strings and `${expr}` interpolation
 
@@ -533,7 +533,7 @@ section only describes its effect on tokenizing.
 
 ## 1.6 Data types
 
-DbBasic values are Python values underneath. `TYPENAME$(value)` reports the
+DDGBasic values are Python values underneath. `TYPENAME$(value)` reports the
 type.
 
 | Type | `TYPENAME$` | Literal / constructor | Default for an unset variable |
@@ -559,7 +559,7 @@ Each value can be any type.
 operators return `-1` for true and `0` for false (see
 [1.15](#115-expressions-and-truth-values)).
 
-**NULL.** There is no NULL literal in DbBasic (`NULL` on its own is just an
+**NULL.** There is no NULL literal in DDGBasic (`NULL` on its own is just an
 unset numeric variable, so it is `0`). SQL `NULL` values are handled like this:
 
 - When a scalar subquery or another expression that returns NULL is
@@ -683,7 +683,7 @@ array element or in a hash entry. The `LET` keyword is optional.
   database. It must return exactly one row and one column, or the error is
   `Scalar subquery must return one row/column.` A trailing `;` inside the
   parentheses is optional. Bind variables such as `:name` are replaced by
-  DbBasic variable values (Chapter 4).
+  DDGBasic variable values (Chapter 4).
 - `=` in a LET statement is always assignment. `x = a = b` is **not** a
   comparison and fails. To store a truth value, put the comparison in
   parentheses: `x = (a = b)`.
@@ -823,7 +823,7 @@ Output:
 | `SPLIT(s$, delim$)`, `HASH_KEYS(h)`, `FILTER`, `MAP`, ... | functions that return arrays (Chapter 3) |
 
 There is no bracket literal syntax. The `[` and `]` tokens are not used in
-DbBasic expressions.
+DDGBasic expressions.
 
 **Indexing.** `a(i)` reads element `i` (indexes start at 0). The index is
 converted to an integer by truncation. A read outside `0..UBOUND(a)`, including
@@ -1296,7 +1296,7 @@ Total: 42
 
 ## 1.15 Expressions and truth values
 
-DbBasic has two expression levels, and the difference matters:
+DDGBasic has two expression levels, and the difference matters:
 
 - **Value expressions** (`_parse_expression`): arithmetic and concatenation
   only. Used by array indexes, `PUSH`, `FOR ... TO` bounds and most statement
@@ -1387,7 +1387,7 @@ labels are case-sensitive.
 
 ## 1.17 Notes
 
-This section collects details of how DbBasic behaves that are easy to miss.
+This section collects details of how DDGBasic behaves that are easy to miss.
 
 1. **`'` comments are not supported.** Use `REM` or `--`. A lone `'` stops the
    program with `Unexpected character '''`, and text between two single quotes is

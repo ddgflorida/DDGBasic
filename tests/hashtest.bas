@@ -1,4 +1,4 @@
-REM --- DbBasic Hash Key Case Sensitivity Test ---
+REM --- DDGBasic Hash Key Case Sensitivity Test ---
 REM Test both PRESERVE_CASE and IGNORE_CASE modes
 
 PRINT "=== TESTING PRESERVE_CASE MODE (Default) ==="

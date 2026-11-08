@@ -1,6 +1,6 @@
 # Chapter 7: Text-mode Applications
 
-This chapter covers DbBasic's full-screen text interface: coloured screens, boxes, entry forms, menus, editable grids, a memo editor and a text viewer, in the style of 1990s BASIC and xBase programs. It starts with a tutorial, then describes each statement.
+This chapter covers DDGBasic's full-screen text interface: coloured screens, boxes, entry forms, menus, editable grids, a memo editor and a text viewer, in the style of 1990s BASIC and xBase programs. It starts with a tutorial, then describes each statement.
 
 Example programs in `examples/`, each short enough to read in a minute:
 
@@ -49,9 +49,9 @@ Related material in other chapters:
 
 ## 7.1 Tutorial: a contact manager
 
-`examples/retro_contacts.bas` is a complete application in about a hundred and fifty lines. This section builds it up piece by piece. Run it with `dbbasic examples/retro_contacts.bas` (or `python3 src/dbbasic.py examples/retro_contacts.bas`) in a terminal of at least 80 x 24.
+`examples/retro_contacts.bas` is a complete application in about a hundred and fifty lines. This section builds it up piece by piece. Run it with `ddgbasic examples/retro_contacts.bas` (or `python3 src/ddgbasic.py examples/retro_contacts.bas`) in a terminal of at least 80 x 24.
 
-**1. The data.** A text-mode application is an ordinary DbBasic program, so it starts with its tables:
+**1. The data.** A text-mode application is an ordinary DDGBasic program, so it starts with its tables:
 
 ```basic
 DATABASE OPEN ":memory:"
@@ -260,7 +260,7 @@ The test runner plays the whole program with scripted keystrokes (`tests/run_tes
 
 ## 7.2 The screen
 
-The screen is drawn with ANSI escape sequences, so `PRINT` keeps working between screen statements and no extra packages are needed. The code is in `src/dbscreen.py`. It works in macOS and Linux terminals, and on Windows 10 and later in Windows Terminal or the console.
+The screen is drawn with ANSI escape sequences, so `PRINT` keeps working between screen statements and no extra packages are needed. The code is in `src/ddgscreen.py`. It works in macOS and Linux terminals, and on Windows 10 and later in Windows Terminal or the console.
 
 **Coordinates** are `row, col`, counted from 1 at the top left, as with `LOCATE`.
 
@@ -309,7 +309,7 @@ The colour numbers are those of QBasic:
 
 | Theme | Text | Fields, menu bar, `BROWSE` bar | Looks like |
 |---|---|---|---|
-| `default` | white on black | black on white | the terminal; DbBasic's start-up colours |
+| `default` | white on black | black on white | the terminal; DDGBasic's start-up colours |
 | `classic` | bright white on blue | black on cyan | the blue screens of 1990s business software |
 | `norton` | light cyan on blue | black on cyan | file managers of the same years |
 | `green` | light green on black | black on light green | a green-screen terminal |
@@ -377,7 +377,7 @@ k$ = INKEY$(0)
 RESTSCREEN saved$
 ```
 
-A terminal cannot report what it is showing, so DbBasic keeps its own copy of the screen. The copy includes everything drawn by `CLS`, `BOX`, `SAY`, `GET`, `MENU` and `BROWSE`, and the text of `PRINT`, `PRINT USING` and `INPUT` once a screen statement has been used. Output that bypasses it, such as query result tables, `SHELL` output or error messages, is not in the copy, and `RESTSCREEN` will draw over it with what the copy holds. `CLS` resets the copy to the terminal's current size.
+A terminal cannot report what it is showing, so DDGBasic keeps its own copy of the screen. The copy includes everything drawn by `CLS`, `BOX`, `SAY`, `GET`, `MENU` and `BROWSE`, and the text of `PRINT`, `PRINT USING` and `INPUT` once a screen statement has been used. Output that bypasses it, such as query result tables, `SHELL` output or error messages, is not in the copy, and `RESTSCREEN` will draw over it with what the copy holds. `CLS` resets the copy to the terminal's current size.
 
 Compare two saved strings to see whether the screen changed: `IF SAVESCREEN() <> saved$ THEN ...`.
 
@@ -447,7 +447,7 @@ Functions and a template combine with a space between them: `@Z 9999`, `@R (999)
     State  : FL ▼
 ```
 
-`VALID condition` is checked whenever the cursor leaves the field, after the variable has been given the typed value. If the condition is false, DbBasic beeps and the cursor stays in the field. With `MESSAGE text$`, the text is also shown on the bottom line of the screen until the next key, so the user knows why:
+`VALID condition` is checked whenever the cursor leaves the field, after the variable has been given the typed value. If the condition is false, DDGBasic beeps and the cursor stays in the field. With `MESSAGE text$`, the text is also shown on the bottom line of the screen until the next key, so the user knows why:
 
 ```basic
 @ 5, 5 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000"
@@ -759,7 +759,7 @@ BROWSE (SELECT id, customer, placed FROM orders ORDER BY id) INTO o TITLE "Order
 - `BROWSE "items" EDIT` edits a table by its `rowid`, which is fetched but not shown.
 - A query needs the column that identifies a row: `BROWSE (SELECT id, name FROM items) EDIT KEY "id"`. The query must read `FROM` one table, and the edited columns must be plain column names of that table. The `KEY` column can't be edited.
 - A cell that held a number is edited as a number. Emptying it stores `NULL`. An emptied text cell follows `SET NULL_HANDLING`: `NULL` by default.
-- If the database refuses a change (a `CHECK` or `NOT NULL` constraint, a wrong type), DbBasic beeps, the status line shows `Not saved: ...` (or `Not deleted: ...`) with the database's message, and the cell keeps its old value. A refused new row keeps its form open, as in `EDIT RECORD`.
+- If the database refuses a change (a `CHECK` or `NOT NULL` constraint, a wrong type), DDGBasic beeps, the status line shows `Not saved: ...` (or `Not deleted: ...`) with the database's message, and the cell keeps its old value. A refused new row keeps its form open, as in `EDIT RECORD`.
 
 `examples/retro_contacts.bas` uses `BROWSE ... EDIT KEY "id"` for its contact list.
 
@@ -791,7 +791,7 @@ EDIT RECORD (SELECT * FROM contacts WHERE id = :id) TITLE "Contact" INTO rec
 - **Key column:** `KEY` names the column that identifies the row. It defaults to the table's primary key, and it is shown but can't be edited.
 - **Saving an existing row:** an `UPDATE` of the columns that changed.
 - **No matching row:** the form opens blank and saves with an `INSERT`. The key can be typed. Leave it at 0 to let SQLite number the row (`INTEGER PRIMARY KEY`). DuckDB has no automatic numbering unless the column has a `DEFAULT nextval(...)`, so type the key there.
-- **Refused changes:** if the database refuses the change (a `CHECK` or `NOT NULL` constraint, a wrong type), DbBasic beeps and shows `Not saved: ...` under the box. After a key press, the form is shown again with what you typed, starting at the first field.
+- **Refused changes:** if the database refuses the change (a `CHECK` or `NOT NULL` constraint, a wrong type), DDGBasic beeps and shows `Not saved: ...` under the box. After a key press, the form is shown again with what you typed, starting at the first field.
 - **`INTO var`:** receives the saved record as a hash, keyed by upper-case column name, or an empty hash after Esc. After an `INSERT` on SQLite, it holds the new row's key.
 - **Rules:** the query must read `FROM` one table and find at most one row, and its columns must be plain column names of that table. Numbers are edited as numbers, and an emptied text field follows `SET NULL_HANDLING`. What the form covered is put back when it closes.
 
@@ -803,7 +803,7 @@ Use `@ ... SAY ... GET` and `READ` when you want your own layout, pictures or `V
 MAKE FORM table$ TO file$ [KEY column$] [TITLE title$]
 ```
 
-`MAKE FORM` writes a complete data-entry program for a table: point it at a table and get an application, then change the program as you like. It is ordinary DbBasic, about a hundred lines, built from the statements in this chapter:
+`MAKE FORM` writes a complete data-entry program for a table: point it at a table and get an application, then change the program as you like. It is ordinary DDGBasic, about a hundred lines, built from the statements in this chapter:
 
 - a menu bar with Browse, Add, Edit and Delete, and F1 help from anywhere (`ON KEY`);
 - **Browse:** the table in an editable, sortable grid (`BROWSE ... EDIT`);
@@ -816,7 +816,7 @@ MAKE FORM "customers" TO "customers_form.bas"
 ```
 
 ```
-Wrote customers_form.bas: a program for customers with 7 fields. Run it with: dbbasic customers_form.bas
+Wrote customers_form.bas: a program for customers with 7 fields. Run it with: ddgbasic customers_form.bas
 ```
 
 Each field is chosen from its column:
@@ -1009,11 +1009,11 @@ LOOP UNTIL k$ = CHR$(27)
 
 While a program reads keys, the terminal does not echo them and passes Ctrl-S, Ctrl-Q, Ctrl-Y, Ctrl-V and Ctrl-O to the program. Ctrl-C still stops the program. `INPUT` switches the terminal back to normal line editing. When the program ends, the colours, the cursor and the terminal mode are restored. The screen contents are left as they are, as they were in DOS.
 
-On Windows, DbBasic turns on the console's ANSI support and `DISABLE_NEWLINE_AUTO_RETURN`, so that drawing the bottom-right character of the screen (a hint line, a full-screen box) doesn't scroll everything up a line, as it does in other terminals. A console too old for that setting gets everything but that one character.
+On Windows, DDGBasic turns on the console's ANSI support and `DISABLE_NEWLINE_AUTO_RETURN`, so that drawing the bottom-right character of the screen (a hint line, a full-screen box) doesn't scroll everything up a line, as it does in other terminals. A console too old for that setting gets everything but that one character.
 
-DbBasic always writes its output as UTF-8. On Windows, output sent to a pipe or a file would otherwise use the ANSI code page (cp1252), which cannot encode the box-drawing characters and fails with `'charmap' codec can't encode ...`. The console itself shows them as long as its font has the characters (the default fonts of Windows Terminal and the Windows 10+ console do).
+DDGBasic always writes its output as UTF-8. On Windows, output sent to a pipe or a file would otherwise use the ANSI code page (cp1252), which cannot encode the box-drawing characters and fails with `'charmap' codec can't encode ...`. The console itself shows them as long as its font has the characters (the default fonts of Windows Terminal and the Windows 10+ console do).
 
-**Resizing.** When the terminal window changes size, DbBasic redraws the screen from its copy (see [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen)), so the window doesn't fill with wrapped or shuffled lines. What fits the new size is kept where it was. Nothing is laid out again: a full-screen `BROWSE` or a menu bar keeps the size it was drawn at until it is drawn again, and `CLS` starts over at the new size. The redraw happens while the program waits for a key; on Windows the size is checked four times a second during the wait.
+**Resizing.** When the terminal window changes size, DDGBasic redraws the screen from its copy (see [SAVESCREEN and RESTSCREEN](#savescreen-and-restscreen)), so the window doesn't fill with wrapped or shuffled lines. What fits the new size is kept where it was. Nothing is laid out again: a full-screen `BROWSE` or a menu bar keeps the size it was drawn at until it is drawn again, and `CLS` starts over at the new size. The redraw happens while the program waits for a key; on Windows the size is checked four times a second during the wait.
 
 When standard input is not a terminal, keys are read from it as a stream, with arrow keys written as their escape sequences (`\x1b[A` for Up). This is how `tests/screen.bas` and `examples/retro_contacts.bas` are run by the test runner.
 
@@ -1023,6 +1023,6 @@ When standard input is not a terminal, keys are read from it as a stream, with a
 
 This section collects details of how the text screen behaves that are easy to miss.
 
-1. **The screen copy.** `SAVESCREEN`, `RESTSCREEN`, menus, `BROWSE` and the redraw after a resize work from DbBasic's own copy of the screen, since a terminal cannot be read back. `PRINT`, `INPUT` and `REPORT` output are kept in that copy; query tables, `SHELL` output and error messages are not.
+1. **The screen copy.** `SAVESCREEN`, `RESTSCREEN`, menus, `BROWSE` and the redraw after a resize work from DDGBasic's own copy of the screen, since a terminal cannot be read back. `PRINT`, `INPUT` and `REPORT` output are kept in that copy; query tables, `SHELL` output and error messages are not.
 2. **Numeric templates.** A numeric field's `PICTURE` is a calculator mask only when it is made of `9`, `#`, `,` and `.` (see [Numeric masks](#--say--get)). Any other template on a numeric field sets only its width.
 3. **Large results.** `BROWSE` fetches 500 rows at a time rather than the whole result (see [BROWSE](#browse)).

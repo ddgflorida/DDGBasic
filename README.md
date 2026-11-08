@@ -1,11 +1,11 @@
-# DbBasic: A Data-Centric BASIC Interpreter and Procedural Language for SQLite and DuckDB
+# DDGBasic: A Data-Centric BASIC Interpreter and Procedural Language for SQLite and DuckDB
 
 ![Language](https://img.shields.io/badge/language-BASIC-blue.svg)
 ![Backend](https://img.shields.io/badge/backend-Python-green.svg)
 ![Status](https://img.shields.io/badge/status-Active-brightgreen.svg)
 ![License](https://img.shields.io/badge/license-MIT-lightgrey.svg)
 
-**DbBasic wraps a procedural language around SQLite and DuckDB.** SQL is written straight into the program, query results come back as rows you can loop over, and program variables go into queries as bind variables (`:name`). Around the SQL you get what SQL lacks: variables, `IF` rules, loops, functions, error handling, files, HTTP and a text-mode UI.
+**DDGBasic wraps a procedural language around SQLite and DuckDB.** SQL is written straight into the program, query results come back as rows you can loop over, and program variables go into queries as bind variables (`:name`). Around the SQL you get what SQL lacks: variables, `IF` rules, loops, functions, error handling, files, HTTP and a text-mode UI.
 
 - **Load, clean and check data in one statement:** `LOAD CSV` calls your own BASIC functions on every cell (`TRANSFORM phone WITH normalize_phone$`) and drops rows that fail a check (`VALIDATE email WITH is_valid_email`).
 - **Rules over query results:** `FOR row IN (SELECT ...)` loops apply logic that is awkward in SQL (tiers, allocations, alerts) and write back with bind variables, inside transactions.
@@ -18,7 +18,7 @@ The language is a modern BASIC, and it comes with 1990s-style text screens and a
 
 ## ✨ Key Features
 
-DbBasic combines the simplicity of classic BASIC syntax with powerful, modern features for today's data-driven world.
+DDGBasic combines the simplicity of classic BASIC syntax with powerful, modern features for today's data-driven world.
 
 * ### Dual Database Engines
     * **SQLite & DuckDB Support:** Seamlessly switch between the world's most deployed database engine (**SQLite**) for general-purpose tasks and a high-performance analytical engine (**DuckDB**) for complex queries.
@@ -47,7 +47,7 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
     * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `invoice_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
 
 * ### A QBasic-style IDE
-    * `dbbasic --ide program.bas` opens a full-screen editor with syntax colouring and a menu bar. F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor, the Immediate window (F6) runs a line at a time (`? x`, a quick `SELECT`), and F9/F8 set breakpoints and step through the program, with the Immediate window seeing its variables.
+    * `ddgbasic --ide program.bas` opens a full-screen editor with syntax colouring and a menu bar. F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor, the Immediate window (F6) runs a line at a time (`? x`, a quick `SELECT`), and F9/F8 set breakpoints and step through the program, with the Immediate window seeing its variables.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
@@ -73,26 +73,26 @@ DbBasic combines the simplicity of classic BASIC syntax with powerful, modern fe
 
 ## 📦 Installation
 
-DbBasic needs Python 3.10 or newer.
+DDGBasic needs Python 3.10 or newer.
 
 ```bash
-pip install dbbasic
-dbbasic examples/hello.bas          # run a script
-dbbasic                             # interactive REPL
-dbbasic --ide examples/contact.bas  # the QBasic-style IDE: F5 runs, F1 helps
+pip install ddgbasic
+ddgbasic examples/hello.bas          # run a script
+ddgbasic                             # interactive REPL
+ddgbasic --ide examples/contact.bas  # the QBasic-style IDE: F5 runs, F1 helps
 ```
 
-To run from a copy of the source instead, install the dependencies with `pip install -r requirements.txt` and use `python3 src/dbbasic.py` in place of `dbbasic`. `pip install .` in the copy installs the `dbbasic` command from it.
+To run from a copy of the source instead, install the dependencies with `pip install -r requirements.txt` and use `python3 src/ddgbasic.py` in place of `ddgbasic`. `pip install .` in the copy installs the `ddgbasic` command from it.
 
-To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/dbbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `dbbasic` from anywhere. The build bundles the DuckDB of the Python that runs it, so both scripts stop if that DuckDB is older than 1.2 (`pip install --upgrade duckdb` fixes it).
+To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/ddgbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `ddgbasic` from anywhere. The build bundles the DuckDB of the Python that runs it, so both scripts stop if that DuckDB is older than 1.2 (`pip install --upgrade duckdb` fixes it).
 
-The full **Programmer's Reference Manual** is in [`docs/manual/`](https://github.com/ddgflorida/DbBasic/blob/main/docs/manual/README.md). Run the test suite with `python3 tests/run_tests.py`.
+The full **Programmer's Reference Manual** is in [`docs/manual/`](https://github.com/ddgflorida/DDGBasic/blob/main/docs/manual/README.md). Run the test suite with `python3 tests/run_tests.py`.
 
 ---
 
 ## 🚀 Quick Start Example
 
-The following DbBasic script demonstrates several key features: it downloads a CSV file, loads it into a DuckDB in-memory table, and queries the result.
+The following DDGBasic script demonstrates several key features: it downloads a CSV file, loads it into a DuckDB in-memory table, and queries the result.
 
 ```basic
 REM --- Set engine to DuckDB for high-speed analytics ---
@@ -162,24 +162,24 @@ PRINT `Imported ${(SELECT COUNT(*) FROM leads;)} clean rows.`
 
 ## 🗂️ Examples
 
-The `examples/` folder has some 60 programs; [`examples/README.md`](https://github.com/ddgflorida/DbBasic/blob/main/examples/README.md) lists them all. These show what DbBasic is for:
+The `examples/` folder has some 60 programs; [`examples/README.md`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/README.md) lists them all. These show what DDGBasic is for:
 
 | Example | Shows |
 |---|---|
-| [`etl_pipeline.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/etl_pipeline.bas) | A messy CSV becomes a clean table: BASIC functions clean every cell as `LOAD` reads it and drop bad rows; BASIC rules flag duplicates and assign customer tiers; SQL totals; JSON, Excel and a grouped report out |
-| [`duckdb_analytics.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/duckdb_analytics.bas) | Half a million rows in DuckDB, queried straight from Parquet and CSV files, window functions, and BASIC rules (targets per region, in a hash) over the results, with timings |
-| [`two_engines.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/two_engines.bas) | SQLite keeps the records (constraints, a transaction), DuckDB analyses them from a Parquet file (median, best month), and the results go back to SQLite |
-| [`row_logic.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/row_logic.bas) | Allocating limited stock to orders by priority, row by row, with all-or-nothing and partial rules, in a transaction that `ON ERROR` rolls back |
-| [`invoice_demo.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/invoice_demo.bas) | A 1990s-style invoice screen on the Chinook database: a header form, a lines grid, business rules |
-| [`retro_contacts.bas`](https://github.com/ddgflorida/DbBasic/blob/main/examples/retro_contacts.bas) | A complete text-mode application: menu bar, editable grid, forms, memo editor, report |
+| [`etl_pipeline.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/etl_pipeline.bas) | A messy CSV becomes a clean table: BASIC functions clean every cell as `LOAD` reads it and drop bad rows; BASIC rules flag duplicates and assign customer tiers; SQL totals; JSON, Excel and a grouped report out |
+| [`duckdb_analytics.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/duckdb_analytics.bas) | Half a million rows in DuckDB, queried straight from Parquet and CSV files, window functions, and BASIC rules (targets per region, in a hash) over the results, with timings |
+| [`two_engines.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/two_engines.bas) | SQLite keeps the records (constraints, a transaction), DuckDB analyses them from a Parquet file (median, best month), and the results go back to SQLite |
+| [`row_logic.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/row_logic.bas) | Allocating limited stock to orders by priority, row by row, with all-or-nothing and partial rules, in a transaction that `ON ERROR` rolls back |
+| [`invoice_demo.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/invoice_demo.bas) | A 1990s-style invoice screen on the Chinook database: a header form, a lines grid, business rules |
+| [`retro_contacts.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/retro_contacts.bas) | A complete text-mode application: menu bar, editable grid, forms, memo editor, report |
 
-Run one with `dbbasic examples/etl_pipeline.bas`, or open it in the IDE with `dbbasic --ide examples/etl_pipeline.bas`.
+Run one with `ddgbasic examples/etl_pipeline.bas`, or open it in the IDE with `ddgbasic --ide examples/etl_pipeline.bas`.
 
 ---
 
 ## 📜 Statements Reference
 
-A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DbBasic/blob/main/docs/manual/README.md) has the full syntax, options and examples for every statement and function.
+A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DDGBasic/blob/main/docs/manual/README.md) has the full syntax, options and examples for every statement and function.
 
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
@@ -195,7 +195,7 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DbB
 | BOX                     | Draws a single- or double-line box with an optional title and `SHADOW` on the text screen. Pop-ups have drop shadows unless `SET SHADOW OFF`. |
 | BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. With `EDIT`, cells are edited in place and saved to the table, Ins adds a row and Del deletes one. Click a heading (or F3) to sort, type to jump to a row; `FREEZE`, `FORMAT` and `COLOR` set frozen columns, number masks and row colours. `DETAIL` adds a second grid for the rows of the current one (an order's lines). |
 | BROWSER                 | Opens a specified URL in the system's default web browser. |
-| CHAIN                   | Transfers program execution to a different DbBasic script, optionally preserving variables. |
+| CHAIN                   | Transfers program execution to a different DDGBasic script, optionally preserving variables. |
 | CHDIR                   | Changes the current working directory. |
 | CLEAR                   | Deletes all variables. User-defined functions stay defined. |
 | CLOSE                   | Closes a specific file handle or all open file handles. |
@@ -212,7 +212,7 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DbB
 | EMAIL                   | Sends an email using the configured provider (see `HELP SET EMAIL`), with support for HTML body, CC/BCC, and attachments. |
 | END                     | Terminates the program execution. |
 | ERROR                   | Triggers a user-defined runtime error with a specific error code and optional message. |
-| EVAL                    | Executes a DbBasic source string as code. |
+| EVAL                    | Executes a DDGBasic source string as code. |
 | EXECUTE                 | Executes a SQL statement that is dynamically constructed in a string variable. |
 | EXIT                    | Immediately exits the current loop structure (`EXIT FOR`, `EXIT DO`, `EXIT WHILE`) or function (`EXIT FUNCTION`). |
 | FETCH                   | Performs an HTTP request (GET, POST, PUT, PATCH, or DELETE). Supports request body hashes, custom request headers, multipart file uploads, INTO var$ or TO FILE destinations, and optional `HEADERS INTO h` capture of response headers. |
@@ -248,7 +248,7 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DbB
 | RESUME                  | Used within an error-handling routine to resume program execution at the statement after the one that caused the error. |
 | REVERSE                 | Reverses the order of elements in an array. |
 | RMDIR                   | Removes an empty directory. |
-| RUN                     | Executes another DbBasic script as a subroutine and returns control to the calling script upon completion. |
+| RUN                     | Executes another DDGBasic script as a subroutine and returns control to the calling script upon completion. |
 | SET                     | Configures global settings for the interpreter, such as OUTPUT redirection, output FORMAT, EMAIL provider, SQL_FATAL_ERRORS, or HASH_KEYS handling. `SET THEME "classic"` sets the screen colours from a named theme. |
 | SHELL                   | Executes a command in the underlying operating system shell. |
 | SHIFT                   | Removes the first element from an array, optionally storing it in a variable. |
@@ -267,9 +267,9 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DbB
 
 ---
 
-# DbBasic Interpreter: Functions
+# DDGBasic Interpreter: Functions
 
-This document provides a quick reference to all available functions in the DbBasic language, categorized by function type.
+This document provides a quick reference to all available functions in the DDGBasic language, categorized by function type.
 
 | Function Name            | Type        | Description |
 |-------------------------|-------------|-------------|
@@ -314,7 +314,7 @@ This document provides a quick reference to all available functions in the DbBas
 | FIX(number)             | MATH        | Truncates the decimal part of a number. |
 | FLOOR(number)           | MATH        | Rounds a number down to the nearest integer. |
 | FORMAT$(value, mask$)   | STRING      | Formats a value according to a numeric mask (e.g. `"#,##0.00"`, `"$#,##0"`, `"0.00%"`). |
-| FORMATDATE$(date$, output_mask$, [input_mask$]) | DATE/TIME | Formats a date string according to a specified mask (e.g. "YYYY-MM-DD"). Optional input_mask$ tells DbBasic how to parse the input. |
+| FORMATDATE$(date$, output_mask$, [input_mask$]) | DATE/TIME | Formats a date string according to a specified mask (e.g. "YYYY-MM-DD"). Optional input_mask$ tells DDGBasic how to parse the input. |
 | FREEFILE()              | FILE        | Returns the next available integer for use as a file handle. |
 | HASH_COUNT(hash)        | HASH        | Returns the number of key-value pairs in a hash. |
 | HASH_DELETE(hash, key$) | HASH        | Deletes a key-value pair from a hash. Use it in an expression (`r = HASH_DELETE(h, k$)`); it returns -1 if the key was deleted, 0 if it was not present. |
@@ -338,7 +338,7 @@ This document provides a quick reference to all available functions in the DbBas
 | ISDIGIT(string$)        | STRING      | Returns true (-1) if all characters in the string are digits, otherwise false (0). |
 | ISLEAP(year)            | DATE/TIME   | Returns true (-1) if the year is a leap year, otherwise false (0). |
 | ISNUMERIC(string$)      | STRING      | Returns true (-1) if the string parses as a number, otherwise false (0). |
-| JSON_SERIALIZE$(variable, [indent], [options...]) | HASH/ARRAY | Converts a DbBasic HASH or ARRAY into a JSON formatted string. |
+| JSON_SERIALIZE$(variable, [indent], [options...]) | HASH/ARRAY | Converts a DDGBasic HASH or ARRAY into a JSON formatted string. |
 | LASTKEY$                | SCREEN      | The key that ended the last READ, MENU or BROWSE. |
 | LCASE$(string$)         | STRING      | Converts a string to all lowercase characters. |
 | LEFT$(string$, length)  | STRING      | Returns the first length characters from the left of the string. |
@@ -439,4 +439,4 @@ PRINT `Row ${i}: ${row("city$")} (${CARDINAL$(row("count"))})`
 
 ## 📄 License
 
-DbBasic is released under the [MIT License](https://github.com/ddgflorida/DbBasic/blob/main/LICENSE). The sample data in `examples/dotgov.csv` is the public list of .gov domains published by CISA, and `examples/data/chinook.sqlite` is the [Chinook sample database](https://github.com/lerocha/chinook-database) by Luis Rocha (MIT License).
+DDGBasic is released under the [MIT License](https://github.com/ddgflorida/DDGBasic/blob/main/LICENSE). The sample data in `examples/dotgov.csv` is the public list of .gov domains published by CISA, and `examples/data/chinook.sqlite` is the [Chinook sample database](https://github.com/lerocha/chinook-database) by Luis Rocha (MIT License).

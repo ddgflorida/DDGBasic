@@ -8,12 +8,12 @@ REM It automatically detects if the input CSV has a header row
 REM and calculates the required width for each column.
 REM
 REM Usage:
-REM   python dbbasic.py csv_to_fixed.bas <input.csv> <output.txt>
+REM   python ddgbasic.py csv_to_fixed.bas <input.csv> <output.txt>
 REM -----------------------------------------------------------------
 
 REM --- 1. Argument Handling ---
 IF COMMAND$(1) = "" OR COMMAND$(2) = "" THEN
-   PRINT "Usage: python dbbasic.py csv_to_fixed.bas <input.csv> <output.txt>"
+   PRINT "Usage: python ddgbasic.py csv_to_fixed.bas <input.csv> <output.txt>"
    END
 END IF
 

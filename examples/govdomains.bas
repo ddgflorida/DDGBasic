@@ -1,4 +1,4 @@
-REM DbBasic script to download a remote CSV and load it into SQLite
+REM DDGBasic script to download a remote CSV and load it into SQLite
 
 PRINT "--- Starting Process ---"
 

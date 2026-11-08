@@ -1,5 +1,5 @@
 """
-Text-mode screen support for DbBasic, in the style of 1990s BASIC and xBase:
+Text-mode screen support for DDGBasic, in the style of 1990s BASIC and xBase:
 cursor positioning, colours, boxes, @ SAY/GET entry fields edited with READ,
 light-bar menus and a scrolling query browser.
 

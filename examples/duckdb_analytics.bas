@@ -2,7 +2,7 @@ REM ===================================================================
 REM DuckDB analytics: half a million rows, queried straight from Parquet
 REM and CSV files, with window functions, and BASIC logic on the results.
 REM
-REM   DuckDB is a fast analytical database. DbBasic gives it a program
+REM   DuckDB is a fast analytical database. DDGBasic gives it a program
 REM   around it: variables and rules, loops over results, timings, files.
 REM ===================================================================
 DATABASE ENGINE DUCKDB

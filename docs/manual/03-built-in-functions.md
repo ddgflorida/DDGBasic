@@ -1,6 +1,6 @@
 # Chapter 3: Built-in Functions
 
-This chapter is the complete reference for the functions built into the DbBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/dbbasic.py`, which is **134 functions**. It also covers the **15 extra SQL functions** that DbBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
+This chapter is the complete reference for the functions built into the DDGBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/ddgbasic.py`, which is **134 functions**. It also covers the **15 extra SQL functions** that DDGBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
 
 The examples in this chapter were run against the interpreter, and the output shown is what it printed. Output from functions that depend on the clock, the file system or the environment (`DATE$`, `FILETIME`, `CURDIR$` and so on) will differ on your machine.
 
@@ -38,7 +38,7 @@ Related chapters:
 
 **Names and case.** Function names are not case-sensitive: `left$("abc", 2)` and `LEFT$("abc", 2)` are the same call. By convention, a name that ends in `$` returns a string. Functions without `$` return a number, an array, a hash, or (for a few, such as `FILETIME` and `NOW`) a string.
 
-**Parentheses.** A function call needs parentheses, even when it has no arguments: `NOW()`. The exceptions, which can be written with or without `()`, are `DATE$`, `TIME$`, `TIMER`, `FREEFILE`, `RND` and `CURDIR$`, and the text-screen functions `INKEY$`, `LASTKEY$`, `SAVESCREEN`, `BUTTON$`, `MOUSEROW` and `MOUSECOL`. If you write any other function name without parentheses, such as `PRINT NOW`, DbBasic reads it as a variable and prints `0`.
+**Parentheses.** A function call needs parentheses, even when it has no arguments: `NOW()`. The exceptions, which can be written with or without `()`, are `DATE$`, `TIME$`, `TIMER`, `FREEFILE`, `RND` and `CURDIR$`, and the text-screen functions `INKEY$`, `LASTKEY$`, `SAVESCREEN`, `BUTTON$`, `MOUSEROW` and `MOUSECOL`. If you write any other function name without parentheses, such as `PRINT NOW`, DDGBasic reads it as a variable and prints `0`.
 
 **How a call is recognised.** The expression parser (`_parse_factor`) handles a call like this:
 
@@ -925,7 +925,7 @@ PRINT VAL("1e3")
 
 ## 3.5 Date and time functions
 
-DbBasic stores dates as **strings**. The date functions (`DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`, `ISDATE`, `FORMATDATE$`) all accept the same input formats: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY/MM/DD`, `YYYYMMDD` and a `YYYY-MM-DD HH:MM:SS` datetime. `FORMATDATE$` also accepts any format described by an input mask. `ISDATE` returns 0 for any other text; the other functions stop the program with an error, with the line and column (`Invalid date: '...'`). `HOUR`, `MINUTE` and `SECOND` take a time (`HH:MM:SS`) or a datetime.
+DDGBasic stores dates as **strings**. The date functions (`DATEADD`, `DATEDIFF`, `YEAR`, `MONTH`, `DAY`, `WEEKDAY`, `ISDATE`, `FORMATDATE$`) all accept the same input formats: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY/MM/DD`, `YYYYMMDD` and a `YYYY-MM-DD HH:MM:SS` datetime. `FORMATDATE$` also accepts any format described by an input mask. `ISDATE` returns 0 for any other text; the other functions stop the program with an error, with the line and column (`Invalid date: '...'`). `HOUR`, `MINUTE` and `SECOND` take a time (`HH:MM:SS`) or a datetime.
 
 Functions that return a date always return `YYYY-MM-DD`.
 
@@ -1168,7 +1168,7 @@ Mo Tu We Th Fr Sa Su
 
 Parses `date$` and writes it out using `output_mask$`.
 
-- If you leave out `input_mask$`, DbBasic tries these formats in order: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY/MM/DD`, `YYYYMMDD`, `YYYY-MM-DD HH:MM:SS`. If none matches, you get `Invalid or unrecognized date string provided to FORMATDATE$`.
+- If you leave out `input_mask$`, DDGBasic tries these formats in order: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM-DD-YYYY`, `YYYY/MM/DD`, `YYYYMMDD`, `YYYY-MM-DD HH:MM:SS`. If none matches, you get `Invalid or unrecognized date string provided to FORMATDATE$`.
 - If you supply `input_mask$`, it uses the same tokens as the output mask, and `date$` must match it exactly.
 
 See [3.14](#314-formatdate-mask-tokens) for the tokens.
@@ -1661,7 +1661,7 @@ CLOSE #1
 `ENVIRON$(name$)` returns a **String**: the value of an environment variable, or `""` if it is not set.
 
 ```basic
-REM run as:  DBB_TEST=hi python dbbasic.py s6.bas one two
+REM run as:  DBB_TEST=hi python ddgbasic.py s6.bas one two
 PRINT "[" + COMMAND$(1) + "][" + COMMAND$(2) + "][" + COMMAND$(9) + "]"
 PRINT "[" + ENVIRON$("DBB_TEST") + "][" + ENVIRON$("NO_SUCH_VAR_X") + "]"
 ```
@@ -1850,7 +1850,7 @@ Text after the last field is kept (`"### units"` gives `  3 units`), up to the n
 
 ## 3.14 FORMATDATE$ mask tokens
 
-`FORMATDATE$` converts a DbBasic date mask into a Python `strftime` pattern. The tokens below are recognised in any case (`yyyy`, `YYYY`):
+`FORMATDATE$` converts a DDGBasic date mask into a Python `strftime` pattern. The tokens below are recognised in any case (`yyyy`, `YYYY`):
 
 | Token | Meaning | Example (2024-07-04 14:35:09) |
 |---|---|---|
@@ -1886,7 +1886,7 @@ PRINT "[" + FORMATDATE$("2024-07-04 14:35:09", "%I:MI %p") + "]"
 <a id="functions-available-inside-sql-sqlite"></a>
 ## 3.15 Functions available inside SQL
 
-DbBasic registers the SQL functions below on every database connection, for both engines. You can use them in any SQL statement: line-level `SELECT`, `INSERT`, `UPDATE` and so on, and scalar subqueries such as `x$ = (SELECT ...)`. Under DuckDB, DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`, `ENDS_WITH`, `SPLIT_PART`, `TRANSLATE` and 2-argument `INSTR` are used. They give the same results, except that `STARTS_WITH`/`ENDS_WITH` show `True`/`False` rather than 1/0. The others (and `INSTR` with 3 or 4 arguments) are added by DbBasic.
+DDGBasic registers the SQL functions below on every database connection, for both engines. You can use them in any SQL statement: line-level `SELECT`, `INSERT`, `UPDATE` and so on, and scalar subqueries such as `x$ = (SELECT ...)`. Under DuckDB, DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`, `ENDS_WITH`, `SPLIT_PART`, `TRANSLATE` and 2-argument `INSTR` are used. They give the same results, except that `STARTS_WITH`/`ENDS_WITH` show `True`/`False` rather than 1/0. The others (and `INSTR` with 3 or 4 arguments) are added by DDGBasic.
 
 These functions use SQL semantics: booleans are **1 and 0** (not -1 and 0), and they return `NULL` when an argument has the wrong type. For example, `REVERSE(123)` is `NULL` because the argument is not text.
 
@@ -1911,7 +1911,7 @@ These functions use SQL semantics: booleans are **1 and 0** (not -1 and 0), and 
 | `INSTR(s, sub, start, nth)` | 4 | integer | The position of the `nth` occurrence at or after `start`, or 0. |
 
 ```basic
-SELECT REVERSE('DbBasic') AS r, STUFF('Hello World', 7, 5, 'There') AS s, LEFT$('abcdef', 3) AS l, RIGHT$('abcdef', 2) AS rt;
+SELECT REVERSE('DDGBasic') AS r, STUFF('Hello World', 7, 5, 'There') AS s, LEFT$('abcdef', 3) AS l, RIGHT$('abcdef', 2) AS rt;
 SELECT LPAD('42', 6, '0') AS lp, RPAD('ab', 5, '.') AS rp, REPLICATE('xy', 3) AS rep, CHARINDEX('lo', 'Hello') AS ci, CHARINDEX('z', 'Hello') AS ci0;
 SELECT STARTS_WITH('Hello', 'He') AS sw, ENDS_WITH('Hello', 'x') AS ew, INITCAP('hello world') AS ic, SPLIT_PART('a-b-c', '-', 2) AS sp, SPLIT_PART('a-b-c', '-', 9) AS sp9;
 SELECT TRANSLATE('hello', 'el', 'ip') AS tr, SOUNDEX('Robert') AS sx, INSTR('banana', 'an') AS i2, INSTR('banana', 'an', 3) AS i3, INSTR('banana', 'an', 1, 2) AS i4, INSTR('banana', 'a', -1) AS ineg;
@@ -1953,7 +1953,7 @@ PRINT x$
 cba
 ```
 
-SQLite's own built-in functions (`UPPER`, `LOWER`, `SUBSTR`, `LENGTH`, `REPLACE`, `TRIM`, `ROUND`, `DATE`, `STRFTIME` and so on) remain available as usual. DbBasic built-ins such as `UCASE$` or `FORMAT$` can **not** be called from inside SQL, unless they appear in the table above.
+SQLite's own built-in functions (`UPPER`, `LOWER`, `SUBSTR`, `LENGTH`, `REPLACE`, `TRIM`, `ROUND`, `DATE`, `STRFTIME` and so on) remain available as usual. DDGBasic built-ins such as `UCASE$` or `FORMAT$` can **not** be called from inside SQL, unless they appear in the table above.
 
 ---
 

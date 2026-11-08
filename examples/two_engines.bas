@@ -3,7 +3,7 @@ REM Two engines, one program: SQLite keeps the records, DuckDB analyses them.
 REM
 REM   SQLite is the system of record: a file, constraints, transactions.
 REM   DuckDB is the analyst: columnar, fast, at home with Parquet files.
-REM   DbBasic switches between them with DATABASE ENGINE and moves the data
+REM   DDGBasic switches between them with DATABASE ENGINE and moves the data
 REM   with its own output formats, so each engine does the job it is best at.
 REM ===================================================================
 IF FILE_EXISTS("shop_records.db") THEN KILL "shop_records.db"

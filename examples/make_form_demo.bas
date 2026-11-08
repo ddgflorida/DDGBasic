@@ -2,7 +2,7 @@ REM MAKE FORM demo: makes a small shop database, then writes a complete data-ent
 REM for its customers table: a menu bar, an editable grid, an entry form whose fields come
 REM from the column types (a drop-down for the state, which references the states table,
 REM a date, a money mask, a check box), hints, and F1 help.
-REM Run this, then run the program it writes:  dbbasic customers_form.bas
+REM Run this, then run the program it writes:  ddgbasic customers_form.bas
 IF FILE_EXISTS("shop.db") THEN KILL "shop.db"
 IF FILE_EXISTS("customers_form.bas") THEN KILL "customers_form.bas"
 DATABASE OPEN "shop.db"

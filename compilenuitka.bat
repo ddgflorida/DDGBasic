@@ -1,8 +1,8 @@
 @echo off
-rem Build a standalone DbBasic executable with Nuitka (Windows) and install it.
+rem Build a standalone DDGBasic executable with Nuitka (Windows) and install it.
 rem
 rem Usage: compilenuitka.bat [install_dir]
-rem   install_dir defaults to %USERPROFILE%\bin (add it to PATH to run dbbasic anywhere)
+rem   install_dir defaults to %USERPROFILE%\bin (add it to PATH to run ddgbasic anywhere)
 rem   Set PYTHON to use a particular Python (default: python).
 rem   Needs: pip install -r requirements.txt -r requirements-build.txt
 setlocal
@@ -30,12 +30,12 @@ if errorlevel 1 exit /b 1
 pushd "%SRC_DIR%" || exit /b 1
 "%PYTHON%" -m nuitka ^
     --onefile ^
-    --onefile-tempdir-spec="{CACHE_DIR}/dbbasic/%BUILD_ID%" ^
+    --onefile-tempdir-spec="{CACHE_DIR}/ddgbasic/%BUILD_ID%" ^
     --follow-imports ^
     --assume-yes-for-downloads ^
     --output-dir="%BUILD_DIR%" ^
-    --output-filename=dbbasic.exe ^
-    dbbasic.py
+    --output-filename=ddgbasic.exe ^
+    ddgbasic.py
 set "BUILD_STATUS=%ERRORLEVEL%"
 popd
 if not "%BUILD_STATUS%"=="0" (
@@ -44,9 +44,9 @@ if not "%BUILD_STATUS%"=="0" (
 )
 
 if not exist "%INSTALL_DIR%" mkdir "%INSTALL_DIR%"
-copy /y "%BUILD_DIR%\dbbasic.exe" "%INSTALL_DIR%\dbbasic.exe" >nul
+copy /y "%BUILD_DIR%\ddgbasic.exe" "%INSTALL_DIR%\ddgbasic.exe" >nul
 if errorlevel 1 (
-    echo Could not copy dbbasic.exe to %INSTALL_DIR%
+    echo Could not copy ddgbasic.exe to %INSTALL_DIR%
     exit /b 1
 )
-echo Installed: %INSTALL_DIR%\dbbasic.exe
+echo Installed: %INSTALL_DIR%\ddgbasic.exe

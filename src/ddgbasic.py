@@ -37,9 +37,9 @@ import xlrd3
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from bs4 import BeautifulSoup
-from dbscreen import SCREEN, ScreenError, bell as dbscreen_bell, key_from_name
-from dbreport import build_report
-from dbformgen import FormColumn, build_form_program, column_kind, decimal_places
+from ddgscreen import SCREEN, ScreenError, bell as ddgscreen_bell, key_from_name
+from ddgreport import build_report
+from ddgformgen import FormColumn, build_form_program, column_kind, decimal_places
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse, quote_plus, unquote_plus, urljoin
 import xmltodict
@@ -54,18 +54,18 @@ MIN_DUCKDB = (1, 2)
 
 def duckdb_problem():
     """Why the installed DuckDB can't be used, or None. Older versions keep their own
-    2-argument INSTR, and the SQL functions DbBasic adds need numpy."""
+    2-argument INSTR, and the SQL functions DDGBasic adds need numpy."""
     try:
         version = tuple(int(part) for part in re.findall(r'\d+', duckdb.__version__)[:2])
     except ValueError:
         version = MIN_DUCKDB
     if version < MIN_DUCKDB:
-        return (f"DbBasic needs DuckDB {'.'.join(map(str, MIN_DUCKDB))} or newer, but this is "
+        return (f"DDGBasic needs DuckDB {'.'.join(map(str, MIN_DUCKDB))} or newer, but this is "
                 f"DuckDB {duckdb.__version__}. Upgrade it with: pip install --upgrade duckdb")
     try:
         import numpy  # noqa: F401  (also makes a compiled build include it)
     except ImportError:
-        return "DbBasic's DuckDB functions need numpy. Install it with: pip install numpy"
+        return "DDGBasic's DuckDB functions need numpy. Install it with: pip install numpy"
     return None
 
 
@@ -310,8 +310,8 @@ class SqliteStringFunctions:
             ("CHARINDEX", cls.charindex, [S, S], I),
             ("INITCAP", cls.initcap, [S], S),
             ("SOUNDEX", cls.soundex, [S], S),
-            ("__dbbasic_instr3", cls.instr3, [S, S, I], I),
-            ("__dbbasic_instr4", cls.instr4, [S, S, I, I], I),
+            ("__ddgbasic_instr3", cls.instr3, [S, S, I], I),
+            ("__ddgbasic_instr4", cls.instr4, [S, S, I, I], I),
         ]
         for name, func, params, returns in functions_to_register:
             try:
@@ -322,8 +322,8 @@ class SqliteStringFunctions:
         # have several arities. TEMP, so it is never stored in a database file.
         try:
             conn.execute("CREATE OR REPLACE TEMP MACRO instr(s, sub) AS strpos(s, sub), "
-                         "(s, sub, st) AS __dbbasic_instr3(s, sub, st), "
-                         "(s, sub, st, nth) AS __dbbasic_instr4(s, sub, st, nth)")
+                         "(s, sub, st) AS __ddgbasic_instr3(s, sub, st), "
+                         "(s, sub, st, nth) AS __ddgbasic_instr4(s, sub, st, nth)")
         except Exception:
             pass
 
@@ -462,12 +462,12 @@ class HelpRegistry:
         },
         "EXECUTE": {
             "syntax": 'EXECUTE "command_string"',
-            "desc": "Runs one or more SQL statements held in a string, separated by semicolons. Query results are displayed. To run DbBasic code from a string, use EVAL.",
+            "desc": "Runs one or more SQL statements held in a string, separated by semicolons. Query results are displayed. To run DDGBasic code from a string, use EVAL.",
             "examples": ['EXECUTE "CREATE TABLE t (id INTEGER); INSERT INTO t VALUES (1);"', 'EXECUTE "SELECT COUNT(*) FROM " & table$']
         },
         "EXIT": {
             "syntax": 'EXIT FOR | EXIT WHILE | EXIT DO | EXIT FUNCTION | EXIT',
-            "desc": "EXIT FOR/WHILE/DO leaves the innermost loop of that kind. EXIT FUNCTION returns from a function. In the REPL, a bare EXIT leaves DbBasic.",
+            "desc": "EXIT FOR/WHILE/DO leaves the innermost loop of that kind. EXIT FUNCTION returns from a function. In the REPL, a bare EXIT leaves DDGBasic.",
             "examples": ['IF found THEN EXIT FOR', 'IF x < 0 THEN EXIT FUNCTION', 'EXIT']
         },
         "RUN": {
@@ -3029,7 +3029,7 @@ class Interpreter:
                     pos = token[2] if len(token) > 2 else 0
                     line, _ = self.lexer.get_line_col(pos)
                     found = self.tokens[i + 1][1] if i + 1 < len(self.tokens) else ''
-                    hint = f" ('{found}' is a DbBasic keyword; choose another name)" \
+                    hint = f" ('{found}' is a DDGBasic keyword; choose another name)" \
                         if found and str(found).strip() and str(found)[0].isalpha() else ''
                     raise RuntimeError(f"Line {line}: Expected function name after FUNCTION{hint}")
                 func_name = self.tokens[i+1][1]
@@ -4217,7 +4217,7 @@ class Interpreter:
             self._parse_show_statement()
         elif token[0] == 'EXECUTE':                               # execute dynamic sql
             self._parse_execute_statement()
-        elif token[0] == 'CHAIN':                                 # Replace current script with another DbBASIC script
+        elif token[0] == 'CHAIN':                                 # Replace current script with another DDGBasic script
             self._parse_chain_statement()
         elif token[0] == 'RUN':                                   # Run another script and come back
             self._parse_run_statement()
@@ -4345,7 +4345,7 @@ class Interpreter:
         else:
             self._error(f"Unknown statement: {token[0]}")
 
-    # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see dbscreen.py) ---
+    # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see ddgscreen.py) ---
     SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT', 'VIEW', 'REPORT',
                          'PROGRESS'}
 
@@ -4816,7 +4816,7 @@ class Interpreter:
         if spec['edit']:
             if spec['table'] and not spec['key']:
                 # A table can be edited by its rowid, which is fetched but not shown
-                spec['sql'] = f"SELECT rowid AS __dbbasic_rowid, * FROM {self._quote_identifier(spec['table'])}"
+                spec['sql'] = f"SELECT rowid AS __ddgbasic_rowid, * FROM {self._quote_identifier(spec['table'])}"
             elif not spec['table']:
                 spec['table'] = self._extract_table_from_select(spec['sql'])
                 if not spec['table']:
@@ -5219,7 +5219,7 @@ class Interpreter:
     def _parse_make_form_statement(self):
         """MAKE FORM table$ TO file$ [KEY col$] [TITLE t$]
 
-        Writes a data-entry program for the table (see dbformgen.py): a menu bar, an
+        Writes a data-entry program for the table (see ddgformgen.py): a menu bar, an
         editable grid, an entry form with a field for each column chosen from its type,
         drop-down lists for foreign keys, F1 help. It opens the current database file."""
         self._next_token(); self._next_token()            # MAKE FORM
@@ -5327,7 +5327,7 @@ class Interpreter:
         with open(path, 'w', encoding='utf-8', newline='') as f:
             f.write(text.replace('\n', os.linesep) if os.name == 'nt' else text)
         fields = sum(1 for c in columns if not c.auto)
-        print(f"Wrote {path}: a program for {table} with {fields} fields. Run it with: dbbasic {path}")
+        print(f"Wrote {path}: a program for {table} with {fields} fields. Run it with: ddgbasic {path}")
 
     def _parse_edit_record_statement(self):
         """EDIT RECORD (SELECT ...) [KEY key$] [AT top, left] [TITLE title$] [INTO var]
@@ -5448,7 +5448,7 @@ class Interpreter:
                     break
                 message = 'Not saved: ' + error + '  (press a key)'
                 SCREEN.say(bottom + 1, left, message[:max(1, screen_cols - left + 1)])
-                dbscreen_bell()
+                ddgscreen_bell()
                 SCREEN.keys.read_key()          # show the message until a key is pressed
                 SCREEN.say(bottom + 1, left, ' ' * len(message[:max(1, screen_cols - left + 1)]))
             return dict(record)
@@ -5646,7 +5646,7 @@ class Interpreter:
  
     def _call_builtin(self, name, args):
         """Call a built-in function. A Python error caused by bad arguments (too few,
-        wrong type) is reported as a DbBasic error with the line and column."""
+        wrong type) is reported as a DDGBasic error with the line and column."""
         try:
             return self._execute_function(name, args)
         except (IndexError, TypeError, AttributeError) as e:
@@ -6902,7 +6902,7 @@ class Interpreter:
             SCREEN.keys.set_mouse(setting_token[1].upper() == 'ON')
             self._next_token()
         elif token[0] == 'ID' and token[1].upper() == 'THEME':
-            # SET THEME "classic": the four colours of COLOR at once (see THEMES in dbscreen.py)
+            # SET THEME "classic": the four colours of COLOR at once (see THEMES in ddgscreen.py)
             self._next_token()
             try:
                 SCREEN.theme(self._to_string(self._parse_expression()))
@@ -9008,13 +9008,13 @@ class Interpreter:
     # In the Interpreter class
 
     def _parse_eval_statement(self):
-        """Parses and executes a string of DbBasic code dynamically."""
+        """Parses and executes a string of DDGBasic code dynamically."""
         self._expect('EVAL')
         code_string = self._parse_expression()
         self._execute_basic_string(code_string)
     
     def _execute_basic_string(self, code_string):
-        """A reusable helper to execute a string of DbBasic code."""
+        """A reusable helper to execute a string of DDGBasic code."""
         if not isinstance(code_string, str):
             self._error("Argument for dynamic execution must be a string.")
         if not code_string.strip():
@@ -9446,7 +9446,7 @@ class Interpreter:
                     print(f"No help available for '{topic}'. Type HELP to see list.")
         else:
             # 5. List all topics
-            print("\n=== DbBasic Help Topics ===")
+            print("\n=== DDGBasic Help Topics ===")
             topics = HelpRegistry.list_topics()
             col_width = 22
             num_cols = 3
@@ -11134,14 +11134,14 @@ class Interpreter:
         connection the program's BEGIN, COMMIT and ROLLBACK use."""
         cursor = self.db_cursor
         if self.db_engine == 'sqlite' and self.db_connection.in_transaction:
-            cursor.execute('SAVEPOINT dbbasic_load')
+            cursor.execute('SAVEPOINT ddgbasic_load')
             try:
                 yield
             except BaseException:
-                cursor.execute('ROLLBACK TO dbbasic_load')
-                cursor.execute('RELEASE dbbasic_load')
+                cursor.execute('ROLLBACK TO ddgbasic_load')
+                cursor.execute('RELEASE ddgbasic_load')
                 raise
-            cursor.execute('RELEASE dbbasic_load')
+            cursor.execute('RELEASE ddgbasic_load')
             return
         try:
             cursor.execute('BEGIN TRANSACTION')
@@ -11633,7 +11633,7 @@ class Interpreter:
             for record in data:
                 row_number += 1
                 self.variables['RECNO'] = float(row_number)
-                # Convert the Python dict to a DbBasic HASH
+                # Convert the Python dict to a DDGBasic HASH
                 record_hash = self._python_to_basic_data(record)
                 self.variables[loop_var_name] = record_hash
                 
@@ -11700,7 +11700,7 @@ class Interpreter:
                     # RECNO is the line number in the file, so it matches the warnings and an editor
                     self.variables['RECNO'] = float(line_number)
                     
-                    # Convert the Python dict to a DbBasic HASH
+                    # Convert the Python dict to a DDGBasic HASH
                     record_hash = self._python_to_basic_data(record)
                     self.variables[loop_var_name] = record_hash
                     
@@ -11977,7 +11977,7 @@ class Interpreter:
         return None
 
     def _convert_basic_to_python_date_mask(self, basic_mask):
-        """Converts a DbBasic date mask (YYYY) to a Python strftime mask (%Y)."""
+        """Converts a DDGBasic date mask (YYYY) to a Python strftime mask (%Y)."""
         # Tokens are matched in any case; everything else (literal text and strftime
         # directives such as %A or %b) is kept exactly as written.
         format_map = {'YYYY': '%Y', 'YY': '%y', 'MM': '%m', 'DD': '%d', 'HH': '%H', 'MI': '%M', 'SS': '%S'}
@@ -11986,7 +11986,7 @@ class Interpreter:
                             str(basic_mask))
         
     def _format_date_with_mask(self, date_obj, mask):
-        """Applies DbBasic date format masks to a datetime object."""
+        """Applies DDGBasic date format masks to a datetime object."""
         py_format_str = self._convert_basic_to_python_date_mask(mask)
         return date_obj.strftime(py_format_str)
         
@@ -12348,8 +12348,8 @@ class Interpreter:
                 source
                     Purpose: This is the most important field. It tells UPGRADE CSV where to get the data for this column.
                     Required: Yes.
-                    Data Type: String, containing a DbBasic expression.
-                    Usage: The string is a DbBasic expression that is evaluated for each row. 
+                    Data Type: String, containing a DDGBasic expression.
+                    Usage: The string is a DDGBasic expression that is evaluated for each row. 
                        The headers of the source CSV are available as temporary variables within this expression.
                     Direct Mapping: "CustomerID"
                        The value is taken directly from the CustomerID column of the source row. The generator defaults to this.
@@ -14740,7 +14740,7 @@ def run_interpreter(source_code, cmd_args=None, source_name="script", debug=Fals
 
 
 def run_repl(debug=False):
-    print(f"DbBasic {__version__} REPL (Type 'EXIT' to quit)")
+    print(f"DDGBasic {__version__} REPL (Type 'EXIT' to quit)")
     print("Supports single-line loops (e.g., FOR I=1 TO 5: PRINT I: NEXT)")
     print("FUNCTION definitions may span lines, up to END FUNCTION")
     
@@ -14758,7 +14758,7 @@ def run_repl(debug=False):
         try:
             # Get input
             try:
-                code_line = input("DbBasic> ").strip()
+                code_line = input("DDGBasic> ").strip()
             except EOFError: # Handle Ctrl+Z/Ctrl+D gracefully
                 break
             
@@ -14812,11 +14812,11 @@ def use_utf8_streams():
 def main():
     use_utf8_streams()
     if len(sys.argv) == 2 and sys.argv[1] in ('--version', '-V'):
-        print(f"DbBasic {__version__}")
+        print(f"DDGBasic {__version__}")
         return 0
-    # dbbasic --ide [file.bas]: the full-screen editor (see dbide.py)
+    # ddgbasic --ide [file.bas]: the full-screen editor (see ddgide.py)
     if len(sys.argv) >= 2 and sys.argv[1] == '--ide':
-        from dbide import run_ide
+        from ddgide import run_ide
         # How the IDE runs a program: this same executable, or this script with this Python
         runner = [sys.argv[0]] if '__compiled__' in globals() else [sys.executable, os.path.abspath(__file__)]
         sys.exit(run_ide(sys.argv[2] if len(sys.argv) > 2 else None, runner,

@@ -1,6 +1,6 @@
 # Chapter 4: Database, SQL & Output
 
-DbBasic embeds a relational database in the language. Every program starts with an open in-memory **SQLite** connection. SQL statements can be written directly in the source, without quoting or a wrapper call. This chapter covers:
+DDGBasic embeds a relational database in the language. Every program starts with an open in-memory **SQLite** connection. SQL statements can be written directly in the source, without quoting or a wrapper call. This chapter covers:
 
 - the `DATABASE` statement, which selects the engine (SQLite or DuckDB) and the database file
 - how the lexer recognises embedded SQL and how it runs
@@ -21,7 +21,7 @@ Related chapters:
 - Chapter 5 (Data Loading, Conversion & Analysis): `LOAD`, `ANALYZE` and `UPGRADE`, which fill tables that are then queried with the statements here.
 - Chapter 6 (Files, System, Network & UI): `OPEN`/`CLOSE` file handles and `EMAIL`.
 
-All examples in this chapter were run with the interpreter in `src/dbbasic.py`. The output shown is the actual output.
+All examples in this chapter were run with the interpreter in `src/ddgbasic.py`. The output shown is the actual output.
 
 ---
 
@@ -41,8 +41,8 @@ Connection details that follow from `_init_db()`:
 
 | Engine | How it is opened | Notes |
 |---|---|---|
-| SQLite | `sqlite3.connect(filename, isolation_level=None)` | Autocommit mode. Each statement commits on its own unless you issue `BEGIN`. DbBasic's extra string functions are registered on this connection (see 4.11). |
-| DuckDB | `duckdb.connect(database=filename, read_only=False)` | Autocommit by default. DbBasic's extra SQLite functions are **not** registered. Use DuckDB's built-in functions instead. |
+| SQLite | `sqlite3.connect(filename, isolation_level=None)` | Autocommit mode. Each statement commits on its own unless you issue `BEGIN`. DDGBasic's extra string functions are registered on this connection (see 4.11). |
+| DuckDB | `duckdb.connect(database=filename, read_only=False)` | Autocommit by default. DDGBasic's extra SQLite functions are **not** registered. Use DuckDB's built-in functions instead. |
 
 Only one connection is active at a time. Opening a new database closes the current one first.
 
@@ -375,7 +375,7 @@ rows updated: 2	-1	 0
 
 ## 4.3 Bind variables (parameter substitution)
 
-Inside any SQL text that DbBasic runs, a word of the form `:name` is replaced by a `?` placeholder. The value of the BASIC variable `name` is passed as a parameter. This applies to:
+Inside any SQL text that DDGBasic runs, a word of the form `:name` is replaced by a `?` placeholder. The value of the BASIC variable `name` is passed as a parameter. This applies to:
 
 - line SQL
 - subqueries
@@ -1223,7 +1223,7 @@ On **SQLite** connections, `_init_db` registers extra scalar functions through `
 - `SOUNDEX`
 - `INSTR` (2, 3 or 4 arguments)
 
-On **DuckDB** connections, DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`, `ENDS_WITH`, `SPLIT_PART`, `TRANSLATE` and 2-argument `INSTR` are used, and the rest are added by DbBasic (4.12). See **Chapter 3** for their signatures and behaviour.
+On **DuckDB** connections, DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`, `ENDS_WITH`, `SPLIT_PART`, `TRANSLATE` and 2-argument `INSTR` are used, and the rest are added by DDGBasic (4.12). See **Chapter 3** for their signatures and behaviour.
 
 ---
 
@@ -1232,8 +1232,8 @@ On **DuckDB** connections, DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`
 | Area | SQLite (default) | DuckDB |
 |---|---|---|
 | Transactions | autocommit (`isolation_level=None`); explicit `BEGIN`/`COMMIT`/`ROLLBACK` | autocommit; explicit transactions are also supported |
-| Extra SQL functions | DbBasic helpers registered (4.11) | the same helpers; DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`, `ENDS_WITH`, `SPLIT_PART`, `TRANSLATE` are used, with the same results (booleans show as `True`/`False`) |
-| `EXECUTE` with several statements | split by DbBasic; each query's result is displayed | the same |
+| Extra SQL functions | DDGBasic helpers registered (4.11) | the same helpers; DuckDB's own `REVERSE`, `LPAD`, `RPAD`, `STARTS_WITH`, `ENDS_WITH`, `SPLIT_PART`, `TRANSLATE` are used, with the same results (booleans show as `True`/`False`) |
+| `EXECUTE` with several statements | split by DDGBasic; each query's result is displayed | the same |
 | `SQL_ROWCOUNT` after `INSERT`/`UPDATE`/`DELETE` | the number of rows | always 0 (the DuckDB driver does not report it) |
 | `SHOW TABLES` | from `sqlite_master` | from DuckDB `SHOW TABLES` |
 | `SHOW INDEXES` | from `sqlite_master` and index pragmas | from `duckdb_indexes()` and `duckdb_constraints()` |
@@ -1528,7 +1528,7 @@ Column headings are the column names, so use `AS` to change them (`SELECT region
 
 ## 4.15 Notes
 
-This section collects details of how DbBasic behaves that are easy to miss.
+This section collects details of how DDGBasic behaves that are easy to miss.
 
 1. **`SET OUTPUT FORMAT ...` without a mode switches to `CONSOLE`.** It cancels an earlier `FILE` or `OFF`, so to keep writing to a file, repeat the `FILE` clause: `SET OUTPUT FILE "x.csv" FORMAT CSV`. `SET OUTPUT CONSOLE` resets the format to `TEXT`, and `FILE` without `FORMAT` keeps the current format (4.9.5).
 2. **A missing bind variable always stops the program**, unless `ON ERROR GOTO` traps it. `Bind variable ':x' not found in internal state.` is not a database error, so `SET SQL_FATAL_ERRORS OFF` does not suppress it (4.3, 4.8).

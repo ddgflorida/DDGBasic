@@ -1,10 +1,10 @@
-# DbBasic runtime dependencies (Python 3.10 or newer).
+# DDGBasic runtime dependencies (Python 3.10 or newer).
 #   pip install -r requirements.txt
 # Tested with Python 3.12 and the versions noted below.
 
 requests          # FETCH (tested 2.34)
 duckdb>=1.2       # DATABASE ENGINE DUCKDB (tested 1.2 to 2.0; older versions lack INSTR with 3 or 4 arguments)
-numpy             # DuckDB needs it for the SQL functions DbBasic adds (STUFF, SOUNDEX, ...)
+numpy             # DuckDB needs it for the SQL functions DDGBasic adds (STUFF, SOUNDEX, ...)
 xlrd3             # LOAD EXCEL for .xls files (tested 1.1)
 openpyxl          # LOAD EXCEL for .xlsx files, SET OUTPUT FORMAT EXCEL (tested 3.1)
 beautifulsoup4    # LOAD HTML, STRIPHTML$ (tested 4.15)

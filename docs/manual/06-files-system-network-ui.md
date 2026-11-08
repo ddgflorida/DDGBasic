@@ -1,8 +1,8 @@
 # Chapter 6: Files, System, Network & User Interface
 
-This chapter covers the statements DbBasic uses to work with things outside the interpreter: text files, directories, archives, the operating-system shell, the console, HTTP services and e-mail. Full-screen text applications (screens, forms, menus and grids) have their own chapter: [Chapter 7](07-text-mode-applications.md).
+This chapter covers the statements DDGBasic uses to work with things outside the interpreter: text files, directories, archives, the operating-system shell, the console, HTTP services and e-mail. Full-screen text applications (screens, forms, menus and grids) have their own chapter: [Chapter 7](07-text-mode-applications.md).
 
-Everything here is taken from the interpreter source (`src/dbbasic.py`). Where an example shows output, the script was run against the current interpreter. Statements that need a terminal UI, a GUI browser or a live mail server (`BROWSER`, `BELL`, sending with `EMAIL`) are described from the source only.
+Everything here is taken from the interpreter source (`src/ddgbasic.py`). Where an example shows output, the script was run against the current interpreter. Statements that need a terminal UI, a GUI browser or a live mail server (`BROWSER`, `BELL`, sending with `EMAIL`) are described from the source only.
 
 Related material in other chapters:
 
@@ -29,7 +29,7 @@ Related material in other chapters:
 
 ## 6.1 Sequential file I/O
 
-DbBasic uses the classic BASIC model: you open a file under a numbered handle (`#1`, `#2`, ...), read or write it line by line, then close it.
+DDGBasic uses the classic BASIC model: you open a file under a numbered handle (`#1`, `#2`, ...), read or write it line by line, then close it.
 
 ### OPEN
 
@@ -800,7 +800,7 @@ ERR=-1 MSG=[Errno 61] Connection refused
 
 ## 6.7 Notes
 
-This section collects details of how DbBasic behaves that are easy to miss.
+This section collects details of how DDGBasic behaves that are easy to miss.
 
 1. **`~` in file names.** A leading `~` is expanded to your home directory by `OPEN`, `READ FILE`, `COPY`, `NAME`, `KILL`, `MKDIR`, `CHDIR`, `RMDIR`, `FILES`, `FOR ... IN FILES()`, `UNZIP` and `FETCH ... TO FILE`. It is **not** expanded by `ZIP` (archive name or file patterns), by the upload path in `FETCH ... USING FILE`, or by `EMAIL ... ATTACH`.
 2. **Other `OPEN` and `READ FILE` errors.** A missing file sets `ERR` = 2 (see above). Any other failure, such as a permission error or, for `READ FILE`, a file that is not valid UTF-8, sets `ERR` = 1 and `ERRMSG$` to the message, then raises `Error opening file: ...` or `Error reading file: ...`.

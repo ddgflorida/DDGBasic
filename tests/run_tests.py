@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Run the DbBasic test scripts and report PASS / FAIL / SKIP for each.
+Run the DDGBasic test scripts and report PASS / FAIL / SKIP for each.
 
 A script passes when it exits with status 0 (or with the status listed in
 EXPECTED_EXIT) and its output contains the text of every 'REM EXPECT: text'
@@ -9,10 +9,10 @@ folder, so scripts that create or delete files can't disturb the repo or
 each other.
 
 Usage:
-    python3 tests/run_tests.py                 # tests/ only, using src/dbbasic.py
+    python3 tests/run_tests.py                 # tests/ only, using src/ddgbasic.py
     python3 tests/run_tests.py --examples      # tests/ and examples/
     python3 tests/run_tests.py --offline       # skip scripts that need the internet
-    python3 tests/run_tests.py --binary        # use the compiled 'dbbasic' on PATH
+    python3 tests/run_tests.py --binary        # use the compiled 'ddgbasic' on PATH
     python3 tests/run_tests.py -v if while     # run only these scripts, show output
 
 Exit status is 0 when nothing failed, 1 otherwise.
@@ -161,21 +161,21 @@ def main():
     for stream in (sys.stdout, sys.stderr):
         if (stream.encoding or '').lower().replace('-', '') != 'utf8' and hasattr(stream, 'reconfigure'):
             stream.reconfigure(encoding='utf-8', errors='replace')
-    parser = argparse.ArgumentParser(description="Run the DbBasic test scripts.")
+    parser = argparse.ArgumentParser(description="Run the DDGBasic test scripts.")
     parser.add_argument('names', nargs='*', help="only run scripts whose name matches (e.g. 'if' or 'examples/zip')")
     parser.add_argument('--examples', action='store_true', help="also run the scripts in examples/")
     parser.add_argument('--offline', action='store_true', help="skip scripts that need the internet")
-    parser.add_argument('--binary', action='store_true', help="use the compiled 'dbbasic' on PATH instead of src/dbbasic.py")
+    parser.add_argument('--binary', action='store_true', help="use the compiled 'ddgbasic' on PATH instead of src/ddgbasic.py")
     parser.add_argument('-v', '--verbose', action='store_true', help="print each script's full output")
     args = parser.parse_args()
 
     if args.binary:
-        exe = shutil.which('dbbasic')
+        exe = shutil.which('ddgbasic')
         if not exe:
-            sys.exit("No 'dbbasic' executable found on PATH.")
+            sys.exit("No 'ddgbasic' executable found on PATH.")
         command = [exe]
     else:
-        command = [sys.executable, os.path.join(REPO, 'src', 'dbbasic.py')]
+        command = [sys.executable, os.path.join(REPO, 'src', 'ddgbasic.py')]
 
     scripts = find_scripts(args.examples or any(n.startswith('examples/') for n in args.names))
     if args.names:
@@ -186,7 +186,7 @@ def main():
         if not scripts and not checks:
             sys.exit(f"No scripts match: {' '.join(args.names)}")
 
-    work = tempfile.mkdtemp(prefix='dbbasic-tests-')
+    work = tempfile.mkdtemp(prefix='ddgbasic-tests-')
 
     passed, failed, skipped = [], [], []
     try:
@@ -217,7 +217,7 @@ def main():
                     command + [name + '.bas'],
                     cwd=run_dir,
                     input=STDIN.get(script, ''),
-                    capture_output=True, encoding='utf-8', errors='replace',   # DbBasic writes UTF-8
+                    capture_output=True, encoding='utf-8', errors='replace',   # DDGBasic writes UTF-8
                     timeout=SLOW.get(script, TIMEOUT_SECONDS))
                 status, output = result.returncode, result.stdout + result.stderr
             except subprocess.TimeoutExpired:

@@ -1,4 +1,4 @@
-REM DbBasic script to download, transform, and load a remote CSV
+REM DDGBasic script to download, transform, and load a remote CSV
 
 PRINT "--- Starting Process ---"
 

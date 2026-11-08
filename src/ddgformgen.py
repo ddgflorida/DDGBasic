@@ -1,5 +1,5 @@
 """
-The program MAKE FORM writes: a data-entry application for one table, in plain DbBasic,
+The program MAKE FORM writes: a data-entry application for one table, in plain DDGBasic,
 with a menu bar (Browse, Add, Edit, Delete), an entry form with one field per column,
 F1 help, and messages for changes the database refuses.
 
@@ -84,7 +84,7 @@ def _hint(col):
 
 
 def _q(text):
-    """A DbBasic string literal."""
+    """A DDGBasic string literal."""
     return '"' + str(text).replace('"', '""') + '"'
 
 
@@ -117,7 +117,7 @@ def build_form_program(table, columns, key, engine, database, title="", made_on=
     # --- header ------------------------------------------------------
     add('REM ' + '=' * 67)
     add(f'REM {title}: a data-entry program for the table {table}.')
-    add(f'REM Made by MAKE FORM{" on " + made_on if made_on else ""}. It is plain DbBasic: change it freely.')
+    add(f'REM Made by MAKE FORM{" on " + made_on if made_on else ""}. It is plain DDGBasic: change it freely.')
     add('REM F1 shows the keys. Browse edits the table as a grid; Add, Edit and Delete use the form.')
     add('REM ' + '=' * 67)
     add(f'DATABASE ENGINE {engine.upper()}')

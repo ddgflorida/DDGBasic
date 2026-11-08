@@ -1,13 +1,13 @@
-# DbBasic Programmer's Reference Manual
+# DDGBasic Programmer's Reference Manual
 
-DbBasic wraps a procedural language around SQLite and DuckDB: SQL is written straight into the program, query results come back as rows to loop over, and program variables go into queries as bind variables. The language around the SQL is a modern BASIC. This manual describes the language as implemented in `src/dbbasic.py`. Each chapter was written from the interpreter source, and every example was run to confirm the output shown. Each chapter ends with a *Notes* section of details that are easy to miss.
+DDGBasic wraps a procedural language around SQLite and DuckDB: SQL is written straight into the program, query results come back as rows to loop over, and program variables go into queries as bind variables. The language around the SQL is a modern BASIC. This manual describes the language as implemented in `src/ddgbasic.py`. Each chapter was written from the interpreter source, and every example was run to confirm the output shown. Each chapter ends with a *Notes* section of details that are easy to miss.
 
 ## Chapters
 
 | # | Chapter | Covers |
 |---|---------|--------|
 | 1 | [Language Fundamentals](01-language-fundamentals.md) | Running programs, source format, comments, `INCLUDE`, line continuation, `ECHO`, the lexer, data types, variables, `LET`, `DIM`/`REDIM`, arrays, hashes, array statements (`PUSH`, `POP`, `SHIFT`, `UNSHIFT`, `SPLICE`, `REVERSE`, `SORT`), operators, truth values, case sensitivity |
-| 2 | [Control Flow, Procedures & Program Control](02-control-flow-and-procedures.md) | `IF`, `FOR`/`NEXT`, the `FOR ... IN` family, `FOR EACH`, `WHILE`, `DO`/`LOOP`, `EXIT`, labels, `GOTO`, `GOSUB`, `FUNCTION`, functions as arguments, error handling (`ON ERROR`, `RESUME`, `ERROR`), `END`/`RUN`/`CHAIN`/`EVAL`/`EXECUTE`/`CLEAR`, debugging, command line, REPL, the IDE (`dbbasic --ide`) and `HELP` |
+| 2 | [Control Flow, Procedures & Program Control](02-control-flow-and-procedures.md) | `IF`, `FOR`/`NEXT`, the `FOR ... IN` family, `FOR EACH`, `WHILE`, `DO`/`LOOP`, `EXIT`, labels, `GOTO`, `GOSUB`, `FUNCTION`, functions as arguments, error handling (`ON ERROR`, `RESUME`, `ERROR`), `END`/`RUN`/`CHAIN`/`EVAL`/`EXECUTE`/`CLEAR`, debugging, command line, REPL, the IDE (`ddgbasic --ide`) and `HELP` |
 | 3 | [Built-in Functions](03-built-in-functions.md) | All 134 built-in functions with an alphabetical index, `FORMAT$` masks, `FORMATDATE$` tokens, and the 15 extra functions available inside SQL queries |
 | 4 | [Database, SQL & Output](04-database-sql-and-output.md) | `DATABASE`, embedded SQL, bind variables, subqueries, `FOR row IN (SELECT ...)`, `EXECUTE`, `SHOW`/`DESCRIBE`, SQL errors, every `SET` option, the output pipeline and its 11 formats, SQLite vs DuckDB, `PRINT`, `PRINT USING`, `WRITE`, `REPORT` (grouped reports with subtotals, totals and pages) |
 | 5 | [Data Loading, Conversion & Analysis](05-data-loading-and-analysis.md) | `LOAD` (all 9 formats, destination modes, every `OPTIONS` key, `fields=`, transform/validate rules, `TRANSFORM`/`VALIDATE ... WITH`), `USING SCHEMA`, JSON/XML normalisation, file-to-file conversion, `PARSEJSON`, `FOR ... IN` file loops, `ANALYZE`, `UPGRADE` |
@@ -30,21 +30,21 @@ NEXT
 To run a script:
 
 ```bash
-dbbasic script.bas [args...]                  # installed with pip, or a compiled build
-python3 src/dbbasic.py script.bas [args...]   # from a copy of the source
+ddgbasic script.bas [args...]                  # installed with pip, or a compiled build
+python3 src/ddgbasic.py script.bas [args...]   # from a copy of the source
 ```
 
-Running with no script starts the interactive REPL. Type `HELP` there for the built-in help topics. See [2.17 Running DbBasic](02-control-flow-and-procedures.md#217-running-dbbasic).
+Running with no script starts the interactive REPL. Type `HELP` there for the built-in help topics. See [2.17 Running DDGBasic](02-control-flow-and-procedures.md#217-running-ddgbasic).
 
 ## Running the tests
 
 `tests/run_tests.py` runs each test script in its own temporary copy of its folder and reports PASS, FAIL or SKIP. A script passes when it exits with status 0; untrapped runtime errors exit with 1. The runner itself exits with 1 if anything failed.
 
 ```bash
-python3 tests/run_tests.py                       # tests/ with src/dbbasic.py
+python3 tests/run_tests.py                       # tests/ with src/ddgbasic.py
 python3 tests/run_tests.py --examples            # also examples/
 python3 tests/run_tests.py --examples --offline  # skip scripts that download data
-python3 tests/run_tests.py --binary              # test the compiled dbbasic on PATH
+python3 tests/run_tests.py --binary              # test the compiled ddgbasic on PATH
 python3 tests/run_tests.py -v while zip          # selected scripts, full output
 ```
 
@@ -52,7 +52,7 @@ A script can also require output: it passes only if its output contains the text
 
 ## Requirements
 
-Python 3.10 or newer. `pip install dbbasic` installs DbBasic, its dependencies and the `dbbasic` command. To run from a copy of the source instead, install the dependencies with:
+Python 3.10 or newer. `pip install ddgbasic` installs DDGBasic, its dependencies and the `ddgbasic` command. To run from a copy of the source instead, install the dependencies with:
 
 ```bash
 pip install -r requirements.txt
@@ -62,7 +62,7 @@ pip install -r requirements.txt
 
 - `requests`
 - `duckdb` (1.2 or newer)
-- `numpy` (DuckDB needs it for the SQL functions DbBasic adds)
+- `numpy` (DuckDB needs it for the SQL functions DDGBasic adds)
 - `xlrd3`
 - `openpyxl`
 - `beautifulsoup4`

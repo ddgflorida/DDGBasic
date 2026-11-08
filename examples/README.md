@@ -1,10 +1,10 @@
-# DbBasic examples
+# DDGBasic examples
 
-Run any of these with `dbbasic name.bas` from this folder (or `python3 ../src/dbbasic.py name.bas`), or open one in the IDE with `dbbasic --ide name.bas`. Most write any files they make into this folder. The test suite runs them all (`python3 tests/run_tests.py --examples`) except those that need files or an API token you won't have, or that open a browser.
+Run any of these with `ddgbasic name.bas` from this folder (or `python3 ../src/ddgbasic.py name.bas`), or open one in the IDE with `ddgbasic --ide name.bas`. Most write any files they make into this folder. The test suite runs them all (`python3 tests/run_tests.py --examples`) except those that need files or an API token you won't have, or that open a browser.
 
 ## SQL and BASIC together
 
-What DbBasic is for: SQL for the data, BASIC for the rules around it.
+What DDGBasic is for: SQL for the data, BASIC for the rules around it.
 
 | Example | Shows |
 |---|---|
