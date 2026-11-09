@@ -13,6 +13,7 @@ layer as the text-screen statements (ddgscreen.py).
 import io
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -65,6 +66,10 @@ Ctrl-C             pauses a program run with breakpoints or F8
 F10, Alt+letter    the menu bar (Alt-F File, Alt-E Edit, Alt-R Run, Alt-O Options, Alt-H Help)
 Ctrl-S             save                      Ctrl-O   open
 Ctrl-N             new program               Alt-X    exit
+Shift+arrows       select text (also Shift with Home/End, PgUp/PgDn, Ctrl-Left/Right);
+                   drag with the mouse, or Shift-click, to select; Ctrl-A selects all
+Ctrl-X / Ctrl-C    cut / copy the selection  Ctrl-V   paste (also Shift-Del, Ctrl-Ins, Shift-Ins)
+                   Typing replaces the selection; Tab / Shift-Tab indent or unindent its lines
 Ctrl-Z             undo                      Ctrl-Y   delete the line
 Ctrl-D             duplicate the line        Ctrl-G   go to a line
 Ctrl-F             find                      F3       find the next one
@@ -75,6 +80,87 @@ The mouse          click to move the cursor, open a menu or go to a window; the 
 Immediate window   type a statement and press Enter: it runs at once (? x is PRINT x);
                    Up/Down recall earlier lines, PgUp/PgDn scroll, CLS clears, Esc goes back
                    (Options > Mouse off gives the terminal its own text selection back)"""
+
+
+# --- the system clipboard (best effort: the IDE keeps its own copy too) ----------------
+def _win_clipboard(text=None):
+    """Windows: puts text on the clipboard, or (text None) returns what is on it."""
+    import ctypes
+    from ctypes import wintypes
+    user32, kernel32 = ctypes.windll.user32, ctypes.windll.kernel32
+    user32.OpenClipboard.argtypes, user32.OpenClipboard.restype = [wintypes.HWND], wintypes.BOOL
+    user32.GetClipboardData.argtypes, user32.GetClipboardData.restype = [wintypes.UINT], wintypes.HANDLE
+    user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+    user32.SetClipboardData.restype = wintypes.HANDLE
+    kernel32.GlobalAlloc.argtypes, kernel32.GlobalAlloc.restype = [wintypes.UINT, ctypes.c_size_t], wintypes.HGLOBAL
+    kernel32.GlobalLock.argtypes, kernel32.GlobalLock.restype = [wintypes.HGLOBAL], ctypes.c_void_p
+    kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+    kernel32.GlobalFree.argtypes = [wintypes.HGLOBAL]
+    CF_UNICODETEXT, GMEM_MOVEABLE = 13, 0x0002
+    if not user32.OpenClipboard(None):
+        return None if text is None else False
+    try:
+        if text is None:
+            handle = user32.GetClipboardData(CF_UNICODETEXT)
+            if not handle:
+                return ''
+            pointer = kernel32.GlobalLock(handle)
+            if not pointer:
+                return None
+            try:
+                return ctypes.wstring_at(pointer)
+            finally:
+                kernel32.GlobalUnlock(handle)
+        data = text.replace('\n', '\r\n').encode('utf-16-le') + b'\x00\x00'
+        user32.EmptyClipboard()
+        handle = kernel32.GlobalAlloc(GMEM_MOVEABLE, len(data))
+        if not handle:
+            return False
+        pointer = kernel32.GlobalLock(handle)
+        ctypes.memmove(pointer, data, len(data))
+        kernel32.GlobalUnlock(handle)
+        if not user32.SetClipboardData(CF_UNICODETEXT, handle):
+            kernel32.GlobalFree(handle)
+            return False
+        return True
+    finally:
+        user32.CloseClipboard()
+
+
+_UTF8 = dict(os.environ, LANG='en_US.UTF-8', LC_ALL='en_US.UTF-8')   # pbcopy/pbpaste keep accents
+
+
+def clipboard_set(text):
+    """Puts text on the system clipboard; False if there is none to use."""
+    try:
+        if os.name == 'nt':
+            return bool(_win_clipboard(text))
+        if sys.platform == 'darwin':
+            subprocess.run(['pbcopy'], input=text, text=True, env=_UTF8, timeout=3, check=True)
+            return True
+        for command in (['wl-copy'], ['xclip', '-selection', 'clipboard'], ['xsel', '--clipboard', '--input']):
+            if shutil.which(command[0]):
+                subprocess.run(command, input=text, text=True, timeout=3, check=True)
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def clipboard_get():
+    """The text on the system clipboard, or None if it can't be read."""
+    try:
+        if os.name == 'nt':
+            return _win_clipboard()
+        if sys.platform == 'darwin':
+            return subprocess.run(['pbpaste'], capture_output=True, text=True, env=_UTF8, timeout=3).stdout
+        for command in (['wl-paste', '--no-newline'], ['xclip', '-selection', 'clipboard', '-o'],
+                        ['xsel', '--clipboard', '--output']):
+            if shutil.which(command[0]):
+                return subprocess.run(command, capture_output=True, text=True, timeout=3).stdout
+    except Exception:
+        pass
+    return None
 
 
 def error_location(errors):
@@ -118,6 +204,8 @@ class Editor:
         self.insert = True
         self.undo = []
         self.last_edit = None                 # (kind, row): typing on one line is one undo step
+        self.anchor = None                    # where a selection started, (row, col); None: no selection
+        self.clipboard = ''                   # the last text cut or copied
         self.find_text = ''
         self.message = ''
         # The Immediate window
@@ -347,7 +435,7 @@ class Editor:
             if not self.save():
                 return
         SCREEN.restore()                                    # the program gets a normal terminal
-        sys.stdout.write('\x1b[0m\x1b[2J\x1b[H')
+        sys.stdout.write('\x1b[?2004l\x1b[0m\x1b[2J\x1b[H')     # and pastes reach it as typed keys
         sys.stdout.flush()
         folder, name = os.path.split(self.path)
         try:
@@ -479,7 +567,7 @@ class Editor:
         SCREEN.keys.raw_off()
         SCREEN.cells = SCREEN._blank(SCREEN.rows, SCREEN.cols, 7, 0)
         SCREEN.cur_row = SCREEN.cur_col = 1
-        sys.stdout.write('\x1b[0m\x1b[2J\x1b[H\x1b[?25h')
+        sys.stdout.write('\x1b[?2004l\x1b[0m\x1b[2J\x1b[H\x1b[?25h')
         sys.stdout.flush()
 
     def on_line(self, program, line):
@@ -557,7 +645,7 @@ class Editor:
             self.message = 'Nothing to undo'
             return
         self.lines, self.row, self.col, self.breakpoints = self.undo.pop()
-        self.last_edit = None
+        self.last_edit = self.anchor = None
         self.modified = True
 
     def line_inserted(self, at):
@@ -644,6 +732,134 @@ class Editor:
         self.lines.insert(self.row + 1, self.lines[self.row])
         self.line_inserted(self.row + 1)
         self.row += 1
+
+    # --- selection and the clipboard -----------------------------------------------------
+    def selection(self):
+        """((row, col), (row, col)) of the selected text, start first, or None."""
+        if self.anchor is None:
+            return None
+        r, c = self.anchor
+        r = min(r, len(self.lines) - 1)
+        anchor = (r, min(c, len(self.lines[r])))
+        if anchor == (self.row, self.col):
+            return None
+        return tuple(sorted([anchor, (self.row, self.col)]))
+
+    def selected_text(self):
+        sel = self.selection()
+        if not sel:
+            return ''
+        (r1, c1), (r2, c2) = sel
+        if r1 == r2:
+            return self.lines[r1][c1:c2]
+        return '\n'.join([self.lines[r1][c1:]] + self.lines[r1 + 1:r2] + [self.lines[r2][:c2]])
+
+    def delete_selection(self, kind='cut'):
+        """Removes the selected text (an undo step unless kind is None); False if none."""
+        sel = self.selection()
+        if not sel:
+            return False
+        if kind:
+            self.remember(kind)
+        (r1, c1), (r2, c2) = sel
+        self.lines[r1] = self.lines[r1][:c1] + self.lines[r2][c2:]
+        del self.lines[r1 + 1:r2 + 1]
+        for r in range(r2, r1, -1):
+            self.line_removed(r)
+        self.row, self.col, self.anchor = r1, c1, None
+        self.modified = True
+        return True
+
+    def insert_text(self, text):
+        """Puts text (which may hold several lines) at the cursor, without auto-indent."""
+        pieces = text.split('\n')
+        line = self.lines[self.row]
+        head, tail = line[:self.col], line[self.col:]
+        if len(pieces) == 1:
+            self.lines[self.row] = head + text + tail
+            self.col += len(text)
+            return
+        self.lines[self.row:self.row + 1] = [head + pieces[0]] + pieces[1:-1] + [pieces[-1] + tail]
+        for _ in pieces[1:]:
+            self.line_inserted(self.row + 1)
+        self.row += len(pieces) - 1
+        self.col = len(pieces[-1])
+
+    def copy(self):
+        text = self.selected_text()
+        if not text:
+            bell()
+            self.message = 'Select text first: Shift with the arrow keys, or drag with the mouse'
+            return False
+        self.clipboard = text
+        lines = text.count('\n') + 1
+        on_system = clipboard_set(text)
+        self.message = (f'Copied {lines} line{"s" if lines > 1 else ""}' if lines > 1 else 'Copied') + \
+            ('' if on_system else ' (inside the IDE only: no system clipboard was found)')
+        return True
+
+    def cut(self):
+        if self.copy():
+            self.message = self.message.replace('Copied', 'Cut', 1)
+            self.delete_selection('cut')
+
+    def paste(self, text=None):
+        """Pastes text, or the clipboard: the system's if it can be read, else the IDE's own."""
+        if text is None:
+            text = clipboard_get()
+            if not text:
+                text = self.clipboard
+        text = text.replace('\r\n', '\n').replace('\r', '\n').expandtabs(4)
+        if not text:
+            bell()
+            self.message = 'Nothing to paste'
+            return
+        self.remember('paste')
+        self.delete_selection(kind=None)
+        self.insert_text(text)
+        self.last_edit = None
+
+    def select_all(self):
+        self.anchor = (0, 0)
+        self.row = len(self.lines) - 1
+        self.col = len(self.lines[self.row])
+
+    def indent_block(self, back=False):
+        """Tab / Shift-Tab with lines selected: indents or unindents each of them by 4."""
+        (r1, c1), (r2, c2) = self.selection()
+        if c2 == 0 and r2 > r1:
+            r2 -= 1                       # a selection ending at the start of a line leaves it out
+        self.remember('indent')
+        for r in range(r1, r2 + 1):
+            line = self.lines[r]
+            if back:
+                self.lines[r] = line[min(4, len(line) - len(line.lstrip(' '))):]
+            elif line:
+                self.lines[r] = '    ' + line
+        self.last_edit = None
+        # Keep the same lines selected, whole
+        self.anchor = (r1, 0)
+        self.row, self.col = (r2 + 1, 0) if r2 + 1 < len(self.lines) else (r2, len(self.lines[r2]))
+
+    def read_pasted(self):
+        """The text of a bracketed paste, read up to its end marker."""
+        chars, end = [], '\x1b[201~'
+        while True:
+            ch = SCREEN.keys._read_char(1.0)
+            if ch is None:
+                break
+            chars.append(ch)
+            if len(chars) >= len(end) and ''.join(chars[-len(end):]) == end:
+                del chars[-len(end):]
+                break
+        return ''.join(chars)
+
+    def immediate_paste(self, text):
+        """Pasting into the Immediate window: the first line goes into the line being typed."""
+        first = text.replace('\r\n', '\n').replace('\r', '\n').split('\n')[0].expandtabs(4)
+        pos = self.imm_pos
+        self.imm_text = self.imm_text[:pos] + first + self.imm_text[pos:]
+        self.imm_pos = pos + len(first)
 
     def find(self, again=False):
         if not again or not self.find_text:
@@ -901,13 +1117,23 @@ class Editor:
         if text_row in self.breakpoints:
             return SCREEN._put(screen_row, 2, shown.ljust(width), 15, 4)
         colours = self.colours_of(line)[self.left:self.left + width]
+        cells = [(ch, fg, s['bg']) for ch, fg in zip(shown, colours)]
+        cells += [(' ', s['text'], s['bg'])] * (width - len(cells))
+        sel = self.selection()
+        if sel and sel[0][0] <= text_row <= sel[1][0]:
+            # The selected part in reverse; a selection that goes on to the next line also
+            # marks the space just after this line's end
+            (r1, c1), (r2, c2) = sel
+            a = c1 if text_row == r1 else 0
+            b = c2 if text_row == r2 else len(line) + 1
+            for k in range(max(a - self.left, 0), min(b - self.left, width)):
+                cells[k] = (cells[k][0], s['bg'], 7)
         out, start = [], 0
-        for k in range(1, len(shown) + 1):
-            if k == len(shown) or colours[k] != colours[start]:
-                out.append(SCREEN._put(screen_row, 2 + start, shown[start:k], colours[start], s['bg']))
+        for k in range(1, width + 1):
+            if k == width or cells[k][1:] != cells[start][1:]:
+                text = ''.join(ch for ch, _, _ in cells[start:k])
+                out.append(SCREEN._put(screen_row, 2 + start, text, cells[start][1], cells[start][2]))
                 start = k
-        if len(shown) < width:
-            out.append(SCREEN._put(screen_row, 2 + len(shown), ' ' * (width - len(shown)), s['text'], s['bg']))
         return ''.join(out)
 
     def title(self):
@@ -965,7 +1191,7 @@ class Editor:
         self.repaint()
 
     def repaint(self):
-        SCREEN._w('\x1b[0m\x1b[2J')
+        SCREEN._w('\x1b[?2004h\x1b[0m\x1b[2J')     # back in the editor: pastes come as one block
         SCREEN.rows, SCREEN.cols = SCREEN.size()
         SCREEN.cells = SCREEN._blank(SCREEN.rows, SCREEN.cols, 7, 0)
         self.draw()
@@ -974,7 +1200,9 @@ class Editor:
     MENUS = [
         ('File', ['New            Ctrl-N', 'Open...        Ctrl-O', 'Save           Ctrl-S',
                   'Save As...', '-', 'Exit           Alt-X']),
-        ('Edit', ['Undo           Ctrl-Z', '-', 'Delete line    Ctrl-Y', 'Duplicate line Ctrl-D', '-',
+        ('Edit', ['Undo           Ctrl-Z', '-', 'Cut            Ctrl-X', 'Copy           Ctrl-C',
+                  'Paste          Ctrl-V', 'Select all     Ctrl-A', '-',
+                  'Delete line    Ctrl-Y', 'Duplicate line Ctrl-D', '-',
                   'Find...        Ctrl-F', 'Find next      F3', 'Go to line...  Ctrl-G']),
         ('Run', ['Start/Continue F5', 'Step           F8', 'Breakpoint     F9', 'Clear breakpoints',
                  'Stop', '-', 'Output screen  F4']),
@@ -1014,6 +1242,20 @@ class Editor:
             return 'quit' if self.keep_changes() else True
         elif name == 'Edit.Undo':
             self.do_undo()
+        elif name == 'Edit.Copy':
+            if self.focus == 'editor':
+                self.copy()
+            return None
+        elif name == 'Edit.Cut':
+            self.cut()
+        elif name == 'Edit.Paste':
+            if self.focus == 'immediate':
+                self.immediate_paste(clipboard_get() or self.clipboard)
+            else:
+                self.paste()
+        elif name == 'Edit.Select all':
+            self.select_all()
+            return None
         elif name == 'Edit.Delete line':
             self.delete_line()
         elif name == 'Edit.Duplicate line':
@@ -1084,7 +1326,8 @@ class Editor:
     # Every command a menu item or a key can give (tests/ide_check.py checks the menus against it)
     COMMANDS = {
         'File.New', 'File.Open...', 'File.Save', 'File.Save As...', 'File.Exit',
-        'Edit.Undo', 'Edit.Delete line', 'Edit.Duplicate line', 'Edit.Find...', 'Edit.Find next',
+        'Edit.Undo', 'Edit.Cut', 'Edit.Copy', 'Edit.Paste', 'Edit.Select all',
+        'Edit.Delete line', 'Edit.Duplicate line', 'Edit.Find...', 'Edit.Find next',
         'Edit.Go to line...', 'Run.Start/Continue', 'Run.Step', 'Run.Breakpoint', 'Run.Clear breakpoints',
         'Run.Stop', 'Run.Output screen', 'Options.Default colours', 'Options.Black screen', 'Options.Mouse on',
         'Options.Mouse off', 'Options.Immediate window', 'Help.Help on word', 'Help.Topics...', 'Help.Keys',
@@ -1098,10 +1341,13 @@ class Editor:
         'F3': 'Edit.Find next', '\x07': 'Edit.Go to line...', 'F5': 'Run.Start/Continue', 'F8': 'Run.Step',
         'F9': 'Run.Breakpoint', 'F1': 'Help.Help on word',
         'ALT-X': 'File.Exit', '\x11': 'File.Exit',
+        '\x18': 'Edit.Cut', '\x16': 'Edit.Paste', '\x01': 'Edit.Select all',      # Ctrl-X, Ctrl-V, Ctrl-A
+        'CTRL-INS': 'Edit.Copy', 'SHIFT-DEL': 'Edit.Cut', 'SHIFT-INS': 'Edit.Paste',  # as in QBasic
     }
 
     # Commands that change the text, refused while a program is paused
-    EDIT_COMMANDS = ('Edit.Undo', 'Edit.Delete line', 'Edit.Duplicate line', 'File.New', 'File.Open...')
+    EDIT_COMMANDS = ('Edit.Undo', 'Edit.Delete line', 'Edit.Duplicate line', 'File.New', 'File.Open...',
+                     'Edit.Cut', 'Edit.Paste')
 
     def loop(self):
         SCREEN.keys.block_suspend = True
@@ -1112,8 +1358,7 @@ class Editor:
             try:
                 key = SCREEN.keys.read_key()
             except KeyboardInterrupt:
-                self.message = 'Ctrl-C does nothing here: Alt-X (or File > Exit) leaves the IDE'
-                continue
+                key = 'CTRL-C'                   # the terminal turns Ctrl-C into an interrupt: copy
             if key is None:
                 return
             if self.handle_key(key) == 'quit':
@@ -1123,6 +1368,12 @@ class Editor:
         """One key, in the editor or the Immediate window. Returns 'quit' to leave the IDE,
         or, while a program is paused, 'continue', 'step' or 'stop'."""
         if key == '':
+            return None
+        if key in ('CTRL-C', '\x03'):          # an interrupt, or the character where the console sends it
+            if self.focus == 'editor' and self.selection():
+                self.copy()
+            else:
+                self.message = 'Ctrl-C copies selected text (Shift+arrows or drag to select). Alt-X leaves the IDE'
             return None
         paused = self.paused_row is not None
         if not paused or not self.message.startswith('Paused'):
@@ -1147,13 +1398,26 @@ class Editor:
             self.message = 'The program is paused: Run > Stop (or F5 to the end) before changing it'
             return None
         if self.focus == 'immediate' and name in ('Edit.Undo', 'Edit.Delete line', 'Edit.Duplicate line',
-                                                 'Edit.Go to line...', 'Run.Breakpoint'):
+                                                 'Edit.Go to line...', 'Run.Breakpoint', 'Edit.Cut',
+                                                 'Edit.Select all'):
             bell()                               # editor commands: not while typing in the Immediate window
             return None
         if name:
             result = self.command(name)
+            if name not in ('Edit.Copy', 'Edit.Select all'):
+                self.anchor = None               # any other command ends the selection
             if result in ('quit', 'continue', 'step', 'stop'):
                 return result
+            return None
+        if key == 'PASTE-START':                 # text pasted into the terminal, as one block
+            text = self.read_pasted()
+            if self.focus == 'immediate':
+                self.immediate_paste(text)
+            elif paused:
+                bell()
+                self.message = 'The program is paused: Run > Stop (or F5 to the end) before changing it'
+            else:
+                self.paste(text)
             return None
         first, last, width = self.area()
         if key in ('CLICK', 'WHEELUP', 'WHEELDOWN') and self.show_immediate:
@@ -1175,6 +1439,35 @@ class Editor:
             self.message = 'The program is paused: Run > Stop (or F5 to the end) before changing it'
             return None
         height = last - first + 1
+        # Selecting: Shift with a movement key, Shift-click and dragging extend the selection;
+        # anything else ends it. Typing, Enter, Del and Backspace replace or remove it first
+        selecting = False
+        if key == 'DRAG':
+            r, c = SCREEN.keys.mouse_row, SCREEN.keys.mouse_col
+            if self.anchor is None:
+                self.anchor = (self.row, self.col)
+            if r < first:                        # dragging above or below the text scrolls it
+                self.top, r = max(0, self.top - 1), first
+            elif r > last:
+                self.top, r = min(max(0, len(self.lines) - height), self.top + 1), last
+            self.row = min(len(self.lines) - 1, self.top + r - first)
+            self.col = max(0, min(self.left + c - 2, len(self.lines[self.row])))
+            return None
+        if key == 'SHIFT-CLICK' or (key.startswith(('SHIFT-', 'CTRL-SHIFT-')) and
+                                    key not in ('SHIFT-F1', 'SHIFT-INS', 'SHIFT-DEL')):
+            if self.anchor is None:
+                self.anchor = (self.row, self.col)
+            key, selecting = key.replace('SHIFT-', ''), True
+        elif self.selection() and key in (BACKSPACE, 'DEL'):
+            self.delete_selection('delete')
+            return None
+        elif self.selection() and key in (TAB, 'BTAB') and self.selection()[0][0] != self.selection()[1][0]:
+            self.indent_block(back=key == 'BTAB')
+            return None
+        elif self.selection() and (key == ENTER or (len(key) == 1 and key.isprintable())):
+            self.delete_selection('type')
+        if not selecting:
+            self.anchor = None
         line = self.lines[self.row]
         if key in ('UP', 'DOWN', 'PGUP', 'PGDN', 'LEFT', 'RIGHT', 'HOME', 'END', 'CTRL-HOME',
                    'CTRL-END', 'CTRL-LEFT', 'CTRL-RIGHT', 'CLICK', 'WHEELUP', 'WHEELDOWN'):
@@ -1261,11 +1554,16 @@ def run_ide(path, runner, help_topics, get_help, new_session=None, new_program=N
         return 1
     editor = Editor(path, runner, help_topics, get_help, new_session, new_program)
     mouse_before = SCREEN.keys.mouse_wanted
+    SCREEN.keys.want_drag = True             # dragging selects text
     SCREEN.keys.set_mouse(True)              # off by default on Windows; the IDE wants clicks
+    sys.stdout.write('\x1b[?2004h')           # bracketed paste: pasted text comes as one block
+    sys.stdout.flush()
     try:
         editor.loop()
     finally:
+        sys.stdout.write('\x1b[?2004l')
         SCREEN.keys.set_mouse(mouse_before)
+        SCREEN.keys.want_drag = False
         SCREEN.keys.block_suspend = False
         if editor.session is not None:
             try:

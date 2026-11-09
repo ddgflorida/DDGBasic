@@ -1450,7 +1450,7 @@ Keywords, strings, numbers and comments have their own colours. The status line 
   - Ctrl-C while the program runs stops it before its next line.
 
   A debug run uses the text in the editor, saved or not, and runs in the program's folder. It is a run inside the IDE, so a program that ends with `END` or an error comes back to the IDE as F5 does; breakpoints follow their lines as you edit, and Run > Clear breakpoints removes them all. Stopping is checked once per line, before it runs, so a line with several statements (`a = 1 : b = 2`) is one step.
-- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Delete line, Duplicate line, Find, Find next, Go to line), Run (start or continue, step, breakpoint, clear breakpoints, stop, output screen), Options (default colours or a black screen, mouse on or off, Immediate window) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
+- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Cut, Copy, Paste, Select all, Delete line, Duplicate line, Find, Find next, Go to line), Run (start or continue, step, breakpoint, clear breakpoints, stop, output screen), Options (default colours or a black screen, mouse on or off, Immediate window) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
 
 | Key | Action |
 |---|---|
@@ -1463,25 +1463,29 @@ Keywords, strings, numbers and comments have their own colours. The status line 
 | F10, Alt+letter | The menu bar |
 | Ctrl-S, Ctrl-O, Ctrl-N | Save, open, new |
 | Alt-X, Ctrl-Q | Exit (it asks first if there are unsaved changes) |
+| Shift with an arrow, Home/End, PgUp/PgDn, Ctrl-Left/Right | Select text (shown in reverse). A plain movement key ends the selection |
+| Ctrl-A | Select the whole program |
+| Ctrl-X, Ctrl-C, Ctrl-V | Cut, copy, paste (also Shift-Del, Ctrl-Ins, Shift-Ins, as in QBasic) |
 | Ctrl-Z | Undo (typing on one line is one step) |
 | Ctrl-Y, Ctrl-D | Delete the line, duplicate the line |
 | Ctrl-F, F3 | Find (ignoring case), find the next one |
 | Ctrl-G | Go to a line |
 | Enter | A new line, indented like the one before |
-| Tab, Shift-Tab | Indent, unindent (4 spaces) |
+| Tab, Shift-Tab | Indent, unindent (4 spaces); with several lines selected, the whole block |
 | Home, End | The start of the text (again: the margin), the end of the line |
 | Ctrl-Home, Ctrl-End | The start, the end of the program |
 | Ctrl-Left, Ctrl-Right | A word left, right |
 | PgUp, PgDn | A screen up, down |
-| The mouse | A click moves the cursor or opens a menu; the wheel scrolls |
+| The mouse | A click moves the cursor or opens a menu; a drag, or Shift-click, selects text; the wheel scrolls |
 
 Notes:
 
 - Files keep their line endings (CRLF or LF). Tabs in a file are shown and saved as 4 spaces.
-- The IDE turns the mouse on (also on Windows) and puts the setting back when it ends. While the mouse is on, a drag does not select text in the terminal; hold Shift while dragging, or choose Options > Mouse off.
-- Ctrl-Z is Undo, so it does not suspend the IDE as it would a program in a macOS or Linux terminal. Ctrl-C stops a program in a debug run; otherwise it does nothing in the IDE (leave with Alt-X or Ctrl-Q).
+- The IDE turns the mouse on (also on Windows) and puts the setting back when it ends. While the mouse is on, a drag selects text in the editor rather than in the terminal; to use the terminal's own selection, hold Shift while dragging (on most terminals) or choose Options > Mouse off.
+- Ctrl-Z is Undo, so it does not suspend the IDE as it would a program in a macOS or Linux terminal. Ctrl-C copies the selection; while a program runs in a debug run, it stops the program instead.
 - Esc, or a click outside the menus, closes the menu bar and goes back to the editor.
-- There is no text selection (cut, copy and paste of a block) yet.
+- With text selected, typing replaces it and Del or Backspace removes it. Cut and Copy also put the text on the system clipboard (macOS, Windows, and Linux with `wl-copy`, `xclip` or `xsel`), and Paste takes the system clipboard's text, so text moves between the IDE and other programs. Without a system clipboard, the IDE keeps its own copy.
+- Text pasted with the terminal (Cmd-V on macOS, the terminal's paste on Windows) arrives as one block, without Enter's indent added to each line, in terminals that support bracketed paste.
 - The IDE needs an interactive terminal; with input or output redirected it stops with `The IDE needs an interactive terminal.`
 
 ### HELP

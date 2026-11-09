@@ -189,6 +189,54 @@ check(e.execute_immediate('? total') == [' 100'], 'and can change them')
 check(program.tokens is tokens and program.token_index == index, "the paused program's place is kept")
 check(e.session is None, 'no separate session is made while a program is paused')
 
+# Selecting, cut, copy and paste (the system clipboard is left alone: a test stand-in)
+import ddgide  # noqa: E402
+system = {'text': None}
+ddgide.clipboard_set = lambda text: system.update(text=text) or True
+ddgide.clipboard_get = lambda: system['text']
+e = editor('FOR i = 1 TO 3\n    PRINT i\nNEXT')
+e.row, e.col = 0, 4
+for key in ('SHIFT-RIGHT', 'SHIFT-RIGHT', 'SHIFT-RIGHT', 'SHIFT-RIGHT', 'SHIFT-RIGHT'):
+    e.handle_key(key)
+check(e.selected_text() == 'i = 1', f'Shift+Right selects: {e.selected_text()!r}')
+e.handle_key('CTRL-C')
+check(system['text'] == 'i = 1' and e.selection(), 'Ctrl-C copies and keeps the selection')
+e.handle_key('x')
+check(e.lines[0] == 'FOR x TO 3' and e.selection() is None, f'typing replaces the selection: {e.lines[0]!r}')
+e.handle_key('\x1a')
+check(e.lines[0] == 'FOR i = 1 TO 3', 'Ctrl-Z undoes the replacement')
+e.row, e.col = 0, 0
+e.handle_key('SHIFT-DOWN'); e.handle_key('SHIFT-DOWN')
+check(e.selected_text() == 'FOR i = 1 TO 3\n    PRINT i\n', f'Shift+Down selects whole lines: {e.selected_text()!r}')
+e.handle_key('\x18')
+check(e.lines == ['NEXT'] and system['text'] == 'FOR i = 1 TO 3\n    PRINT i\n', f'Ctrl-X cuts: {e.lines}')
+e.handle_key('\x16')
+check(e.lines == ['FOR i = 1 TO 3', '    PRINT i', 'NEXT'] and (e.row, e.col) == (2, 0), f'Ctrl-V pastes: {e.lines}')
+system['text'] = None
+e.clipboard = 'A\nB'
+e.row, e.col = 2, 4
+e.handle_key('\x16')
+check(e.lines[2:] == ['NEXTA', 'B'], f'without a system clipboard, its own copy is pasted: {e.lines}')
+e = editor('a\nb\nc')
+e.handle_key('\x01')
+check(e.selected_text() == 'a\nb\nc', 'Ctrl-A selects everything')
+e.handle_key('\t')
+check(e.lines == ['    a', '    b', '    c'] and e.selection(), f'Tab indents the selected lines: {e.lines}')
+e.handle_key('BTAB')
+check(e.lines == ['a', 'b', 'c'], f'Shift-Tab unindents them: {e.lines}')
+e.handle_key('DEL')
+check(e.lines == [''], f'Del removes the selection: {e.lines}')
+e = editor('abc')
+e.row, e.col = 0, 3
+e.handle_key('SHIFT-HOME')
+e.handle_key('RIGHT')
+check(e.selection() is None, 'a plain arrow key ends the selection')
+e = editor('x')
+e.breakpoints = {0}
+e.row, e.col = 0, 1
+e.paste('\tone\r\ntwo')
+check(e.lines == ['x    one', 'two'] and e.breakpoints == {0}, f'paste: tabs, CRLF, breakpoints: {e.lines}')
+
 # Every menu item and shortcut key gives a command the IDE knows
 for menu, items in Editor.MENUS:
     for item in items:

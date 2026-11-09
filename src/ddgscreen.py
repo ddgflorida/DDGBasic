@@ -46,6 +46,12 @@ _CSI_KEYS = {
     '11~': 'F1', '12~': 'F2', '13~': 'F3', '14~': 'F4', '15~': 'F5', '17~': 'F6',
     '18~': 'F7', '19~': 'F8', '20~': 'F9', '21~': 'F10', '23~': 'F11', '24~': 'F12',
     '1;5H': 'CTRL-HOME', '1;5F': 'CTRL-END', '1;5C': 'CTRL-RIGHT', '1;5D': 'CTRL-LEFT', '1;2P': 'SHIFT-F1',
+    # Shift with a movement key extends a selection (the IDE); 2 = Shift, 6 = Ctrl+Shift
+    '1;2A': 'SHIFT-UP', '1;2B': 'SHIFT-DOWN', '1;2C': 'SHIFT-RIGHT', '1;2D': 'SHIFT-LEFT',
+    '1;2H': 'SHIFT-HOME', '1;2F': 'SHIFT-END', '5;2~': 'SHIFT-PGUP', '6;2~': 'SHIFT-PGDN',
+    '1;6C': 'CTRL-SHIFT-RIGHT', '1;6D': 'CTRL-SHIFT-LEFT', '1;6H': 'CTRL-SHIFT-HOME', '1;6F': 'CTRL-SHIFT-END',
+    '2;5~': 'CTRL-INS', '2;2~': 'SHIFT-INS', '3;2~': 'SHIFT-DEL',
+    '200~': 'PASTE-START', '201~': 'PASTE-END',     # bracketed paste: text pasted into the terminal
 }
 _SS3_KEYS = {'P': 'F1', 'Q': 'F2', 'R': 'F3', 'S': 'F4', 'A': 'UP', 'B': 'DOWN',
              'C': 'RIGHT', 'D': 'LEFT', 'H': 'HOME', 'F': 'END'}
@@ -53,7 +59,13 @@ _WIN_KEYS = {'H': 'UP', 'P': 'DOWN', 'K': 'LEFT', 'M': 'RIGHT', 'G': 'HOME', 'O'
              'R': 'INS', 'S': 'DEL', 'I': 'PGUP', 'Q': 'PGDN', '\x0f': 'BTAB',
              ';': 'F1', '<': 'F2', '=': 'F3', '>': 'F4', '?': 'F5', '@': 'F6',
              'A': 'F7', 'B': 'F8', 'C': 'F9', 'D': 'F10', '\x85': 'F11', '\x86': 'F12',
-             'w': 'CTRL-HOME', 'u': 'CTRL-END', 't': 'CTRL-RIGHT', 's': 'CTRL-LEFT', 'T': 'SHIFT-F1'}
+             'w': 'CTRL-HOME', 'u': 'CTRL-END', 't': 'CTRL-RIGHT', 's': 'CTRL-LEFT', 'T': 'SHIFT-F1',
+             '\x92': 'CTRL-INS'}
+
+# Keys the Windows console sends the same with and without Shift: Shift is read separately
+_WIN_SHIFTABLE = {'UP', 'DOWN', 'LEFT', 'RIGHT', 'HOME', 'END', 'PGUP', 'PGDN', 'INS', 'DEL',
+                  'CTRL-LEFT', 'CTRL-RIGHT', 'CTRL-HOME', 'CTRL-END'}
+
 
 ENTER, ESC, TAB, BACKSPACE = '\r', '\x1b', '\t', '\x08'
 
@@ -89,7 +101,11 @@ class ScreenError(Exception):
 _KEY_NAMES = {'ENTER': '\r', 'ESC': '\x1b', 'TAB': '\t', 'BACKSPACE': '\x08', 'SPACE': ' '}
 _NAMED_KEYS = {'UP', 'DOWN', 'LEFT', 'RIGHT', 'HOME', 'END', 'PGUP', 'PGDN', 'INS', 'DEL', 'BTAB',
                'CLICK', 'RCLICK', 'MCLICK', 'WHEELUP', 'WHEELDOWN',
-               'CTRL-HOME', 'CTRL-END', 'CTRL-LEFT', 'CTRL-RIGHT', 'SHIFT-F1'} | {f'F{n}' for n in range(1, 13)}
+               'CTRL-HOME', 'CTRL-END', 'CTRL-LEFT', 'CTRL-RIGHT', 'SHIFT-F1',
+               'SHIFT-UP', 'SHIFT-DOWN', 'SHIFT-LEFT', 'SHIFT-RIGHT', 'SHIFT-HOME', 'SHIFT-END',
+               'SHIFT-PGUP', 'SHIFT-PGDN', 'CTRL-SHIFT-LEFT', 'CTRL-SHIFT-RIGHT', 'CTRL-SHIFT-HOME',
+               'CTRL-SHIFT-END', 'CTRL-INS', 'SHIFT-INS', 'SHIFT-DEL', 'SHIFT-CLICK', 'DRAG'} | \
+              {f'F{n}' for n in range(1, 13)}
 
 
 def key_from_name(name):
@@ -124,6 +140,7 @@ class KeyReader:
         # (SET MOUSE ON switches it on there). Clicks arrive as keys named CLICK, RCLICK,
         # MCLICK, WHEELUP and WHEELDOWN, with the position in mouse_row/mouse_col.
         self.mouse_wanted = not self.windows
+        self.want_drag = False       # the IDE: report mouse movement with the button held (DRAG)
         self._mouse_on = False
         self._win_saved_mode = None
         self.mouse_row = self.mouse_col = 0
@@ -163,7 +180,10 @@ class KeyReader:
                     self._win_saved_mode = None
             except Exception:
                 return
-        sys.stdout.write(self._MOUSE_ON if on else self._MOUSE_OFF)
+        if on and self.want_drag:
+            sys.stdout.write('\x1b[?1000h\x1b[?1002h\x1b[?1006h')     # 1002: movement while pressed
+        else:
+            sys.stdout.write(self._MOUSE_ON if on else '\x1b[?1002l' + self._MOUSE_OFF)
         sys.stdout.flush()
         self._mouse_on = on
 
@@ -284,7 +304,10 @@ class KeyReader:
             # fetched with getwch() directly; waiting on kbhit() (as _read_char does) would
             # lose it and swallow the next key press.
             import msvcrt
-            return _WIN_KEYS.get(msvcrt.getwch(), '')
+            key = _WIN_KEYS.get(msvcrt.getwch(), '')
+            if key in _WIN_SHIFTABLE and _windows_shift_down():
+                key = 'CTRL-SHIFT-' + key[5:] if key.startswith('CTRL-') else 'SHIFT-' + key
+            return key
         if self.windows and self.is_tty and ch == '\t' and _windows_shift_down():
             return 'BTAB'                          # Shift+Tab: the console sends a plain Tab
         if ch == '\x1b':
@@ -321,9 +344,16 @@ class KeyReader:
             button, col, row = (int(n) for n in seq[1:-1].split(';'))
         except ValueError:
             return ''
-        if seq[-1] == 'm' or button & 32:          # a release, or movement with a button held
+        if seq[-1] == 'm':                         # a release
+            return self._read_key_once(timeout)
+        if button & 32:                            # movement with a button held
+            if self.want_drag and button & 3 == 0:
+                self.mouse_row, self.mouse_col = row, col
+                return 'DRAG'
             return self._read_key_once(timeout)
         self.mouse_row, self.mouse_col = row, col
+        if button & 4 and button & 3 == 0 and not button & 64:
+            return 'SHIFT-CLICK'                   # Shift held: extend a selection
         if button & 64:
             return 'WHEELDOWN' if button & 1 else 'WHEELUP'
         return {0: 'CLICK', 1: 'MCLICK', 2: 'RCLICK'}.get(button & 3, '')
