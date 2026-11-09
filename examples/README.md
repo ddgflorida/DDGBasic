@@ -26,7 +26,7 @@ What DDGBasic is for: SQL for the data, BASIC for the rules around it.
 | `invoice_demo.bas` | An invoice screen on the Chinook database (`data/chinook.sqlite`): header form, lines grid, PgUp/PgDn between invoices, business rules |
 | `orders_demo.bas` | A master-detail screen (`BROWSE ... DETAIL`) with a business rule (`EDIT WHEN`) |
 | `contact.bas` | The simplest useful form, saved with one `INSERT` |
-| `form_demo.bas` | Every kind of entry field: pictures, dates, masks, check boxes, lists, lookups, buttons, F1 help |
+| `form_demo.bas` | Every kind of entry field: pictures, dates, masks, check boxes, lists, lookups, a note with a hint, buttons, F1 help |
 | `grid_demo.bas` | `BROWSE` on 10,000 rows: sorting, type-ahead, frozen columns, formats, row colours, editing |
 | `menu_demo.bas` | A menu bar, a pop-up menu and message boxes |
 | `notes_demo.bas` | The memo editor (`EDIT TEXT`) and the viewer (`VIEW`) |
