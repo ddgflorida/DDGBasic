@@ -17,3 +17,5 @@ orders.parquet
 monthly.csv
 dist/
 *.egg-info/
+# A maintainer's release script, kept out of the repository
+publish.bat
