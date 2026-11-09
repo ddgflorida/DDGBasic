@@ -365,6 +365,7 @@ class Field:
     def _initial_buffer(self, value):
         if self.calc:
             self.typed = None
+            self.text_mode = False
             try:
                 self.number = float(value) if value not in (None, '') else 0.0
             except (TypeError, ValueError):
@@ -400,12 +401,22 @@ class Field:
         """Empties the field (Ctrl-Y, and the first key in a numeric or @K field)."""
         if self.calc:
             self.typed = ''
+            self.text_mode = False
             self.buffer = [' '] * self.width
         else:
             self.buffer = [' ' if self._editable(i) else self.template[i] for i in range(self.width)]
 
     def value(self):
         """The typed value, converted for a numeric field. Raises ValueError."""
+        if self.calc and self.text_mode:
+            # Edited as text with the arrow keys: it must still be a number that fits the mask
+            text = ''.join(self.buffer).replace(',', '').strip()
+            number = float(text) if text not in ('', '-', '.', '-.') else 0.0
+            if '.' in text and len(text.split('.', 1)[1]) > self.decimals:
+                raise ValueError("more decimals than the mask has")
+            if '*' in self._calc_text(abs(number)):
+                raise ValueError("too large for the mask")
+            return number
         if self.calc:
             if self.typed is None:
                 return self.number
@@ -422,7 +433,7 @@ class Field:
         return float(text) if text else 0.0
 
     def first_pos(self):
-        if self.calc:
+        if self.calc and not self.text_mode:
             return self.width - 1               # the cursor sits at the right, as on a calculator
         return next((i for i in range(self.width) if self._editable(i)), 0)
 
@@ -433,8 +444,11 @@ class Field:
         return i if 0 <= i < self.width else pos
 
     def end_pos(self):
-        """Just after the last character typed (the last position when the field is full)."""
-        return min(len(''.join(self.buffer).rstrip()), self.width - 1)
+        """Just after the last character typed. In a free-text field that can be just past
+        a full field, so Backspace removes its last character; a template field stops on
+        its last position."""
+        limit = self.width - 1 if self.template else self.width
+        return min(len(''.join(self.buffer).rstrip()), limit)
 
     def last_pos(self):
         return next((i for i in range(self.width - 1, -1, -1) if self._editable(i)), self.width - 1)
@@ -443,6 +457,8 @@ class Field:
         """Calculator-style typing: digits build the number, '.' starts the decimals,
         '-' changes the sign, Backspace removes the last character."""
         typed = self.typed if self.typed is not None else ''
+        if key == BACKSPACE and self.typed is None:
+            typed = self._plain(self.number)       # Backspace first takes one digit off the value
         if key in ('\x19', 'DEL'):
             typed = ''
         elif key == BACKSPACE:
@@ -465,11 +481,24 @@ class Field:
         self.buffer = list(typed.rjust(self.width)[-self.width:])
         return self.width - 1
 
+    def _plain(self, number):
+        """A calculator field's number as typed digits: 1250 or 1250.50, without commas."""
+        if self.blank_zero and not number:
+            return ''
+        return f"{number:.{self.decimals}f}"
+
     def edit_key(self, key, pos, insert):
         """Applies an editing key; returns the new cursor position. Sets self.filled when
         a character was typed into the field's last position (for SET AUTOADVANCE)."""
         self.filled = False
-        if self.calc:
+        if self.calc and not self.text_mode and key in ('LEFT', 'RIGHT', 'HOME', 'END'):
+            # An arrow key first: edit the number as text, moving through its digits.
+            # It is checked as a number, and shown with the mask again, on leaving the field
+            text = ''.join(self.buffer).strip()
+            self.buffer = list(text[:self.width].ljust(self.width))
+            self.text_mode = True
+            pos = self.end_pos()
+        if self.calc and not self.text_mode:
             return self._calc_key(key)
         if key == 'LEFT':
             return self._step(pos, -1)
@@ -491,6 +520,8 @@ class Field:
             pos = prev
             key = 'DEL'
         if key == 'DEL':
+            if pos >= self.width:              # just past a full field: nothing under the cursor
+                return pos
             if self.template:
                 self.buffer[pos] = ' '
             else:
@@ -498,8 +529,8 @@ class Field:
                 self.buffer.append(' ')
             return pos
         if len(key) == 1 and key.isprintable():
-            if not self._accepts(pos, key):
-                bell()
+            if pos >= self.width or not self._accepts(pos, key):
+                bell()                         # the field is full, or the character isn't allowed
                 return pos
             if self.upper or (self.template and self.template[pos] == '!'):
                 key = key.upper()
@@ -512,7 +543,10 @@ class Field:
             else:
                 self.buffer[pos] = key
             self.filled = pos == self.last_pos()
-            return self._step(pos, 1) if pos < self.width - 1 else pos
+            if pos < self.width - 1:
+                return self._step(pos, 1)
+            # The last position: a free-text field puts the cursor just past it, after what was typed
+            return pos if self.template else self.width
         return pos
 
 
