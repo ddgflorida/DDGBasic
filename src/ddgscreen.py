@@ -56,7 +56,7 @@ _WIN_SHIFTABLE = {'UP', 'DOWN', 'LEFT', 'RIGHT', 'HOME', 'END', 'PGUP', 'PGDN', 
 def _windows_shift_down():
     try:
         import ctypes
-        return bool(ctypes.windll.user32.GetKeyState(0x10) & 0x8000)    # VK_SHIFT
+        return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)    # VK_SHIFT (no message queue in a console)
     except Exception:
         return False
 
