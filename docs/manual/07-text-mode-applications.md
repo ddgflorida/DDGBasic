@@ -422,7 +422,7 @@ NEXT
 | `@Z` | Show nothing when a number is zero. |
 | `@R` | Store only what was typed, not the template's fixed characters: `@R (999) 999-9999` stores `5551234567`. |
 | `@K` | The first key typed clears the field, so a new value replaces the old one (numeric fields always do this). |
-| template | One character per position. `9` digit, `A` letter, `N` letter or digit, `X` any character, `!` any character in upper case, `#` digit, space or sign. Any other character is fixed and is skipped by the cursor, as in `(999) 999-9999`. The stored value includes the fixed characters, or is `""` when nothing was typed. |
+| template | One character per position. `9` digit, `A` letter, `N` letter or digit, `X` any character, `!` any character in upper case, `#` digit, space or sign. Any other character is fixed and is skipped by the cursor, as in `(999) 999-9999`. The stored value includes the fixed characters, or is `""` when nothing was typed. A template field is either left empty or filled in completely: once anything is typed, every `9`, `A` and `N` position needs a character (`#` and `X` positions may stay blank). A half-filled field shows `Fill in the whole field, or leave it empty` (or its `MESSAGE`), checked like `VALID`: going forward and when the form is saved. |
 
 Functions and a template combine with a space between them: `@Z 9999`, `@R (999) 999-9999`.
 

@@ -433,6 +433,15 @@ class Field:
         text = text.replace(',', '').strip()
         return float(text) if text else 0.0
 
+    def incomplete(self):
+        """True when a template field was started but not finished: something is typed,
+        but a 9, A or N position is still blank. # and X positions may stay blank."""
+        if not self.template or self.calc:
+            return False
+        if all(self.buffer[i] == ' ' for i in range(self.width) if self._editable(i)):
+            return False                       # left empty: fine (REQUIRED decides if it may be)
+        return any(self.buffer[i] == ' ' for i in range(self.width) if self.template[i] in '9AN')
+
     def first_pos(self):
         if self.calc and not self.text_mode:
             return self.width - 1               # the cursor sits at the right, as on a calculator
@@ -567,6 +576,9 @@ class CheckBox(Field):
     def _editable(self, i):
         return i == 1
 
+    def incomplete(self):
+        return False
+
     def _initial_buffer(self, value):
         if isinstance(value, str):
             on = value.strip().upper() in ('Y', 'YES', 'T', 'TRUE', 'X', '1', '-1')
@@ -612,6 +624,9 @@ class ListField(Field):
 
     def _editable(self, i):
         return i == 0
+
+    def incomplete(self):
+        return False
 
     def _initial_buffer(self, value):
         self.current = '' if value is None else str(value)
@@ -1058,6 +1073,8 @@ class Screen:
                 if (value == 0 or value == 'N') if (f.numeric or getattr(f, 'is_check', False)) \
                         else not str(value).strip():
                     return getattr(f, 'message', None) or 'This field is required'
+            if f.incomplete():
+                return getattr(f, 'message', None) or 'Fill in the whole field, or leave it empty'
             if f.valid is not None and not check_valid(f):
                 return getattr(f, 'message', None) or ''
             return None
