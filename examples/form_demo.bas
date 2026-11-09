@@ -28,7 +28,7 @@ o.ship = "" : o.state = "FL" : o.phone = "" : o.gift = 0 : o.note = ""
 @ 4, 13 SAY "Product   : " GET o.product PICTURE "!!!!" LOOKUP (SELECT code, name, price FROM products ORDER BY code)
 @ 5, 13 SAY "Quantity  : " GET o.qty PICTURE "999" VALID o.qty >= 1 AND o.qty <= 100 MESSAGE "Quantity must be 1 to 100"
 @ 6, 13 SAY "Member    : " GET o.member CHECKBOX
-@ 7, 13 SAY "Discount %: " GET o.discount PICTURE "99" WHEN o.member = "Y" VALID o.discount <= 20 MESSAGE "Members get at most 20%"
+@ 7, 13 SAY "Discount %: " GET o.discount PICTURE "99.99" WHEN o.member = "Y" VALID o.discount <= 20 MESSAGE "Members get at most 20%"
 @ 9, 13 SAY "Ship on   : " GET o.ship PICTURE "@D"
 @ 10, 13 SAY "Ship to   : " GET o.state LIST "CA,FL,NY,TX,WA"
 @ 11, 13 SAY "Phone     : " GET o.phone PICTURE "@R (999) 999-9999"
@@ -51,6 +51,6 @@ IF BUTTON$ = "Save" THEN
 ELSE
     PRINT "Order cancelled."
 END IF
-REM EXPECT: Order: 3 x B200 = $27.00
+REM EXPECT: Order: 3 x B200 = $26.25
 REM EXPECT: Ship on 2026-11-15 to NY, phone 5551234567, gift wrapped
 REM EXPECT: Note: Leave at the side door
