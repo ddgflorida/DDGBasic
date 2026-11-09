@@ -125,7 +125,7 @@ STDIN = {
     'tests/browse_cursor': '\rc\r' '\r\x1b[C\x1b[Cd\r' '\x1b',
     'tests/numeric_edit': '\x1b[D' * 5 + '\x1b[3~9\r' '\x08\r' '7\r' '\x1b[F2\r\x08\x089\r',
     'tests/back_tab': '\x1b[Zc\x1b[Zb\x1b[Za\r\r\r',
-    'tests/required_fields': '\tAnn\rANN@X.COM\x1b[6~30\x1b[6~ \x1b[6~50\x1b[6~',
+    'tests/required_fields': '\tANN@X.COM\x1b[ZAnn\x1b[6~30\x1b[6~ \x1b[6~200\r\x1b[Z\x1b[6~50\x1b[6~',
     'tests/screen': ('ann smith\t5551234567\t-5\r\x1912\r'   # READ, with a VALID failure
                      'zzz\x1b'                               # READ cancelled with Esc
                      '\x1b[B\r' 'q'                          # two MENUs

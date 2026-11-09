@@ -448,14 +448,16 @@ Functions and a template combine with a space between them: `@Z 9999`, `@R (999)
     State  : FL ▼
 ```
 
-`REQUIRED` means the field can't be left empty. A `*` is shown just after it (where nothing else is written), so the user can see which fields must be filled in. Empty means blank text, an empty date or list, a number that is `0`, or a check box that is not ticked. Leaving the field empty shows `This field is required`, or the field's `MESSAGE`.
+`REQUIRED` means the field must be filled in before the form is saved. A `*` is shown just after it (where nothing else is written), so the user can see which fields need a value. Empty means blank text, an empty date or list, a number that is `0`, or a check box that is not ticked. An empty required field can be left, so the fields can be filled in any order; saving the form goes back to it with `This field is required`, or the field's `MESSAGE`.
 
-`VALID condition` is checked whenever the cursor leaves the field, after the variable has been given the typed value. If the condition is false, DDGBasic beeps and the cursor stays in the field. With `MESSAGE text$`, the text is also shown on the bottom line of the screen until the next key, so the user knows why:
+`VALID condition` is checked when the cursor leaves the field going forward (Enter, Tab, Down, or a click on a later field), after the variable has been given the typed value. If the condition is false, DDGBasic beeps and the cursor stays in the field. Going back (Shift-Tab, Up, or a click on an earlier field) is never refused, so a field can be left to correct an earlier one. With `MESSAGE text$`, the text is also shown on the bottom line of the screen until the next key, so the user knows why:
 
 ```basic
 @ 4, 5 SAY "Name  : " GET name$ PICTURE "@S30" REQUIRED
 @ 5, 5 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000"
 ```
+
+In short: rules about what was typed are checked as you go; what is missing is checked when you save.
 
 **The form is checked as a whole when it is saved.** Pressing a button other than a `CANCEL` one, PgDn, PgUp, Ctrl-W, or Enter on the last field checks the `REQUIRED` and `VALID` rules of every field, including fields the user never visited. If one fails, `READ` does not end: the cursor goes to the first field that fails and its message is shown. Fields switched off by `WHEN` are not checked. Esc and `CANCEL` buttons end `READ` without any checks. A minimum length is a `VALID` rule: `VALID LEN(TRIM$(code$)) >= 3 MESSAGE "At least 3 characters"`.
 

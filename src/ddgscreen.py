@@ -1046,9 +1046,11 @@ class Screen:
             f = fields[i]
             return getattr(f, 'when', None) is None or check_when is None or check_when(f)
 
-        def problem(f):
-            """What is wrong with a field's value, or None: REQUIRED and empty, or VALID false."""
-            if getattr(f, 'required', False):
+        def problem(f, required=True):
+            """What is wrong with a field's value, or None: REQUIRED and empty, or VALID false.
+            required=False checks VALID only (leaving a field: an empty field isn't finished
+            yet, but it isn't wrong; REQUIRED waits for the form to be saved)."""
+            if required and getattr(f, 'required', False):
                 try:
                     value = f.value()
                 except ValueError:
@@ -1232,7 +1234,9 @@ class Screen:
                     assign(field, value)
                     if getattr(field, 'calc', False):
                         field.buffer = field._initial_buffer(value)   # show it formatted with the mask
-                    found = problem(field)
+                    # Typed values are checked going forward; going back is never blocked
+                    backwards = key in ('UP', 'BTAB') or (click_target is not None and click_target < index)
+                    found = None if backwards else problem(field, required=False)
                     if found is not None:
                         bell()
                         if found:

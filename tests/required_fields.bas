@@ -1,5 +1,6 @@
 REM REQUIRED fields, @L, and the check of every field's rules when the form is saved,
-REM visited or not. Keys come from the test runner's STDIN.
+REM visited or not. REQUIRED is checked only on saving; VALID also going forward.
+REM Keys come from the test runner's STDIN.
 COLOR 15, 1
 CLS
 name$ = "" : email$ = "" : age = 0 : agree = 0 : limit = 500
@@ -9,9 +10,11 @@ name$ = "" : email$ = "" : age = 0 : agree = 0 : limit = 500
 @ 6, 5 SAY "Agree: " GET agree CHECKBOX REQUIRED
 @ 7, 5 SAY "Limit: " GET limit PICTURE "9999" VALID limit <= 100 MESSAGE "Too big"
 @ 9, 5 BUTTON "Save"
-REM Keys: Tab on the empty Name (refused), "Ann" Enter, "ANN@X.COM",
-REM PgDn (Age is required: the cursor goes there), "30" PgDn (Agree is not ticked),
-REM Space PgDn (Limit's VALID fails), "50" PgDn (saved)
+REM Keys: Tab on the empty Name (allowed: REQUIRED waits for the save), "ANN@X.COM",
+REM Shift-Tab back to Name, "Ann", PgDn (Age is required: the cursor goes there),
+REM "30" PgDn (Agree is not ticked), Space PgDn (Limit's VALID fails: the cursor goes there),
+REM "200" Enter (refused going forward), Shift-Tab (going back is allowed), PgDn (Limit
+REM still fails), "50" PgDn (saved)
 READ
 COLOR 7, 0
 CLS
