@@ -148,14 +148,14 @@ browse_contacts:
     RETURN
 ```
 
-**5. An entry form.** For a form with its own layout, `@ ... SAY ... GET` places the fields and `READ` edits them. The fields here belong to a hash, `c`, so the `INSERT` can bind them directly. `PICTURE` shapes the input (`@D` is a date, `999,999.99` a number typed like a calculator), `VALID ... MESSAGE` explains a refusal, `LIST` makes the state a drop-down filled from a query, `CHECKBOX` gives a `[X]` box, and `HINT` puts a line of help on the bottom of the screen while the cursor is in that field. `BOX ... SHADOW` gives the form a drop shadow:
+**5. An entry form.** For a form with its own layout, `@ ... SAY ... GET` places the fields and `READ` edits them. The fields here belong to a hash, `c`, so the `INSERT` can bind them directly. `PICTURE` shapes the input (`@D` is a date, `999,999.99` a number typed like a calculator), `REQUIRED` marks a field that must be filled in, `VALID ... MESSAGE` explains a refusal, `LIST` makes the state a drop-down filled from a query, `CHECKBOX` gives a `[X]` box, and `HINT` puts a line of help on the bottom of the screen while the cursor is in that field. `BOX ... SHADOW` gives the form a drop shadow:
 
 ```basic
 add_contact:
     c.name = "" : c.phone = "" : c.email = "" : c.state = "FL" : c.active = "Y" : c.since = DATE$ : c.credit = 0
     saved$ = SAVESCREEN()
     BOX 5, 12, 18, 68, "New contact" SHADOW
-    @ 7, 15 SAY "Name   : " GET c.name PICTURE "@!S30" VALID LEN(TRIM$(c.name)) > 0 MESSAGE "A name is required" _
+    @ 7, 15 SAY "Name   : " GET c.name PICTURE "@!S30" REQUIRED MESSAGE "A name is required" _
         HINT "The company or person's name (required)"
     @ 8, 15 SAY "Phone  : " GET c.phone PICTURE "(999) 999-9999" HINT "Ten digits: the brackets and dash are filled in"
     @ 9, 15 SAY "Email  : " GET c.email PICTURE "@S30" HINT "Optional"
@@ -388,8 +388,8 @@ Compare two saved strings to see whether the screen changed: `IF SAVESCREEN() <>
 ### @ ... SAY ... GET
 
 ```
-@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$]
-                                                  [HINT text$] [WHEN condition] [LOOKUP (SELECT ...)]
+@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [REQUIRED] [VALID condition]
+                                                  [MESSAGE text$] [HINT text$] [WHEN condition] [LOOKUP (SELECT ...)]
                                                   [CHECKBOX] [LIST items]]
 ```
 
@@ -416,6 +416,7 @@ NEXT
 |---|---|
 | (none) | Text: as wide as the current value, and at least 20. Numbers: 10 wide. |
 | `@!` | Upper-case every letter typed. |
+| `@L` | Lower-case every letter typed (for e-mail addresses and the like). |
 | `@Sn` | A field `n` characters wide, for example `@S30`. Combine with `!`: `@!S30`. |
 | `@D` | A date, typed as `YYYY-MM-DD` (the `-` are fixed). Leaving the field with an impossible date, such as `2024-02-30`, shows `Not a valid date` and keeps the cursor there. An empty date is allowed. |
 | `@Z` | Show nothing when a number is zero. |
@@ -447,11 +448,16 @@ Functions and a template combine with a space between them: `@Z 9999`, `@R (999)
     State  : FL ▼
 ```
 
+`REQUIRED` means the field can't be left empty. A `*` is shown just after it (where nothing else is written), so the user can see which fields must be filled in. Empty means blank text, an empty date or list, a number that is `0`, or a check box that is not ticked. Leaving the field empty shows `This field is required`, or the field's `MESSAGE`.
+
 `VALID condition` is checked whenever the cursor leaves the field, after the variable has been given the typed value. If the condition is false, DDGBasic beeps and the cursor stays in the field. With `MESSAGE text$`, the text is also shown on the bottom line of the screen until the next key, so the user knows why:
 
 ```basic
+@ 4, 5 SAY "Name  : " GET name$ PICTURE "@S30" REQUIRED
 @ 5, 5 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000"
 ```
+
+**The form is checked as a whole when it is saved.** Pressing a button other than a `CANCEL` one, PgDn, PgUp, Ctrl-W, or Enter on the last field checks the `REQUIRED` and `VALID` rules of every field, including fields the user never visited. If one fails, `READ` does not end: the cursor goes to the first field that fails and its message is shown. Fields switched off by `WHEN` are not checked. Esc and `CANCEL` buttons end `READ` without any checks. A minimum length is a `VALID` rule: `VALID LEN(TRIM$(code$)) >= 3 MESSAGE "At least 3 characters"`.
 
 `HINT text$` is a line of help for the field: while the cursor is in it, the text is shown on the bottom line of the screen. Moving to a field without a hint shows what was on that line before, and so does the end of `READ`, so a program's own status line comes back. A `MESSAGE` shows over the hint until the next key.
 

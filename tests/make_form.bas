@@ -39,7 +39,7 @@ make_and_run:
     IF INSTR(src$, "GET r.joined PICTURE " + CHR$(34) + "@D") = 0 THEN ERROR 1, "a DATE should be @D"
     IF INSTR(src$, "GET r.active CHECKBOX") = 0 THEN ERROR 1, "a BOOLEAN should be a CHECKBOX"
     IF INSTR(src$, "GET r.credit PICTURE " + CHR$(34) + "99,999,999.99") = 0 THEN ERROR 1, "DECIMAL(10, 2) mask"
-    IF INSTR(src$, "VALID LEN(TRIM$(r.name)) > 0") = 0 THEN ERROR 1, "NOT NULL should be required"
+    IF INSTR(src$, "GET r.name PICTURE " + CHR$(34) + "@S") = 0 OR INSTR(src$, "REQUIRED MESSAGE") = 0 THEN ERROR 1, "NOT NULL should be REQUIRED"
     REM Keys: see run_tests.py. Add Bob with credit -5 (refused), fix it, save;
     REM edit Bob's visits to 9; delete Ann; quit
     RUN prog$

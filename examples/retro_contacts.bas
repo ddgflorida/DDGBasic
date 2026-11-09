@@ -93,7 +93,7 @@ add_contact:
     c.name = "" : c.phone = "" : c.email = "" : c.state = "FL" : c.active = "Y" : c.since = DATE$ : c.credit = 0
     saved$ = SAVESCREEN()
     BOX 5, 12, 18, 68, "New contact" SHADOW
-    @ 7, 15 SAY "Name   : " GET c.name PICTURE "@!S30" VALID LEN(TRIM$(c.name)) > 0 MESSAGE "A name is required" _
+    @ 7, 15 SAY "Name   : " GET c.name PICTURE "@!S30" REQUIRED MESSAGE "A name is required" _
         HINT "The company or person's name (required)"
     @ 8, 15 SAY "Phone  : " GET c.phone PICTURE "(999) 999-9999" HINT "Ten digits: the brackets and dash are filled in"
     @ 9, 15 SAY "Email  : " GET c.email PICTURE "@S30" HINT "Optional"

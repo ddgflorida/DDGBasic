@@ -309,13 +309,14 @@ class Field:
         self.row, self.col = row, col
         self.var_name, self.valid = var_name, valid
         self.numeric = numeric
-        self.upper = self.blank_zero = self.raw = self.clear_first = self.is_date = False
+        self.upper = self.lower = self.blank_zero = self.raw = self.clear_first = self.is_date = False
         width = None
         template = picture or ''
         if template.startswith('@'):
             funcs, _, template = template[1:].partition(' ')
             funcs = funcs.upper()
             self.upper = '!' in funcs
+            self.lower = 'L' in funcs           # @L: lower case, as @! is upper case
             self.blank_zero = 'Z' in funcs      # @Z: show nothing for zero
             self.raw = 'R' in funcs             # @R: the template's fixed characters are not stored
             self.clear_first = 'K' in funcs     # @K: the first key typed clears the field
@@ -534,6 +535,8 @@ class Field:
                 return pos
             if self.upper or (self.template and self.template[pos] == '!'):
                 key = key.upper()
+            elif self.lower:
+                key = key.lower()
             if insert and not self.template:
                 if self.buffer[-1] != ' ':
                     bell()
@@ -984,7 +987,7 @@ class Screen:
 
     # --- GET / READ ----------------------------------------------------
     def add_get(self, row, col, var_name, value, picture, valid, numeric, target=None,
-                message=None, when=None, lookup=None, kind=None, items=None, hint=None):
+                message=None, when=None, lookup=None, kind=None, items=None, hint=None, required=False):
         if kind == 'check':
             field = CheckBox(row, col, var_name, value, valid, isinstance(value, str) or var_name.endswith('$'))
         elif kind == 'list':
@@ -993,9 +996,14 @@ class Screen:
             field = Field(row, col, var_name, value, picture, valid, numeric)
         field.target = target       # where READ stores the value (the interpreter's description)
         field.message, field.when, field.lookup = message, when, lookup
-        field.hint = hint
+        field.hint, field.required = hint, required
         self.gets.append(field)
         self._draw_field(field)
+        if required:
+            # A * just after a required field, if nothing else is written there
+            r, c = field.row, field.col + field.width
+            if 1 <= r <= self.rows and 1 <= c <= self.cols and self.cells[r - 1][c - 1][0] == ' ':
+                self._w(self._put(r, c, '*', self.fg, self.bg) + self._normal())
         return field
 
     def add_button(self, row, col, label, cancel=False):
@@ -1038,6 +1046,41 @@ class Screen:
             f = fields[i]
             return getattr(f, 'when', None) is None or check_when is None or check_when(f)
 
+        def problem(f):
+            """What is wrong with a field's value, or None: REQUIRED and empty, or VALID false."""
+            if getattr(f, 'required', False):
+                try:
+                    value = f.value()
+                except ValueError:
+                    value = ''
+                if (value == 0 or value == 'N') if (f.numeric or getattr(f, 'is_check', False)) \
+                        else not str(value).strip():
+                    return getattr(f, 'message', None) or 'This field is required'
+            if f.valid is not None and not check_valid(f):
+                return getattr(f, 'message', None) or ''
+            return None
+
+        def first_problem():
+            """On saving: the first field (that WHEN allows) whose rule fails, visited or not."""
+            for i, f in enumerate(fields):
+                if not getattr(f, 'is_button', False) and allowed(i):
+                    found = problem(f)
+                    if found is not None:
+                        return i, found
+            return None
+
+        def finish():
+            """Saving the form: True if every field's rules hold; otherwise the cursor goes
+            to the first field that fails, with its message."""
+            nonlocal index, pos, fresh, pending_message
+            stop = first_problem()
+            if not stop:
+                return True
+            index, pos, fresh = stop[0], fields[stop[0]].first_pos(), True
+            bell()
+            pending_message = stop[1]      # shown once that field's hint is on the bottom line
+            return False
+
         def step(i, direction):
             """The next field in a direction whose WHEN allows it, or None."""
             i += direction
@@ -1077,6 +1120,7 @@ class Screen:
         hint_under = self.save(self.rows, 1, self.rows, self.cols) \
             if any(getattr(f, 'hint', None) for f in fields) else None
         hint_shown = None
+        pending_message = None
         self._w('\x1b[?25h')
         try:
             while True:
@@ -1088,6 +1132,9 @@ class Screen:
                                           self.fg, self.bg) + self._normal())
                     else:
                         self.restore_saved(hint_under)
+                if pending_message:
+                    message_under = self._show_message(pending_message)
+                    pending_message = None
                 if getattr(field, 'is_button', False):
                     # A button: Enter or Space presses it; Tab, arrows and Shift-Tab move on
                     self._w('\x1b[?25l')
@@ -1119,6 +1166,8 @@ class Screen:
                             self.last_button, self.last_key = field.label, ENTER
                         return self.last_key
                     if key in (ENTER, ' '):
+                        if not finish():
+                            continue
                         self.last_button, self.last_key = field.label, ENTER
                         return ENTER
                     if key in (TAB, 'DOWN', 'RIGHT'):
@@ -1183,14 +1232,17 @@ class Screen:
                     assign(field, value)
                     if getattr(field, 'calc', False):
                         field.buffer = field._initial_buffer(value)   # show it formatted with the mask
-                    if field.valid is not None and not check_valid(field):
+                    found = problem(field)
+                    if found is not None:
                         bell()
-                        if getattr(field, 'message', None):
-                            message_under = self._show_message(field.message)
+                        if found:
+                            message_under = self._show_message(found)
                         continue
                     self._draw_field(field)
                     if key in ('PGDN', 'PGUP', '\x17'):
-                        return key
+                        if finish():
+                            return key
+                        continue
                     if click_target is not None:
                         index, pos, fresh = click_target, click_pos(fields[click_target]), True
                         if getattr(fields[index], 'is_button', False):
@@ -1201,7 +1253,9 @@ class Screen:
                     nxt = step(index, -1 if key in ('UP', 'BTAB') else 1)
                     if nxt is None:
                         if key in (ENTER, TAB, 'DOWN'):
-                            return key         # past the last field
+                            if finish():
+                                return key     # past the last field
+                            continue
                         # At the first field: Shift-Tab wraps round to the last field or button
                         nxt = step(len(fields), -1) if key == 'BTAB' else index
                     index = nxt

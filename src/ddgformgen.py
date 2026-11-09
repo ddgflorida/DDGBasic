@@ -218,7 +218,8 @@ def build_form_program(table, columns, key, engine, database, title="", made_on=
         elif c.kind == 'list':
             parts.append(f'LIST ({c.items_sql})')
         if c.required and c.kind in ('text', 'date', 'list'):
-            parts.append(f'VALID LEN(TRIM$({target})) > 0 MESSAGE {_q(label_of(c.name) + " is required")}')
+            # Numbers and check boxes are left out: 0 and "no" are real values for a NOT NULL column
+            parts.append(f'REQUIRED MESSAGE {_q(label_of(c.name) + " is required")}')
         line = ' '.join(parts)
         hint = f'HINT {_q(_hint(c))}'
         if len(line) + len(hint) + 1 > 118:

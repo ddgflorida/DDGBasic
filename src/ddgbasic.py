@@ -361,8 +361,8 @@ class HelpRegistry:
             "examples": ['FOR i = 1 TO n\n    PROGRESS i, n TITLE "Copying"\nNEXT i\nPROGRESS OFF']
         },
         "@": {
-            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [VALID condition] [MESSAGE text$] [HINT text$] [WHEN condition] [LOOKUP (SELECT ...)]]\n@ row, col BUTTON label$ [CANCEL]\nGET ... CHECKBOX | GET ... LIST "a,b,c" | GET ... LIST (SELECT ...)',
-            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. VALID is checked when the field is left; MESSAGE text is shown on the bottom line when it fails. HINT text is shown on the bottom line while the cursor is in the field. WHEN skips the field when false. LOOKUP gives a list of allowed values (first column): F2 opens it, and leaving with a value not in the list opens it too.",
+            "syntax": '@ row, col [SAY expr [PICTURE mask$]] [GET target [PICTURE mask$] [REQUIRED] [VALID condition] [MESSAGE text$] [HINT text$] [WHEN condition] [LOOKUP (SELECT ...)]]\n@ row, col BUTTON label$ [CANCEL]\nGET ... CHECKBOX | GET ... LIST "a,b,c" | GET ... LIST (SELECT ...)',
+            "desc": "SAY writes text at a position (PICTURE formats it as FORMAT$ does). GET adds an entry field after the SAY text for a variable, a hash field (rec.name) or an array element (a(2)); READ edits the fields. GET pictures: @! upper case, @L lower case, @Sn width n, or a template where 9 = digit, A = letter, N = letter or digit, X = any, ! = upper case, and other characters are fixed. REQUIRED fields (marked *) can't be left empty. VALID is checked when the field is left; MESSAGE text is shown on the bottom line when it fails. Saving the form (a button, PgDn, Ctrl-W, Enter on the last field) checks every field's REQUIRED and VALID, visited or not, and goes to the first that fails. HINT text is shown on the bottom line while the cursor is in the field. WHEN skips the field when false. LOOKUP gives a list of allowed values (first column): F2 opens it, and leaving with a value not in the list opens it too.",
             "examples": ['@ 5, 10 SAY "Name: " GET name$ PICTURE "@!S30"', '@ 6, 10 SAY "Email: " GET rec.email PICTURE "@S40"', '@ 7, 10 SAY "State: " GET state$ PICTURE "!!" LOOKUP (SELECT code, name FROM states)', '@ 8, 10 SAY "Credit: " GET credit VALID credit <= 5000 MESSAGE "Limit is 5,000" WHEN type$ = "B"', '@ 6, 10 SAY "Phone: " GET phone$ PICTURE "(999) 999-9999"', '@ 7, 10 SAY "Qty: " GET qty VALID qty > 0', '@ 9, 10 SAY "Phone: " GET phone$ PICTURE "@R (999) 999-9999" HINT "Ten digits"', '@ 20, 1 SAY total PICTURE "$#,###.##"']
         },
         "READ": {
@@ -4517,7 +4517,7 @@ class Interpreter:
             last = target[1][-1][1] if target[1] else target[0]
             numeric = not str(last).endswith('$') and isinstance(value, (int, float)) and not isinstance(value, bool)
             picture = valid = message = when = lookup = None
-            kind, items, hint = None, None, None
+            kind, items, hint, required = None, None, None, False
             # The clauses can come in any order
             while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
                 if keyword('PICTURE'):
@@ -4530,6 +4530,8 @@ class Interpreter:
                     message = self._to_string(self._parse_expression())
                 elif keyword('HINT'):
                     hint = self._to_string(self._parse_expression())   # shown on the bottom line in READ
+                elif keyword('REQUIRED'):
+                    required = True                # can't be left or saved empty
                 elif keyword('CHECKBOX'):
                     kind = 'check'
                 elif keyword('LIST'):
@@ -4550,12 +4552,13 @@ class Interpreter:
                     lookup = self._extract_sql_from_parens()
                 else:
                     self._error(f"Unexpected '{self._current_token()[1]}' after GET {var_name}: "
-                                "expected PICTURE, VALID, MESSAGE, HINT, WHEN, LOOKUP, CHECKBOX or LIST")
+                                "expected PICTURE, VALID, REQUIRED, MESSAGE, HINT, WHEN, LOOKUP, CHECKBOX or LIST")
             if picture and picture.startswith('@') and 'D' in picture[1:].split(' ')[0].upper():
                 numeric = False             # a date field holds text (YYYY-MM-DD)
             try:
                 SCREEN.add_get(row, col, var_name, value, picture, valid, numeric, target,
-                               message=message, when=when, lookup=lookup, kind=kind, items=items, hint=hint)
+                               message=message, when=when, lookup=lookup, kind=kind, items=items, hint=hint,
+                               required=required)
             except ScreenError as e:
                 self._error(str(e))
         elif not (self._current_token() is None or self._current_token()[0] in ('NEWLINE', 'COLON')):
@@ -4656,7 +4659,7 @@ class Interpreter:
         container, key = self._get_target_slot(target)
         container[key] = value
 
-    GET_CLAUSE_WORDS = ('PICTURE', 'VALID', 'MESSAGE', 'WHEN', 'LOOKUP', 'CHECKBOX', 'LIST', 'HINT')
+    GET_CLAUSE_WORDS = ('PICTURE', 'VALID', 'MESSAGE', 'WHEN', 'LOOKUP', 'CHECKBOX', 'LIST', 'HINT', 'REQUIRED')
 
     # The clause words that end an EDIT WHEN condition of BROWSE
     BROWSE_CLAUSE_WORDS = ('MESSAGE', 'TITLE', 'FORMAT', 'COLOR', 'EXIT', 'DETAIL', 'AT', 'INTO', 'FREEZE',

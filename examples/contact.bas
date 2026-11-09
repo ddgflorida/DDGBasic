@@ -11,7 +11,7 @@ c.name = "" : c.phone = "" : c.email = "" : c.state = "FL" : c.active = "Y"
 COLOR 15, 1, 0, 3
 CLS
 BOX 3, 10, 14, 70, "Contact" DOUBLE SHADOW
-@ 5, 13 SAY "Name   : " GET c.name PICTURE "@S30" VALID c.name <> "" MESSAGE "A name is required"
+@ 5, 13 SAY "Name   : " GET c.name PICTURE "@S30" REQUIRED MESSAGE "A name is required"
 @ 6, 13 SAY "Phone  : " GET c.phone PICTURE "@R (999) 999-9999"
 @ 7, 13 SAY "Email  : " GET c.email PICTURE "@S35"
 @ 8, 13 SAY "State  : " GET c.state LIST "CA,FL,NY,TX,WA"
