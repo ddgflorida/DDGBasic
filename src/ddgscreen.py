@@ -57,6 +57,17 @@ _WIN_KEYS = {'H': 'UP', 'P': 'DOWN', 'K': 'LEFT', 'M': 'RIGHT', 'G': 'HOME', 'O'
 
 ENTER, ESC, TAB, BACKSPACE = '\r', '\x1b', '\t', '\x08'
 
+
+def _windows_shift_down():
+    """Whether Shift is held now (Windows). The console hands Shift+Tab over as a plain Tab,
+    so Shift is read from the keyboard instead. GetAsyncKeyState, not GetKeyState: a console
+    program has no window message queue for GetKeyState to follow."""
+    try:
+        import ctypes
+        return bool(ctypes.windll.user32.GetAsyncKeyState(0x10) & 0x8000)    # VK_SHIFT
+    except Exception:
+        return False
+
 SAVED_PREFIX = '\x00SCREEN:'   # marks a string made by SAVESCREEN
 
 # SET THEME: (text fg, text bg, field fg, field bg), the four values of COLOR
@@ -274,6 +285,8 @@ class KeyReader:
             # lose it and swallow the next key press.
             import msvcrt
             return _WIN_KEYS.get(msvcrt.getwch(), '')
+        if self.windows and self.is_tty and ch == '\t' and _windows_shift_down():
+            return 'BTAB'                          # Shift+Tab: the console sends a plain Tab
         if ch == '\x1b':
             nxt = self._read_char(0.05)
             if nxt == '[':
