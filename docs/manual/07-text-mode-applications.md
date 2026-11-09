@@ -748,7 +748,7 @@ BROWSE (SELECT id, customer, placed FROM orders ORDER BY id) INTO o TITLE "Order
 | Key | Action |
 |---|---|
 | Left, Right, Tab, Shift-Tab | Move between cells. The current cell is shown in reverse. |
-| Enter or F2 | Edit the current cell, starting from its value. |
+| Enter or F2 | Edit the current cell, starting from its value with the cursor after it. Left and Right move within the value, but not past its end. |
 | Any character | Edit the current cell, starting with that character (the old value is replaced). |
 | Enter, Tab, Up, Down (while editing) | Save the cell. Tab, Up and Down also move. |
 | Esc (while editing) | Cancel the edit. |

@@ -432,6 +432,10 @@ class Field:
             i += direction
         return i if 0 <= i < self.width else pos
 
+    def end_pos(self):
+        """Just after the last character typed (the last position when the field is full)."""
+        return min(len(''.join(self.buffer).rstrip()), self.width - 1)
+
     def last_pos(self):
         return next((i for i in range(self.width - 1, -1, -1) if self._editable(i)), self.width - 1)
 
@@ -470,12 +474,13 @@ class Field:
         if key == 'LEFT':
             return self._step(pos, -1)
         if key == 'RIGHT':
+            if not self.template:              # free text: no further than just after the text
+                return min(pos + 1, self.end_pos())
             return self._step(pos, 1)
         if key == 'HOME':
             return self.first_pos()
         if key == 'END':
-            end = len(''.join(self.buffer).rstrip())
-            return min(end, self.width - 1)
+            return self.end_pos()
         if key == '\x19':                      # Ctrl-Y clears the field
             self.buffer = [' ' if self._editable(i) else self.template[i] for i in range(self.width)]
             return self.first_pos()
@@ -1965,9 +1970,18 @@ class Screen:
             raw = rows[current][ci]
             numeric = isinstance(raw, (int, float)) and not isinstance(raw, bool)
             offset = cell_offset(n)
-            width = max(1, min(max(widths[ci], len(show(raw, None)), 10), inner - offset))
+            # Room for at least 10 characters. A wider box covers whole cells to its right,
+            # so no piece of the next column shows beside the value being typed
+            needed = max(widths[ci], len(show(raw, None)), 10)
+            span, order = widths[ci], shown()
+            for k in order[order.index(n) + 1:] if n in order else []:
+                if span >= needed:
+                    break
+                span += 3 + widths[visible[k]]
+            width = max(1, min(max(span, needed), inner - offset))
             field = Field(screen_row, c1 + 1 + offset, '', '' if raw is None else raw, f'@S{width}', None, numeric)
-            pos, insert = field.first_pos(), True
+            # Enter edits the value with the cursor after it, as in a spreadsheet
+            pos, insert = field.end_pos(), True
             if first_key:                      # typing starts a new value, as in a spreadsheet
                 field.buffer = [' '] * field.width
                 pos = field.edit_key(first_key, 0, insert)

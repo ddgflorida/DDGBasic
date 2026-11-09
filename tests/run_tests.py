@@ -122,6 +122,7 @@ STDIN = {
     'tests/view': '\x1b[6~/total\rn\x1b[F\x1b' 'q' '\x1b' '\x1b',
     'tests/report': 'q',
     'tests/get_targets': '\x19jones\t\t900\r\x19250\r' '\x19uno\t\x19Austin\t02116\r' '\x19zzz\t\x19yyy\x1b',
+    'tests/browse_cursor': '\rc\r' '\r\x1b[C\x1b[Cd\r' '\x1b',
     'tests/screen': ('ann smith\t5551234567\t-5\r\x1912\r'   # READ, with a VALID failure
                      'zzz\x1b'                               # READ cancelled with Esc
                      '\x1b[B\r' 'q'                          # two MENUs
