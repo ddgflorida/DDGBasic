@@ -890,6 +890,11 @@ class HelpRegistry:
             "desc": "Configures system behavior. Type HELP SET OUTPUT or HELP SET EMAIL for details.",
             "examples": ['SET SQL_FATAL_ERRORS OFF', 'SET HASH_KEYS IGNORE_CASE', 'SET AUTOADVANCE ON']
         },
+        "SET STYLE": {
+            "syntax": 'SET STYLE name$',
+            "desc": "Sets the look of text screens. modern (the default) draws the 16 colour numbers of COLOR in softer tones (1, the classic blue background, is a charcoal; 3, the field colour, a light steel blue; the bright colours are muted), boxes with thin rounded corners, and flat buttons. classic is the 1990s look: the terminal's own 16 colours, double-line boxes and [ buttons ]. Use CLS afterwards to repaint the screen.",
+            "examples": ['SET STYLE "classic"\nCOLOR 15, 1\nCLS']
+        },
         "SET THEME": {
             "syntax": 'SET THEME name$',
             "desc": "Sets the four screen colours of COLOR at once from a named theme: default (white on black), classic (white on blue, the 1990s business look), norton (cyan on blue), green (a green screen), amber (an amber monitor), paper (black on white) or mono. Use CLS afterwards to repaint the screen in it.",
@@ -6904,6 +6909,13 @@ class Interpreter:
                 self._error("Expected ON or OFF after SET MOUSE")
             SCREEN.keys.set_mouse(setting_token[1].upper() == 'ON')
             self._next_token()
+        elif token[0] == 'ID' and token[1].upper() == 'STYLE':
+            # SET STYLE "modern" | "classic": colours, boxes and buttons (see STYLES)
+            self._next_token()
+            try:
+                SCREEN.set_style(self._to_string(self._parse_expression()))
+            except ScreenError as e:
+                self._error(str(e))
         elif token[0] == 'ID' and token[1].upper() == 'THEME':
             # SET THEME "classic": the four colours of COLOR at once (see THEMES in ddgscreen.py)
             self._next_token()
@@ -9415,7 +9427,7 @@ class Interpreter:
                         'CREATE', 'TABLE', # SQL Keywords
                         'KEY', 'ERROR', # ON KEY, ON ERROR
                         'FORM', # MAKE FORM
-                        'THEME', 'SHADOW' # SET THEME, SET SHADOW
+                        'THEME', 'SHADOW', 'STYLE' # SET THEME, SET SHADOW, SET STYLE
                     ]
 
                     if sub_word in valid_sub_words:

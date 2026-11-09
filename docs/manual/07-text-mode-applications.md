@@ -1,6 +1,6 @@
 # Chapter 7: Text-mode Applications
 
-This chapter covers DDGBasic's full-screen text interface: coloured screens, boxes, entry forms, menus, editable grids, a memo editor and a text viewer, in the style of 1990s BASIC and xBase programs. It starts with a tutorial, then describes each statement.
+This chapter covers DDGBasic's full-screen text interface: coloured screens, boxes, entry forms, menus, editable grids, a memo editor and a text viewer. The statements are as simple as those of 1990s BASIC and xBase programs; the look is modern by default (`SET STYLE`). It starts with a tutorial, then describes each statement.
 
 Example programs in `examples/`, each short enough to read in a minute:
 
@@ -265,7 +265,7 @@ The screen is drawn with ANSI escape sequences, so `PRINT` keeps working between
 **Coordinates** are `row, col`, counted from 1 at the top left, as with `LOCATE`.
 
 ```basic
-COLOR 15, 1                          REM bright white on blue
+COLOR 15, 1                          REM bright white on charcoal (blue in the classic style)
 CLS
 BOX 2, 5, 9, 60, "Customer" DOUBLE
 name$ = "" : phone$ = "" : credit = 0
@@ -277,14 +277,14 @@ IF LASTKEY$ = CHR$(27) THEN GOTO cancelled
 ```
 
 ```
-    ╔══════════════════════ Customer ══════════════════════╗
-    ║                                                      ║
-    ║  Name  : ANN SMITH                                   ║
-    ║  Phone : (555) 123-4567                              ║
-    ║  Credit: 12                                          ║
-    ║                                                      ║
-    ║                                                      ║
-    ╚══════════════════════════════════════════════════════╝
+    ╭────────────────────── Customer ──────────────────────╮
+    │                                                      │
+    │  Name  : ANN SMITH                                   │
+    │  Phone : (555) 123-4567                              │
+    │  Credit: 12                                          │
+    │                                                      │
+    │                                                      │
+    ╰──────────────────────────────────────────────────────╯
 ```
 
 ### CLS, LOCATE, COLOR and BOX
@@ -294,11 +294,14 @@ IF LASTKEY$ = CHR$(27) THEN GOTO cancelled
 | `CLS` | Clears the screen in the current colours and moves the cursor to 1, 1. Pending `GET` fields are discarded. |
 | `LOCATE row [, col]` | Moves the cursor. The next `PRINT` or `INPUT` starts there. `col` defaults to 1. |
 | `COLOR [fg] [, bg] [, field_fg] [, field_bg]` | Sets the text colours. Any value can be left out (`COLOR , 4` changes only the background). `field_fg`/`field_bg` colour `GET` fields, the menu bar and the `BROWSE` bar; they start as black on white. |
-| `BOX top, left, bottom, right [, title$] [DOUBLE] [SHADOW]` | Draws a single- or double-line box, clears its inside in the current colours, and centres the title in the top line. `SHADOW` adds a drop shadow (see below). |
+| `BOX top, left, bottom, right [, title$] [DOUBLE] [SHADOW]` | Draws a box, clears its inside in the current colours, and centres the title in the top line. In the modern style every box has thin lines and rounded corners; in the classic style `DOUBLE` gives a double line. `SHADOW` adds a drop shadow (see below). |
+| `SET STYLE name$` | `modern` (the default) or `classic`: the look of everything on the screen (see below). `CLS` afterwards repaints the screen in it. |
 | `SET THEME name$` | Sets all four colours of `COLOR` from a named theme (see below). `CLS` afterwards repaints the screen in it. |
 | `SET SHADOW ON` / `OFF` | Whether pop-ups (`MENU`, `ALERT`, pull-downs, `LIST` and `LOOKUP` pickers, `EDIT RECORD` and `PROGRESS`) have a drop shadow. On by default. |
 
-The colour numbers are those of QBasic:
+**Styles.** `SET STYLE "modern"`, the default, gives screens a current look: the colour numbers are drawn in softer tones, boxes have thin lines and rounded corners, and buttons are flat blocks of colour. `SET STYLE "classic"` is the 1990s look: the terminal's own bright colours, double-line boxes and `[ Save ]` buttons. A program's `COLOR` numbers mean the same in both styles; only how they look changes. The modern colours come from the terminal's 256-colour set, which macOS Terminal, the Windows 10 and 11 consoles and Linux terminals have.
+
+The colour numbers are those of QBasic. In the modern style each keeps its role with a softer tone: 1, the classic background, is a charcoal; 3, the classic field colour, a light steel blue; the bright colours are muted so text on them stays easy to read.
 
 | | | | | | | | |
 |---|---|---|---|---|---|---|---|
@@ -310,7 +313,7 @@ The colour numbers are those of QBasic:
 | Theme | Text | Fields, menu bar, `BROWSE` bar | Looks like |
 |---|---|---|---|
 | `default` | white on black | black on white | the terminal; DDGBasic's start-up colours |
-| `classic` | bright white on blue | black on cyan | the blue screens of 1990s business software |
+| `classic` | bright white on blue (charcoal in the modern style) | black on cyan (light steel blue) | business software, light text on a dark background |
 | `norton` | light cyan on blue | black on cyan | file managers of the same years |
 | `green` | light green on black | black on light green | a green-screen terminal |
 | `amber` | yellow on black | black on brown | an amber monitor |

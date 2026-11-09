@@ -18,7 +18,7 @@ What DDGBasic is for: SQL for the data, BASIC for the rules around it.
 
 ## Text-mode applications
 
-1990s-style screens: forms, menus, grids and reports. See Chapter 7 of the manual.
+Text screens: forms, menus, grids and reports. See Chapter 7 of the manual.
 
 | Example | Shows |
 |---|---|

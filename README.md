@@ -12,7 +12,7 @@
 - **Two engines in one program:** SQLite for records (a file, constraints, transactions), DuckDB for analytics (columnar, fast, querying Parquet and CSV files directly), with `DATABASE ENGINE` to switch.
 - **Results anywhere:** the same query to the console, CSV, JSON, Excel, Parquet, HTML or SQL, or to a grouped `REPORT`.
 
-The language is a modern BASIC, and it comes with 1990s-style text screens and a QBasic-style IDE. See [Examples](#-examples) for programs that show this off.
+The language is a modern BASIC, and it comes with full-screen forms, menus and grids and a QBasic-style IDE. See [Examples](#-examples) for programs that show this off.
 
 ---
 
@@ -43,8 +43,8 @@ DDGBasic combines the simplicity of classic BASIC syntax with powerful, modern f
     * **`SORT array WITH fn`:** Sort by a function-computed key — `SORT names WITH UCASE$ ASC` for case-insensitive sort, or use a UDF for composite/numeric/custom keys.
     * **Composition:** Pipelines like `REDUCE(MAP(FILTER(nums, is_even), square), add, 0)` work cleanly.
 
-* ### 1990s-Style Text Screens
-    * Blue screens, boxes and data-entry forms the way they used to be: `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `invoice_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
+* ### Text Screens: Forms, Menus and Grids
+    * Data-entry screens with the simple statements of 1990s BASIC and a modern look (or the 1990s look with `SET STYLE "classic"`): `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `invoice_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
 
 * ### A QBasic-style IDE
     * `ddgbasic --ide program.bas` opens a full-screen editor with syntax colouring and a menu bar. F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor, the Immediate window (F6) runs a line at a time (`? x`, a quick `SELECT`), and F9/F8 set breakpoints and step through the program, with the Immediate window seeing its variables.
@@ -170,7 +170,7 @@ The `examples/` folder has some 60 programs; [`examples/README.md`](https://gith
 | [`duckdb_analytics.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/duckdb_analytics.bas) | Half a million rows in DuckDB, queried straight from Parquet and CSV files, window functions, and BASIC rules (targets per region, in a hash) over the results, with timings |
 | [`two_engines.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/two_engines.bas) | SQLite keeps the records (constraints, a transaction), DuckDB analyses them from a Parquet file (median, best month), and the results go back to SQLite |
 | [`row_logic.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/row_logic.bas) | Allocating limited stock to orders by priority, row by row, with all-or-nothing and partial rules, in a transaction that `ON ERROR` rolls back |
-| [`invoice_demo.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/invoice_demo.bas) | A 1990s-style invoice screen on the Chinook database: a header form, a lines grid, business rules |
+| [`invoice_demo.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/invoice_demo.bas) | A traditional invoice screen on the Chinook database: a header form, a lines grid, business rules |
 | [`retro_contacts.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/retro_contacts.bas) | A complete text-mode application: menu bar, editable grid, forms, memo editor, report |
 
 Run one with `ddgbasic examples/etl_pipeline.bas`, or open it in the IDE with `ddgbasic --ide examples/etl_pipeline.bas`.

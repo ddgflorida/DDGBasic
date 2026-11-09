@@ -1450,7 +1450,7 @@ Keywords, strings, numbers and comments have their own colours. The status line 
   - Ctrl-C while the program runs stops it before its next line.
 
   A debug run uses the text in the editor, saved or not, and runs in the program's folder. It is a run inside the IDE, so a program that ends with `END` or an error comes back to the IDE as F5 does; breakpoints follow their lines as you edit, and Run > Clear breakpoints removes them all. Stopping is checked once per line, before it runs, so a line with several statements (`a = 1 : b = 2`) is one step.
-- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Delete line, Duplicate line, Find, Find next, Go to line), Run (start or continue, step, breakpoint, clear breakpoints, stop, output screen), Options (blue or black screen, mouse on or off, Immediate window) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
+- **The menu bar** opens with F10, with Alt and a menu's first letter, or with a click: File (New, Open, Save, Save As, Exit), Edit (Undo, Delete line, Duplicate line, Find, Find next, Go to line), Run (start or continue, step, breakpoint, clear breakpoints, stop, output screen), Options (default colours or a black screen, mouse on or off, Immediate window) and Help (help on the word, topics, keys, about). File > Open lists the `.bas` files in the program's folder.
 
 | Key | Action |
 |---|---|

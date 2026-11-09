@@ -24,6 +24,20 @@ import time
 # QBasic colour numbers 0-15 -> ANSI colour (0-7); 8-15 are the bright versions
 _ANSI = [0, 4, 2, 6, 1, 5, 3, 7]
 
+# SET STYLE: how screens look. MODERN, the default, draws the 16 colour numbers with softer
+# tones from the terminal's 256-colour set (macOS Terminal, Windows 10/11 consoles and Linux
+# terminals all have it): 1 (blue), the classic background, is a charcoal, 3 (cyan), the
+# classic field colour, a light steel blue, and the bright colours are muted so text on them
+# stays easy to read. Boxes have thin rounded corners, and buttons are flat blocks of colour.
+# CLASSIC is the 1990s look: the terminal's own 16 colours, double-line boxes, [ buttons ].
+STYLES = {
+    #                     0    1    2    3    4    5    6    7    8   9    10   11   12   13   14   15
+    'MODERN': {'palette': [234, 237, 71, 110, 167, 139, 179, 250, 243, 75, 114, 116, 210, 182, 222, 255],
+               'rounded': True, 'flat_buttons': True},
+    'CLASSIC': {'palette': None, 'rounded': False, 'flat_buttons': False},
+}
+_palette = STYLES['MODERN']['palette']
+
 # Key names returned for keys that are not characters
 _CSI_KEYS = {
     'A': 'UP', 'B': 'DOWN', 'C': 'RIGHT', 'D': 'LEFT', 'H': 'HOME', 'F': 'END', 'Z': 'BTAB',
@@ -696,6 +710,7 @@ class Screen:
         self.hotkey_call = None     # set by the interpreter: runs the function bound to a key
         self.keys.on_hotkey = self._run_hotkey
         self.shadows = True         # SET SHADOW OFF: pop-ups without a drop shadow
+        self.style = STYLES['MODERN']   # SET STYLE
         # Whether writing the bottom-right cell leaves the cursor there (as xterm, macOS and
         # Linux terminals do) rather than scrolling the screen up a line. The Windows console
         # does it only with DISABLE_NEWLINE_AUTO_RETURN, which _activate turns on.
@@ -783,6 +798,8 @@ class Screen:
 
     @staticmethod
     def _sgr(fg, bg):
+        if _palette:
+            return f'\x1b[0;38;5;{_palette[fg % 16]};48;5;{_palette[bg % 16]}m'
         fg_code = (90 if fg >= 8 else 30) + _ANSI[fg % 8]
         bg_code = (100 if bg >= 8 else 40) + _ANSI[bg % 8]
         return f'\x1b[0;{fg_code};{bg_code}m'
@@ -905,6 +922,23 @@ class Screen:
         if field_bg is not None: self.field_bg = field_bg
         self._w(self._normal())
 
+    def set_style(self, name):
+        """SET STYLE: MODERN (the default) or CLASSIC (the 1990s look); see STYLES."""
+        global _palette
+        key = str(name).strip().upper()
+        if key not in STYLES:
+            raise ScreenError(f"There is no style called {name}. The styles are: " +
+                              ', '.join(s.lower() for s in STYLES) + '.')
+        self.style = STYLES[key]
+        _palette = self.style['palette']
+
+    def frame_chars(self, double=False):
+        """The corners and lines of a box: (top-left, top-right, bottom-left, bottom-right,
+        horizontal, vertical). The modern style draws every box thin with rounded corners."""
+        if self.style['rounded']:
+            return '╭', '╮', '╰', '╯', '─', '│'
+        return ('╔', '╗', '╚', '╝', '═', '║') if double else ('┌', '┐', '└', '┘', '─', '│')
+
     def theme(self, name):
         """SET THEME: sets the four colours of COLOR from a named theme."""
         colours = THEMES.get(str(name).strip().upper())
@@ -930,7 +964,7 @@ class Screen:
     def box(self, r1, c1, r2, c2, title='', double=False):
         if r2 - r1 < 1 or c2 - c1 < 1:
             raise ScreenError("BOX needs a bottom-right corner below and to the right of the top-left corner.")
-        tl, tr, bl, br, h, v = ('╔', '╗', '╚', '╝', '═', '║') if double else ('┌', '┐', '└', '┘', '─', '│')
+        tl, tr, bl, br, h, v = self.frame_chars(double)
         inner = c2 - c1 - 1
         top = h * inner
         if title:
@@ -1028,8 +1062,15 @@ class Screen:
         return button
 
     def _draw_button(self, button, focused):
-        fg, bg = (self.field_fg, self.field_bg) if focused else (self.fg, self.bg)
-        self._w(self._put(button.row, button.col, f'[ {button.label} ]', fg, bg) + self._normal())
+        if self.style['flat_buttons']:
+            # A flat block of colour, as wide as [ label ]: the field colours when it has the
+            # focus, light text on grey otherwise
+            fg, bg = (self.field_fg, self.field_bg) if focused else (15, 8)
+            text = f'  {button.label}  '
+        else:
+            fg, bg = (self.field_fg, self.field_bg) if focused else (self.fg, self.bg)
+            text = f'[ {button.label} ]'
+        self._w(self._put(button.row, button.col, text, fg, bg) + self._normal())
 
     def _draw_field(self, field, cursor=None):
         out = self._put(field.row, field.col, ''.join(field.buffer), self.field_fg, self.field_bg)

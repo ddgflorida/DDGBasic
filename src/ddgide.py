@@ -934,7 +934,8 @@ class Editor:
         bar = '─' * (cols - 2)
         start = max(0, (cols - 2 - len(title)) // 2)
         bar = bar[:start] + title + bar[start + len(title):]
-        out.append(SCREEN._put(2, 1, '┌' + bar[:cols - 2] + '┐', s['frame'], s['bg']))
+        tl, tr, bl, br, _, _ = SCREEN.frame_chars()     # rounded corners in the modern style
+        out.append(SCREEN._put(2, 1, tl + bar[:cols - 2] + tr, s['frame'], s['bg']))
         for n, screen_row in enumerate(range(first, last + 1)):
             out.append(SCREEN._put(screen_row, 1, '│', s['frame'], s['bg']))
             out.append(self.draw_line(screen_row, self.top + n, width))
@@ -946,7 +947,7 @@ class Editor:
             out.append(pane)
             if self.focus == 'immediate':
                 cursor_row, cursor_col = input_row, input_col
-        out.append(SCREEN._put(rows - 1, 1, '└' + '─' * (cols - 2) + '┘', s['frame'], s['bg']))
+        out.append(SCREEN._put(rows - 1, 1, bl + '─' * (cols - 2) + br, s['frame'], s['bg']))
         position = f'Ln {self.row + 1}  Col {self.col + 1}  {"Ins" if self.insert else "Ovr"} '
         if self.focus == 'immediate':
             hint = 'Enter runs the line  ? x prints x  Up=recall  F6=editor'
@@ -977,7 +978,7 @@ class Editor:
                   'Find...        Ctrl-F', 'Find next      F3', 'Go to line...  Ctrl-G']),
         ('Run', ['Start/Continue F5', 'Step           F8', 'Breakpoint     F9', 'Clear breakpoints',
                  'Stop', '-', 'Output screen  F4']),
-        ('Options', ['Blue screen', 'Black screen', '-', 'Mouse on', 'Mouse off', '-', 'Immediate window   F6']),
+        ('Options', ['Default colours', 'Black screen', '-', 'Mouse on', 'Mouse off', '-', 'Immediate window   F6']),
         ('Help', ['Help on word   F1', 'Topics...      Shift-F1', 'Keys', '-', 'About']),
     ]
 
@@ -1048,7 +1049,7 @@ class Editor:
         elif name == 'Run.Output screen':
             bell()
             self.message = 'F4 shows the program\'s screen while it is paused'
-        elif name == 'Options.Blue screen':
+        elif name == 'Options.Default colours':
             self.set_scheme('blue')
         elif name == 'Options.Black screen':
             self.set_scheme('black')
@@ -1085,7 +1086,7 @@ class Editor:
         'File.New', 'File.Open...', 'File.Save', 'File.Save As...', 'File.Exit',
         'Edit.Undo', 'Edit.Delete line', 'Edit.Duplicate line', 'Edit.Find...', 'Edit.Find next',
         'Edit.Go to line...', 'Run.Start/Continue', 'Run.Step', 'Run.Breakpoint', 'Run.Clear breakpoints',
-        'Run.Stop', 'Run.Output screen', 'Options.Blue screen', 'Options.Black screen', 'Options.Mouse on',
+        'Run.Stop', 'Run.Output screen', 'Options.Default colours', 'Options.Black screen', 'Options.Mouse on',
         'Options.Mouse off', 'Options.Immediate window', 'Help.Help on word', 'Help.Topics...', 'Help.Keys',
         'Help.About',
     }
