@@ -1126,6 +1126,8 @@ class Screen:
                         index = nxt if nxt is not None else step(-1, 1)   # wrap round to the first field
                     elif key in ('BTAB', 'UP', 'LEFT'):
                         nxt = step(index, -1)
+                        if nxt is None and key == 'BTAB':
+                            nxt = step(len(fields), -1)       # Shift-Tab wraps round to the last
                         index = nxt if nxt is not None else index
                     elif len(key) == 1 and key.isprintable():
                         bell()
@@ -1200,7 +1202,8 @@ class Screen:
                     if nxt is None:
                         if key in (ENTER, TAB, 'DOWN'):
                             return key         # past the last field
-                        nxt = index            # already at the first field
+                        # At the first field: Shift-Tab wraps round to the last field or button
+                        nxt = step(len(fields), -1) if key == 'BTAB' else index
                     index = nxt
                     pos = fields[index].first_pos()
                     fresh = True

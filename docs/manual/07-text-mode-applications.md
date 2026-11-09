@@ -498,7 +498,7 @@ A condition ends at the end of the statement or at the next clause word (`MESSAG
 | Key | Action |
 |---|---|
 | Enter, Tab, Down | Next field. On the last field, Enter, Tab or Down ends `READ`. |
-| Shift-Tab, Up | Previous field. |
+| Shift-Tab, Up | Previous field. On the first field, Shift-Tab goes round to the last field (or button). |
 | PgDn, PgUp, Ctrl-W | End `READ`. |
 | Esc | End `READ` and put back the values every field had when `READ` started. |
 | Left, Right, Home, End | Move within the field. |
@@ -523,7 +523,7 @@ A button is drawn as `[ label ]` and takes its place among the `GET` fields, in 
 |---|---|
 | Enter or Space | Press it. `READ` ends, `BUTTON$` returns the label and `LASTKEY$` is `CHR$(13)`. |
 | Tab, Right, Down | The next field or button. After the last one, back to the first field. |
-| Shift-Tab, Left, Up | The previous field or button. |
+| Shift-Tab, Left, Up | The previous field or button. Before the first one, Shift-Tab goes round to the last. |
 | Esc | Cancel, as in a field. |
 
 A button marked `CANCEL` works like Esc: the fields get back the values they had when `READ` started. Its label is still returned by `BUTTON$`. Moving onto a button checks the field being left (its `VALID`), as moving to any field does. `BUTTON$` is `""` when `READ` ends without a button (Esc, PgDn, or Enter on a last field that has no button after it).
