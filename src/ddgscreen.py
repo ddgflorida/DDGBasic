@@ -735,6 +735,18 @@ def format_number(value):
     return str(int(f)) if f == int(f) and abs(f) < 1e15 else repr(f)
 
 
+def qr_lines(matrix):
+    """A QR code as lines of text, two rows of its squares per line: █ ▀ ▄ are the dark squares
+    (both, top, bottom) and a space is light, so it reads as dark ink on a light background."""
+    lines = []
+    for r in range(0, len(matrix), 2):
+        top = matrix[r]
+        bottom = matrix[r + 1] if r + 1 < len(matrix) else [0] * len(top)
+        lines.append(''.join('█' if t and b else '▀' if t else '▄' if b else ' '
+                             for t, b in zip(top, bottom)))
+    return lines
+
+
 def bell():
     sys.stdout.write('\a')
     sys.stdout.flush()
@@ -1067,6 +1079,20 @@ class Screen:
             self._w(self._put(top + 2, left + 1, bar.ljust(right - left - 1), self.fg, self.bg) + self._normal())
         self.cur_row, self.cur_col = cursor
         self._w(f'\x1b[{cursor[0]};{cursor[1]}H')
+
+    def qr(self, matrix, row, col):
+        """Draws a QR code (a grid of dark and light squares, margin included) at row, col:
+        dark squares on white, whatever the colours, as phones read that best."""
+        lines = qr_lines(matrix)
+        rows, cols = self.size()
+        if row < 1 or col < 1 or row + len(lines) - 1 > rows or col + len(lines[0]) - 1 > cols:
+            raise ScreenError(f"The QR code needs {len(lines[0])} columns and {len(lines)} rows from "
+                              f"{row}, {col}, which is more than the screen has. Save it to a file "
+                              f"instead: QR text$ TO \"code.png\"")
+        self._activate()
+        out = [self._put(row + n, col, line, 0, 15) for n, line in enumerate(lines)]
+        self._w(''.join(out) + self._normal())
+        self.cur_row, self.cur_col = row + len(lines), 1
 
     def progress_off(self):
         """PROGRESS OFF: removes the box and puts back what it covered."""

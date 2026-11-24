@@ -1,6 +1,6 @@
 # Chapter 3: Built-in Functions
 
-This chapter is the complete reference for the functions built into the DDGBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/ddgbasic.py`, which is **134 functions**. It also covers the **15 extra SQL functions** that DDGBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
+This chapter is the complete reference for the functions built into the DDGBasic interpreter. It covers every function implemented in `Interpreter._execute_function` in `src/ddgbasic.py`, which is **135 functions**. It also covers the **15 extra SQL functions** that DDGBasic registers inside SQL queries (on SQLite and DuckDB); these are described separately in [Functions available inside SQL (SQLite)](#functions-available-inside-sql-sqlite).
 
 The examples in this chapter were run against the interpreter, and the output shown is what it printed. Output from functions that depend on the clock, the file system or the environment (`DATE$`, `FILETIME`, `CURDIR$` and so on) will differ on your machine.
 
@@ -160,6 +160,7 @@ Related chapters:
 | [`PATHNAME$`](#fn-pathname-str) | File | String | Directory part of a path |
 | [`POWER`](#fn-power) | Math | Number | x to the power y |
 | [`PROPER$`](#fn-proper-str) | String | String | Title Case |
+| [`QR$`](07-text-mode-applications.md#qr-codes) | Screen | String | A QR code as lines of text |
 | [`RADIANS`](#fn-radians) | Math | Number | Degrees to radians |
 | [`REDUCE`](#fn-reduce) | Higher-order | Any | Fold an array |
 | [`REPEAT$`](#fn-repeat-str) | String | String | Repeat a string |
@@ -1670,7 +1671,7 @@ PRINT "[" + ENVIRON$("DBB_TEST") + "][" + ENVIRON$("NO_SUCH_VAR_X") + "]"
 [hi][]
 ```
 
-`CURDIR$`, `FREEFILE` and `DISKSPACE` are described in [3.10](#310-file-and-directory-functions). The screen functions `ALERT`, `BUTTON$`, `INKEY$`, `LASTKEY$`, `MENU`, `MENUBAR$`, `MOUSECOL`, `MOUSEROW` and `SAVESCREEN` are described with the text-screen statements in [Chapter 7](07-text-mode-applications.md).
+`CURDIR$`, `FREEFILE` and `DISKSPACE` are described in [3.10](#310-file-and-directory-functions). The screen functions `ALERT`, `BUTTON$`, `INKEY$`, `LASTKEY$`, `MENU`, `MENUBAR$`, `MOUSECOL`, `MOUSEROW`, `QR$` and `SAVESCREEN` are described with the text-screen statements in [Chapter 7](07-text-mode-applications.md).
 
 ---
 

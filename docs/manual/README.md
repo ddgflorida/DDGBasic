@@ -69,6 +69,7 @@ pip install -r requirements.txt
 - `lxml`
 - `xmltodict`
 - `pyarrow`
+- `segno` (QR codes)
 
 To build a standalone executable, install [`requirements-build.txt`](../../requirements-build.txt), which adds Nuitka, and run `compilenuitka.sh` or `compilenuitka.bat`.
 

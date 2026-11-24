@@ -37,7 +37,7 @@ import xlrd3
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment
 from bs4 import BeautifulSoup
-from ddgscreen import SCREEN, ScreenError, bell as ddgscreen_bell, key_from_name
+from ddgscreen import SCREEN, ScreenError, bell as ddgscreen_bell, key_from_name, qr_lines
 from ddgreport import build_report
 from ddgformgen import FormColumn, build_form_program, column_kind, decimal_places
 from typing import Any, Dict, List, Optional, Union
@@ -354,6 +354,11 @@ class HelpRegistry:
             "syntax": 'BOX top, left, bottom, right [, title$] [DOUBLE] [SHADOW]',
             "desc": "Draws a box with line characters and clears its inside in the current COLOR. The title is centred in the top line. SHADOW darkens the two columns to its right and the row below. Pop-ups (MENU, ALERT, pull-downs, pickers, EDIT RECORD, PROGRESS) have shadows unless SET SHADOW OFF.",
             "examples": ['BOX 2, 5, 10, 60, "Customer" DOUBLE SHADOW', 'SET SHADOW OFF']
+        },
+        "QR": {
+            "syntax": 'QR text$ [AT row, col] [TO file$]\nQR$(text$)',
+            "desc": "Makes a QR code of the text (a web address, an order number, a Wi-Fi login, a contact card). AT draws it on the screen at row, col, as dark squares on white so phones can scan it; a web address takes about 33 columns and 17 rows. TO saves it as a .png or .svg image to print. With neither, it is printed like PRINT. QR$(text$) returns it as lines of text made of █ ▀ ▄ characters.",
+            "examples": ['QR "https://shop.example.com/p/A100" AT 4, 44', 'QR order_url$ TO "order.png"', 'PRINT QR$("WIFI:T:WPA;S:Shop;P:secret;;")']
         },
         "PROGRESS": {
             "syntax": 'PROGRESS done, total [TITLE t$] | PROGRESS OFF',
@@ -3143,7 +3148,7 @@ class Interpreter:
         'HASH_VALUES', 'HEX$', 'HOUR', 'HTMLDECODE$', 'HTMLENCODE$', 'INSTR', 'INSTRREV',
         'INT', 'ISALNUM', 'ISALPHA', 'ISDATE', 'ISDIGIT', 'ISLEAP', 'ISNUMERIC', 'IS_ARRAY',
         'IS_HASH', 'JSON_SERIALIZE$', 'LCASE$', 'LEFT$', 'LEN', 'LOG', 'LTRIM$', 'MAP', 'MAX',
-        'ALERT', 'BUTTON$', 'INKEY$', 'LASTKEY$', 'MOUSEROW', 'MOUSECOL', 'MENU', 'MENUBAR$', 'SAVESCREEN',
+        'ALERT', 'BUTTON$', 'INKEY$', 'LASTKEY$', 'MOUSEROW', 'MOUSECOL', 'MENU', 'MENUBAR$', 'SAVESCREEN', 'QR$',
         'MID$', 'MIN', 'MINUTE', 'MOD', 'MONTH', 'MONTHCAL$', 'MONTHNAME$', 'NOW', 'NVL',
         'OCT$', 'ORDINAL$', 'PADLEFT$', 'PADRIGHT$', 'PARSEJSON', 'PATHNAME$', 'POWER', 'PROPER$',
         'RADIANS', 'REDUCE', 'REPEAT$', 'REPLACE$', 'REVERSE$', 'RIGHT$', 'RND', 'ROUND',
@@ -4352,7 +4357,7 @@ class Interpreter:
 
     # --- Text screen: CLS, LOCATE, COLOR, BOX, @ SAY/GET, READ, BROWSE (see ddgscreen.py) ---
     SCREEN_STATEMENTS = {'CLS', 'LOCATE', 'COLOR', 'BOX', 'READ', 'BROWSE', 'RESTSCREEN', 'EDIT', 'VIEW', 'REPORT',
-                         'PROGRESS'}
+                         'PROGRESS', 'QR'}
 
     def _is_screen_statement(self, token):
         """True for CLS, LOCATE, COLOR, BOX, READ or BROWSE used as a statement rather than as
@@ -4377,6 +4382,52 @@ class Interpreter:
                         return not (i + 1 < len(self.tokens) and self.tokens[i + 1][0] == 'ASSIGN')
                 i += 1
         return True
+
+    @staticmethod
+    def _qr_code(text):
+        """The segno QR code for text, or a BASIC error if segno is missing or the text too long."""
+        try:
+            import segno
+        except ImportError:
+            raise RuntimeError("QR codes need the segno package: pip install segno")
+        try:
+            return segno.make(text, micro=False)
+        except Exception as e:
+            raise RuntimeError(f"Can't make a QR code of that text: {e}")
+
+    def _parse_qr_statement(self):
+        """QR text$ [AT row, col] [TO file$]: draws a QR code on the screen (at row, col, or
+        under what was printed last) and/or saves it as a .png or .svg image."""
+        text = self._to_string(self._parse_expression())
+        at, target = None, None
+        while self._current_token() and self._current_token()[0] not in ('NEWLINE', 'COLON'):
+            tok = self._current_token()
+            word = str(tok[1]).upper() if tok[0] not in ('STRING', 'NUMBER') else ''
+            if word == 'AT':
+                self._next_token()
+                at = self._screen_ints(2)
+            elif word == 'TO':
+                self._next_token()
+                target = os.path.expanduser(self._to_string(self._parse_expression()))
+            else:
+                self._error(f"Unexpected '{tok[1]}' after QR text$: expected AT row, col or TO file$")
+        code = self._qr_code(text)
+        if target is not None:
+            if not target.lower().endswith(('.png', '.svg')):
+                self._error("QR ... TO needs a file name ending in .png or .svg")
+            # 10 pixels a square and the standard 4-square margin: crisp when printed
+            code.save(target, scale=10, border=4)
+        if at is not None:
+            SCREEN.qr([list(r) for r in code.matrix_iter(border=2)], at[0], at[1])
+        elif target is None:
+            matrix = [list(r) for r in code.matrix_iter(border=2)]
+            if SCREEN.used:
+                SCREEN.qr(matrix, SCREEN.cur_row, 1)
+            else:
+                # Printed like PRINT: dark squares on white when it's a terminal, plain text otherwise
+                tty = sys.stdout.isatty()
+                for line in qr_lines(matrix):
+                    print(SCREEN._sgr(0, 15) + line + '\x1b[0m' if tty else line)
 
     def _screen_ints(self, count, optional=0):
         """Parses count comma-separated whole numbers, the last `optional` of which may be left out."""
@@ -4456,6 +4507,8 @@ class Interpreter:
                 self._parse_view_statement()
             elif word == 'REPORT':
                 self._parse_report_statement()
+            elif word == 'QR':
+                self._parse_qr_statement()
             elif word == 'PROGRESS':
                 # PROGRESS done, total [TITLE t$] | PROGRESS OFF
                 tok = self._current_token()
@@ -5697,6 +5750,11 @@ class Interpreter:
             if not args: self._error("ALERT requires a message, then optional button labels.")
             buttons = args[1] if len(args) == 2 and isinstance(args[1], list) else args[1:]
             return float(SCREEN.alert(self._to_string(args[0]), [self._to_string(b) for b in buttons]))
+        elif name == 'QR$':
+            # The QR code as lines of text (dark squares as █ ▀ ▄), for a file, an e-mail or PRINT
+            if len(args) != 1: self._error("QR$ needs 1 argument: the text to encode.")
+            code = self._qr_code(self._to_string(args[0]))
+            return '\n'.join(qr_lines([list(r) for r in code.matrix_iter(border=2)]))
         elif name == 'SAVESCREEN':
             if len(args) not in (0, 4): self._error("SAVESCREEN takes no arguments, or top, left, bottom, right.")
             try:

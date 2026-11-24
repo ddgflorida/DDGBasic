@@ -15,6 +15,7 @@ sales.parquet
 sales.csv
 orders.parquet
 monthly.csv
+qr_label_*.png
 dist/
 *.egg-info/
 # A maintainer's release script, kept out of the repository

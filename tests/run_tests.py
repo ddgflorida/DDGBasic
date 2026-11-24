@@ -74,6 +74,7 @@ STDIN = {
     'examples/form_demo': '\x1bOP b2\r\r3\ry\r25\r\x1912.5\r20261115\rn\r5551234567\r \rLeave at the side door\r\r',   # F1 help first
     'examples/menu_demo': 'vccha\rvt\rfq',
     'examples/grid_demo': '\x1bORmi\r\r\x1b[F\x1b[C\x1b[C0\r\x1b',   # F3 sorts by city, "mi" finds Miami
+    'examples/qr_demo': 'nn\x1b',
     'examples/progress_demo': '\x1b[F\r\r',
     'examples/themes_demo': 'ag\x1b',   # Amber, Green, Esc
     'examples/invoice_demo': ('5\x1b[2~\r\x1bOS\r'   # invoice 1 is shipped: typing, Ins and F4 refused

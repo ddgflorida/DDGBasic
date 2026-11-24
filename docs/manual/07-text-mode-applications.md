@@ -14,6 +14,7 @@ Example programs in `examples/`, each short enough to read in a minute:
 | `invoice_demo.bas` | A traditional invoice screen on the Chinook database: the header as a form, the lines as a grid, PgUp/PgDn between invoices, F2 find, F4 edit the header, Ins add a track (`BROWSE ... EXIT ON`); only open invoices can be changed (`EDIT WHEN`) |
 | `orders_demo.bas` | A master-detail screen: orders on top, their lines below (`BROWSE ... DETAIL`), editable only for open orders (`EDIT WHEN`), with totals that follow |
 | `themes_demo.bas` | The same form in each `SET THEME` colour scheme |
+| `qr_demo.bas` | A product screen with a QR code a phone can scan, and a printable QR label (`.png`) for every product from a query |
 | `progress_demo.bas` | A `PROGRESS` bar while a table loads, a `MENU` longer than the screen that scrolls, and drop shadows |
 | `report_demo.bas` | `REPORT` with nested groups and totals, on the screen, in the viewer and in a paged file |
 | `notes_demo.bas` | `EDIT TEXT` and `VIEW`, including `VIEW FILE` |
@@ -361,6 +362,30 @@ PROGRESS OFF
 │                                                  │
 └──────────────────────────────────────────────────┘
 ```
+
+### QR codes
+
+```
+QR text$ [AT row, col] [TO file$]
+QR$(text$)
+```
+
+`QR` makes a QR code of the text: a web address, a payment or tracking link, an order number, a Wi-Fi login (`WIFI:T:WPA;S:name;P:password;;`) or a contact card.
+
+- `AT row, col` draws it on the screen with its top-left corner there, and keeps it in the screen copy (`SAVESCREEN`). It is drawn as dark squares on white whatever the colours and style, because phones read that best. Each text row holds two rows of squares, so a web address takes about 33 columns and 17 rows; a code that does not fit on the screen is an error that suggests saving it to a file.
+- `TO file$` saves it as an image: a `.png` (10 pixels a square), or an `.svg` that prints sharply at any size. Both have the standard white margin.
+- With neither, the code is printed like `PRINT` output, below what was printed last.
+
+`QR$(text$)` returns the code as lines of text (separated by `CHR$(10)`) made of the characters `█ ▀ ▄`, which are the dark squares. It is for files, e-mails and `PRINT`; it reads as a code when shown as dark characters on a light background.
+
+```basic
+QR "https://shop.example.com/p/" & code$ AT 4, 44          REM on the screen
+FOR p IN (SELECT code FROM products)
+    QR "https://shop.example.com/p/" & p.code TO "label_" & p.code & ".png"
+NEXT
+```
+
+QR codes need the `segno` package, which is installed with DDGBasic.
 
 ### SAVESCREEN and RESTSCREEN
 

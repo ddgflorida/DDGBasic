@@ -10,4 +10,5 @@ openpyxl          # LOAD EXCEL for .xlsx files, SET OUTPUT FORMAT EXCEL (tested 
 beautifulsoup4    # LOAD HTML, STRIPHTML$ (tested 4.15)
 lxml              # HTML parser used by LOAD HTML and STRIPHTML$ (tested 6.1)
 xmltodict         # LOAD XML, ANALYZE XML (tested 1.0)
+segno             # QR and QR$: QR codes (tested 1.6)
 pyarrow           # LOAD PARQUET (tested 26.0)

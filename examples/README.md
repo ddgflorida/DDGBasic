@@ -31,6 +31,7 @@ Text screens: forms, menus, grids and reports. See Chapter 7 of the manual.
 | `menu_demo.bas` | A menu bar, a pop-up menu and message boxes |
 | `notes_demo.bas` | The memo editor (`EDIT TEXT`) and the viewer (`VIEW`) |
 | `report_demo.bas` | `REPORT` with groups, totals and pages |
+| `qr_demo.bas` | QR codes: a product screen a phone can scan, and printable labels from a query |
 | `progress_demo.bas` | A progress bar and a menu longer than the screen |
 | `themes_demo.bas` | The colour themes |
 | `mouse_demo.bas` | A tiny paint program with the mouse |

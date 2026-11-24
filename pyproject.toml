@@ -30,6 +30,7 @@ dependencies = [
     "lxml",
     "xmltodict",
     "pyarrow",
+    "segno",
 ]
 
 [project.urls]
