@@ -44,10 +44,10 @@ DDGBasic combines the simplicity of classic BASIC syntax with powerful, modern f
     * **Composition:** Pipelines like `REDUCE(MAP(FILTER(nums, is_even), square), add, 0)` work cleanly.
 
 * ### Text Screens: Forms, Menus and Grids
-    * Data-entry screens with the simple statements of 1990s BASIC and a modern look (or the 1990s look with `SET STYLE "classic"`): `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `invoice_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
+    * Data-entry screens with the simple statements of 1990s BASIC and a modern look (or the 1990s look with `SET STYLE "classic"`): `CLS`, `COLOR 15, 1`, `BOX`, `@ 5, 10 SAY "Name: " GET name$ PICTURE "@!" VALID name$ <> ""`, `READ`, light-bar `MENU()` and a scrolling `BROWSE (SELECT ...)` that can edit cells in place (`EDIT`). Forms check `REQUIRED` fields and `VALID` rules when they are saved, and `QR` draws QR codes on the screen or saves them as images. Keyboard and mouse. No extra packages. See `examples/retro_contacts.bas`, and the short `contact`, `form_demo`, `menu_demo`, `grid_demo`, `orders_demo`, `invoice_demo`, `progress_demo`, `themes_demo`, `report_demo`, `notes_demo` and `mouse_demo` examples.
 
 * ### A QBasic-style IDE
-    * `ddgbasic --ide program.bas` opens a full-screen editor with syntax colouring and a menu bar. F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor, the Immediate window (F6) runs a line at a time (`? x`, a quick `SELECT`), and F9/F8 set breakpoints and step through the program, with the Immediate window seeing its variables.
+    * `ddgbasic --ide program.bas` opens a full-screen editor with syntax colouring, a menu bar, and text selection with cut, copy and paste (Shift+arrows or the mouse; Ctrl-X/C/V, using the system clipboard). F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor, the Immediate window (F6) runs a line at a time (`? x`, a quick `SELECT`), and F9/F8 set breakpoints and step through the program, with the Immediate window seeing its variables.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
@@ -73,7 +73,7 @@ DDGBasic combines the simplicity of classic BASIC syntax with powerful, modern f
 
 ## 📦 Installation
 
-DDGBasic needs Python 3.10 or newer.
+DDGBasic runs on Windows, macOS and Linux, and needs Python 3.10 or newer.
 
 ```bash
 pip install ddgbasic
@@ -171,6 +171,7 @@ The `examples/` folder has some 60 programs; [`examples/README.md`](https://gith
 | [`two_engines.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/two_engines.bas) | SQLite keeps the records (constraints, a transaction), DuckDB analyses them from a Parquet file (median, best month), and the results go back to SQLite |
 | [`row_logic.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/row_logic.bas) | Allocating limited stock to orders by priority, row by row, with all-or-nothing and partial rules, in a transaction that `ON ERROR` rolls back |
 | [`invoice_demo.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/invoice_demo.bas) | A traditional invoice screen on the Chinook database: a header form, a lines grid, business rules |
+| [`qr_demo.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/qr_demo.bas) | A product screen with a QR code a phone can scan, and a printable QR label for every product, from a query |
 | [`retro_contacts.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/retro_contacts.bas) | A complete text-mode application: menu bar, editable grid, forms, memo editor, report |
 
 Run one with `ddgbasic examples/etl_pipeline.bas`, or open it in the IDE with `ddgbasic --ide examples/etl_pipeline.bas`.
@@ -183,8 +184,8 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DDG
 
 | Statement Keyword        | Description                                             |
 |-------------------------|--------------------------------------------------------|
-| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field (`GET`) for a variable, a hash field such as `rec.name`, or an array element, with optional `PICTURE`, `VALID ... MESSAGE`, `WHEN` and `LOOKUP (SELECT ...)` clauses, date fields (`@D`), numeric masks, `CHECKBOX` and drop-down `LIST` fields, and `HINT` help lines. See `READ`. |
-| @ ... BUTTON            | Adds a `[ label ]` button to a form; pressing it ends `READ`, and `BUTTON$` returns its label (`CANCEL` buttons put the old values back). |
+| @ ... SAY ... GET        | Writes text at a screen position (`SAY`) and adds an entry field (`GET`) for a variable, a hash field such as `rec.name`, or an array element, with optional `PICTURE`, `REQUIRED`, `VALID ... MESSAGE`, `WHEN` and `LOOKUP (SELECT ...)` clauses, date fields (`@D`), numeric masks, `CHECKBOX` and drop-down `LIST` fields, and `HINT` help lines. See `READ`. |
+| @ ... BUTTON            | Adds a button to a form; pressing it checks the form's `REQUIRED` and `VALID` rules and ends `READ`, and `BUTTON$` returns its label (`CANCEL` buttons skip the checks and put the old values back). |
 | ANALYZE CSV             | Provides a detailed statistical report on a CSV file, including delimiter detection, header presence, and column data types. |
 | ANALYZE FIXED           | Analyzes a fixed-width text file, automatically guessing column breaks if not specified, and reports on the layout. |
 | ANALYZE JSON            | Analyzes a JSON file, reporting on its structure, record count, and the consistency of object keys. |
@@ -192,7 +193,7 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DDG
 | ANALYZE TEXT            | Provides a statistical analysis of a plain text file, including character, word, and line counts, encoding, and newline style. |
 | ANALYZE XML             | Analyzes an XML file to determine its structure, infer the primary record tag, and list its fields. |
 | BELL                    | Emits an audible system beep sound. |
-| BOX                     | Draws a single- or double-line box with an optional title and `SHADOW` on the text screen. Pop-ups have drop shadows unless `SET SHADOW OFF`. |
+| BOX                     | Draws a box with an optional title and `SHADOW` on the text screen: thin and rounded in the modern style, single or double lines in the classic one. Pop-ups have drop shadows unless `SET SHADOW OFF`. |
 | BROWSE                  | Shows query results in a scrolling grid; `INTO var` receives the chosen row as a hash. With `EDIT`, cells are edited in place and saved to the table, Ins adds a row and Del deletes one. Click a heading (or F3) to sort, type to jump to a row; `FREEZE`, `FORMAT` and `COLOR` set frozen columns, number masks and row colours. `DETAIL` adds a second grid for the rows of the current one (an order's lines). |
 | BROWSER                 | Opens a specified URL in the system's default web browser. |
 | CHAIN                   | Transfers program execution to a different DDGBasic script, optionally preserving variables. |
@@ -239,6 +240,7 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DDG
 | POP                     | Removes the last element from an array, optionally storing it in a variable. |
 | PRINT                   | Outputs text, variables, or expressions to the console or an open file. |
 | PROGRESS                | Shows a centred box with a progress bar and percentage for a long job; `PROGRESS OFF` removes it. |
+| QR                      | Makes a QR code: `QR text$ AT row, col` draws it on the screen for a phone to scan, `QR text$ TO "code.png"` (or `.svg`) saves it to print. |
 | PUSH                    | Adds a new element to the end of an array. |
 | READ                    | Edits the pending `@ ... GET` fields; Esc restores the original values. |
 | REPORT                  | Turns a query into a report with a title, group headings, subtotals, totals and pages, to the screen, a file, `VIEW` or a string. |
@@ -249,7 +251,7 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DDG
 | REVERSE                 | Reverses the order of elements in an array. |
 | RMDIR                   | Removes an empty directory. |
 | RUN                     | Executes another DDGBasic script as a subroutine and returns control to the calling script upon completion. |
-| SET                     | Configures global settings for the interpreter, such as OUTPUT redirection, output FORMAT, EMAIL provider, SQL_FATAL_ERRORS, or HASH_KEYS handling. `SET THEME "classic"` sets the screen colours from a named theme. |
+| SET                     | Configures global settings for the interpreter, such as OUTPUT redirection, output FORMAT, EMAIL provider, SQL_FATAL_ERRORS, or HASH_KEYS handling. `SET STYLE "modern"` (the default) or `"classic"` sets the look of text screens, and `SET THEME "classic"` the screen colours from a named theme. |
 | SHELL                   | Executes a command in the underlying operating system shell. |
 | SHIFT                   | Removes the first element from an array, optionally storing it in a variable. |
 | SHOW                    | Displays database schema information, such as `SHOW TABLES` or `SHOW INDEXES`. Also `SHOW VARIABLES`. |
@@ -367,6 +369,7 @@ This document provides a quick reference to all available functions in the DDGBa
 | PATHNAME$(path$)        | FILE        | Returns the directory portion of a path. |
 | POWER(base, exponent)   | MATH        | Returns the value of base raised to the power of exponent. |
 | PROPER$(string$)        | STRING      | Converts a string to title case (e.g., "hello world" becomes "Hello World"). |
+| QR$(text$)              | SCREEN      | A QR code as lines of text (dark squares as █ ▀ ▄), for a file, an e-mail or `PRINT`. |
 | RADIANS(degrees)        | MATH        | Converts an angle from degrees to radians. |
 | REDUCE(array, fn, [initial]) | ARRAY/HOF | Folds an array into a single value using fn(acc, item). If initial is omitted, the first element is used as the initial accumulator. |
 | REPEAT$(string$, count) | STRING      | Returns a string consisting of string$ repeated count times. |
