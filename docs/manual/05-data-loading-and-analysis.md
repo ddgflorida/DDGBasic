@@ -58,6 +58,7 @@ The supported `LOAD` formats are `CSV`, `EXCEL`, `FIXED`, `JSON`, `JSONL`, `XML`
 
 ```
 LOAD format filename_expr destination
+     [REJECTS INTO [TABLE] rejects_table]
      [OPTIONS options_expr]
      [TRANSFORM column WITH fn | TRANSFORM ROW WITH fn
       | VALIDATE column WITH fn | VALIDATE ROW WITH fn] ...
@@ -69,6 +70,7 @@ The clauses must appear in this order:
 1. **format**: one of the keywords listed above.
 2. **filename_expr**: any string expression, such as a literal or a variable. `LOAD HTML` also accepts an `http://` or `https://` URL.
 3. **destination**: `CREATE TABLE name` or `INTO TABLE name mode` (see [5.3](#53-the-destination-clause)). This clause is required.
+   **REJECTS INTO**: optional. It names a table that keeps the rejected rows (see [5.10](#510-the-load-pipeline-and-rejected-rows)). It may come straight after the destination or anywhere among the `TRANSFORM` / `VALIDATE` clauses.
 4. **OPTIONS**: an optional string expression of `key=value` pairs (see [5.4](#54-the-options-string)).
 5. **TRANSFORM / VALIDATE**: zero or more clauses (see [5.9](#59-transform--validate--with-fn-clauses)).
 6. **USING SCHEMA**: optional, and only used by `LOAD CSV` (see [5.11](#511-load-csv--using-schema)).
@@ -81,7 +83,7 @@ LOAD CSV "emp.csv" CREATE TABLE emp _
   TRANSFORM name WITH TRIM$
 ```
 
-When the load finishes, `LOAD` prints `N records loaded into table T` (or `N records upserted into table T`). Any error inside the load sets `ERR = 1` and `ERRMSG$`, then raises a runtime error. You can trap that error with `ON ERROR` (Chapter 2).
+When the load finishes, `LOAD` prints `N records loaded into table T` (or `N records upserted into table T`). With `REJECTS INTO R` it adds `, M rejected into R`. Any error inside the load sets `ERR = 1` and `ERRMSG$`, then raises a runtime error. You can trap that error with `ON ERROR` (Chapter 2).
 
 ---
 
@@ -797,7 +799,7 @@ VALIDATE  ROW    WITH fn      ' fn(row_hash)  -> falsy drops the row
 - Any number of clauses can be combined, in any order. When several `TRANSFORM` or `VALIDATE` clauses name the same column, the last one wins.
 - `ROW` clauses are applied in the order written. Each `TRANSFORM ROW` receives the hash returned by the previous one. A `TRANSFORM ROW` function that returns something other than a hash gives the error `function must return a hash`.
 - Function names are checked when the statement is parsed. An unknown name gives `TRANSFORM qty WITH: unknown function 'nofn'.` and nothing is loaded.
-- Rows rejected by `VALIDATE ... WITH` are dropped **silently**. No message is printed.
+- Rows rejected by `VALIDATE ... WITH` are dropped **silently**. No message is printed. Add `REJECTS INTO` to keep them ([5.10](#510-the-load-pipeline-and-rejected-rows)).
 - Values returned from BASIC functions keep their BASIC types. A number returned by a transform is stored as a float, so `75000` is stored as `75000.0` in a TEXT column.
 
 ```basic
@@ -861,7 +863,36 @@ Jane was dropped by `VALIDATE email` because her email is empty. Al was dropped 
    7. Apply `SET NULL_HANDLING`: in each column set to convert (the default), an empty or all-space text value becomes `NULL` ([4.9.3](04-database-sql-and-output.md#493-set-null_handling)). The `USING SCHEMA` and `normalize` paths apply it too.
 6. **Insert** the rows in batches of `batchsize` inside one transaction, or upsert them through a staging table.
 
-**Rejected rows** are never written to a side table or file. They are only left out of the count printed in `N records loaded`. To keep the rejects, write them somewhere yourself from a `process_by` script or a `VALIDATE` function. For example, `PRINT #n` to a reject file before returning false.
+**Rejected rows** are the rows dropped in sub-steps 3 to 6 of step 5 above. Without `REJECTS INTO` they are only left out of the count printed in `N records loaded`.
+
+### REJECTS INTO
+
+```basic
+LOAD CSV "orders.csv" INTO TABLE orders REJECTS INTO orders_rejects _
+  OPTIONS "header=true, validate=email:REQUIRED" _
+  VALIDATE ROW WITH qty_ok
+```
+
+```
+950 records loaded into table orders, 50 rejected into orders_rejects
+```
+
+`REJECTS INTO rejects_table` writes every rejected row to `rejects_table`:
+
+- If the table does not exist, it is created with the columns `_linenum` (INTEGER), `_reason` (TEXT), and then the load's columns, all TEXT. These are the columns after `fields=` is applied. If the table exists, the rows are appended, so its column names must match. Clear it yourself with `DELETE FROM` when you want only the latest load's rejects.
+- `_linenum` is the source line number. The other columns hold the values as read from the source, before any `transform=`, `process_by` or `TRANSFORM` changes them.
+- `_reason` says which step rejected the row:
+
+| Rejected by | `_reason` |
+|---|---|
+| `validate=` option rule | `validate: ` followed by the message also printed to stderr, for example `validate: Column 'email' is REQUIRED but is empty.` |
+| `process_by` setting `rec.is_valid = 0` | `process_by: rec.is_valid = 0` |
+| `VALIDATE col WITH fn` | `VALIDATE email WITH IS_VALID_EMAIL` |
+| `VALIDATE ROW WITH fn` | `VALIDATE ROW WITH QTY_OK` |
+
+- The rejects are written in the load's transaction. If the load fails with an error, its rejects are rolled back too, and a rejects table that the load created is dropped.
+- It works with every mode: `CREATE TABLE` and `INTO TABLE` with `APPEND`, `TRUNCATE`, `IGNORE` or `UPSERT`. Rows skipped by `IGNORE` because of a key conflict are not rejects; they are counted as `ignored`.
+- The rejects table must not be the target table. `REJECTS INTO` is not supported with `normalize=true` ([5.12](#512-normalising-json-and-xml-into-related-tables)) or `USING SCHEMA` ([5.11](#511-load-csv--using-schema)); both give an error.
 
 **Errors** are different from rejections. A database error such as a constraint violation or a field-count mismatch, an unreadable file, or a bad option aborts the whole statement. It rolls back the inserts, sets `ERR=1` and `ERRMSG$`, and raises a runtime error.
 

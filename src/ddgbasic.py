@@ -844,14 +844,15 @@ class HelpRegistry:
             "examples": ['LOAD CSV "data.csv" INTO TABLE users']
         },
         "LOAD CSV": {
-            "syntax": 'LOAD CSV "file" CREATE TABLE name | INTO TABLE name [APPEND|TRUNCATE|UPSERT USING KEY col|IGNORE] [OPTIONS "..."] [TRANSFORM col|ROW WITH fn]* [VALIDATE col|ROW WITH fn]* [USING SCHEMA "..."]',
-            "desc": "Imports CSV data into a database table. TRANSFORM col WITH fn rewrites cells; TRANSFORM ROW WITH fn rewrites the whole row hash. VALIDATE col WITH fn / VALIDATE ROW WITH fn skip the row on falsy return. Clauses may be chained; column-level runs before row-level.",
+            "syntax": 'LOAD CSV "file" CREATE TABLE name | INTO TABLE name [APPEND|TRUNCATE|UPSERT USING KEY col|IGNORE] [REJECTS INTO table] [OPTIONS "..."] [TRANSFORM col|ROW WITH fn]* [VALIDATE col|ROW WITH fn]* [USING SCHEMA "..."]',
+            "desc": "Imports CSV data into a database table. TRANSFORM col WITH fn rewrites cells; TRANSFORM ROW WITH fn rewrites the whole row hash. VALIDATE col WITH fn / VALIDATE ROW WITH fn skip the row on falsy return. Clauses may be chained; column-level runs before row-level. REJECTS INTO table keeps the skipped rows, with _linenum, _reason and the source values.",
             "examples": [
                 'LOAD CSV "data.csv" INTO TABLE my_table TRUNCATE OPTIONS "header=true"',
                 'LOAD CSV "raw.csv" CREATE TABLE customers TRANSFORM phone WITH normalize_phone$',
                 'LOAD CSV "leads.csv" CREATE TABLE leads TRANSFORM name WITH PROPER$ VALIDATE email WITH is_valid_email',
                 'LOAD CSV "addrs.csv" CREATE TABLE a TRANSFORM ROW WITH fix_state_from_zip',
-                'LOAD CSV "rows.csv" CREATE TABLE r VALIDATE ROW WITH require_id_or_email'
+                'LOAD CSV "rows.csv" CREATE TABLE r VALIDATE ROW WITH require_id_or_email',
+                'LOAD CSV "leads.csv" INTO TABLE leads REJECTS INTO leads_rejects VALIDATE email WITH is_valid_email'
             ]
         },
         "LOAD JSON": {
@@ -9832,6 +9833,25 @@ class Interpreter:
 
         return dest_info
 
+    def _parse_load_rejects_clause(self, dest_info):
+        """Parses an optional REJECTS INTO [TABLE] name clause into dest_info['rejects'].
+        Returns True when one was consumed."""
+        tok = self._current_token()
+        if not (tok and tok[0] == 'ID' and tok[1].upper() == 'REJECTS'):
+            return False
+        self._next_token()
+        if not (self._current_token() and self._current_token()[0] == 'INTO'):
+            self._error("Expected INTO after REJECTS.")
+        self._next_token()
+        if self._current_token() and self._current_token()[0] == 'TABLE':
+            self._next_token()
+        if dest_info['rejects']:
+            self._error("Only one REJECTS INTO clause is allowed.")
+        dest_info['rejects'] = self._parse_table_name()
+        if dest_info['rejects'].lower() == str(dest_info['target']).lower():
+            self._error("The REJECTS INTO table must not be the LOAD target table.")
+        return True
+
     def _parse_load_options(self):
         """
         Parses an optional OPTIONS "key=value, key2=value2" clause.
@@ -10805,6 +10825,7 @@ class Interpreter:
         """
         # normalize=true never reaches here: _parse_load_statement sends it to LegacyJsonNormalizer
         created_table = None
+        created_rejects = None
         try:
             extractor = extractor_func(filename, options)
 
@@ -10911,6 +10932,34 @@ class Interpreter:
             if dest_info.get('db_mode') == 'TRUNCATE':
                 cursor.execute(f"DELETE FROM {self._quote_identifier(dest_info['target'])};")
 
+            # --- REJECTS INTO: rejected rows go to a side table with their line number and reason ---
+            rejects_table = dest_info.get('rejects')
+            reject_state = {'count': 0, 'batch': []}
+            if rejects_table:
+                # The rejects keep the source values as read, before any transform
+                reject_headers = ['_linenum', '_reason'] + [h for h in final_headers if h.lower() not in ('_linenum', '_reason')]
+                reject_index = [final_headers.index(h) for h in reject_headers[2:]]
+                if not self._table_exists(rejects_table):
+                    cols_def = ', '.join([f"{self._quote_identifier(h)} {'INTEGER' if h == '_linenum' else 'TEXT'}" for h in reject_headers])
+                    cursor.execute(f"CREATE TABLE {self._quote_identifier(rejects_table)} ({cols_def});")
+                    created_rejects = rejects_table   # dropped again if the load fails
+                reject_sql = f"INSERT INTO {self._quote_identifier(rejects_table)} ({', '.join([self._quote_identifier(h) for h in reject_headers])}) VALUES ({', '.join(['?'] * len(reject_headers))})"
+            reject_batchsize = int(options.get('batchsize', 10000))
+
+            def flush_rejects():
+                if reject_state['batch']:
+                    cursor.executemany(reject_sql, reject_state['batch'])
+                    reject_state['batch'] = []
+
+            def reject(row_info, source_row, reason):
+                # Called for every dropped row; runs inside the load's transaction
+                if not rejects_table:
+                    return
+                reject_state['count'] += 1
+                reject_state['batch'].append([row_info.get('physical_line_num'), reason] + [source_row[i] for i in reject_index])
+                if len(reject_state['batch']) >= reject_batchsize:
+                    flush_rejects()
+
             # --- Reusable Row Processing Generator ---
             empty_to_null = self._null_handling_rules(dest_info.get('target'), final_headers)
 
@@ -10924,6 +10973,7 @@ class Interpreter:
                         processed_row += [None] * (len(final_headers) - len(processed_row))
                     elif len(raw_row) > len(original_headers):
                         print(f"Warning: line {row_info.get('physical_line_num', '?')} has {len(raw_row)} fields, expected {len(original_headers)}; the extra fields are ignored.", file=sys.stderr)
+                    source_row = list(processed_row)
 
                     # --- 3. Apply TRANSFORM Rules ---
                     if transform_rules:
@@ -11025,6 +11075,7 @@ class Interpreter:
                                 
                     # --- 4. Apply Validation Rules ---
                     is_row_valid = True
+                    fail_msg = ''
                     if validation_rules:
                         # Create a dictionary of the current row's data for easy lookup by column name
                         row_dict = {h.lower(): (h, v) for h, v in zip(final_headers, processed_row)}
@@ -11045,7 +11096,7 @@ class Interpreter:
                                     # The REQUIRED rule is the only one that checks empty strings
                                     if rule_name == 'REQUIRED':
                                         if not val.strip():
-                                            print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' is REQUIRED but is empty.", file=sys.stderr)
+                                            fail_msg = f"Column '{col_name}' is REQUIRED but is empty."
                                             is_row_valid = False
                                     
                                     # Other rules should only apply to non-empty values
@@ -11054,35 +11105,35 @@ class Interpreter:
                                             try:
                                                 int(val)
                                             except ValueError:
-                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' is not an integer.", file=sys.stderr)
+                                                fail_msg = f"Column '{col_name}' value '{val}' is not an integer."
                                                 is_row_valid = False
                                         
                                         elif rule_name == 'ISNUMERIC':
                                             try:
                                                 float(val)
                                             except ValueError:
-                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' is not a number.", file=sys.stderr)
+                                                fail_msg = f"Column '{col_name}' value '{val}' is not a number."
                                                 is_row_valid = False
 
                                         elif rule_name == 'MINLENGTH':
                                             if len(val) < int(rule_arg):
-                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' (length {len(val)}) is shorter than min length {rule_arg}.", file=sys.stderr)
+                                                fail_msg = f"Column '{col_name}' value '{val}' (length {len(val)}) is shorter than min length {rule_arg}."
                                                 is_row_valid = False
 
                                         elif rule_name == 'MAXLENGTH':
                                             if len(val) > int(rule_arg):
-                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' (length {len(val)}) is longer than max length {rule_arg}.", file=sys.stderr)
+                                                fail_msg = f"Column '{col_name}' value '{val}' (length {len(val)}) is longer than max length {rule_arg}."
                                                 is_row_valid = False
 
                                         elif rule_name == 'IN':
                                             valid_values = {item.strip() for item in rule_arg.split(',')}
                                             if val not in valid_values:
-                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' is not in the allowed set {valid_values}.", file=sys.stderr)
+                                                fail_msg = f"Column '{col_name}' value '{val}' is not in the allowed set {valid_values}."
                                                 is_row_valid = False
 
                                         elif rule_name == 'REGEX':
                                             if not re.match(rule_arg, val):
-                                                print(f"Validation failed on line {row_info['physical_line_num']}: Column '{col_name}' value '{val}' does not match pattern '{rule_arg}'.", file=sys.stderr)
+                                                fail_msg = f"Column '{col_name}' value '{val}' does not match pattern '{rule_arg}'."
                                                 is_row_valid = False
                                     
                                     # If any rule for this column fails, stop checking other rules for it
@@ -11095,6 +11146,8 @@ class Interpreter:
                     
                     # If the row is invalid, skip it entirely
                     if not is_row_valid:
+                        print(f"Validation failed on line {row_info['physical_line_num']}: {fail_msg}", file=sys.stderr)
+                        reject(row_info, source_row, f"validate: {fail_msg}")
                         continue
 
                     # --- 5. Apply PROCESS_BY Script ---
@@ -11108,6 +11161,7 @@ class Interpreter:
                         del self.variables['rec'], self.variables['physical_line_num'], self.variables['logical_line_num']
 
                         if updated_rec.get('is_valid', -1.0) == 0.0:
+                            reject(row_info, source_row, "process_by: rec.is_valid = 0")
                             continue
                         processed_row = [updated_rec.get(h) for h in final_headers]
 
@@ -11126,6 +11180,7 @@ class Interpreter:
                                     skip_row = True
                                     break
                         if skip_row:
+                            reject(row_info, source_row, f"VALIDATE {header_name} WITH {fn_upper}")
                             continue
 
                     # --- 7. Whole-row TRANSFORM/VALIDATE ---
@@ -11144,6 +11199,7 @@ class Interpreter:
                                 skip_row = True
                                 break
                         if skip_row:
+                            reject(row_info, source_row, f"VALIDATE ROW WITH {fn_upper}")
                             continue
                         # Write the (possibly modified) hash back into column order
                         processed_row = [row_hash.get(h) for h in final_headers]
@@ -11154,9 +11210,14 @@ class Interpreter:
                                          for convert, value in zip(empty_to_null, processed_row)]
 
                     yield processed_row
+                # The rows are consumed inside the load's transaction, so the rejects join it
+                flush_rejects()
             
             # --- Generic Database Loading ---
             row_iterator = process_rows(extractor)
+
+            def rejects_note():
+                return f", {reject_state['count']} rejected into {rejects_table}" if rejects_table else ""
             
             if dest_info.get('db_mode') == 'UPSERT':
                 key_column = dest_info['key_column']
@@ -11164,7 +11225,7 @@ class Interpreter:
                 if key_column not in final_headers: self._error(f"UPSERT key column '{key_column}' not found in final headers.")
                 
                 total_rows = self._perform_batch_upsert(dest_info['target'], key_column, final_headers, row_iterator)
-                print(f"{total_rows} records upserted into table {dest_info['target']}")
+                print(f"{total_rows} records upserted into table {dest_info['target']}{rejects_note()}")
 
             else: # APPEND or TRUNCATE logic
                 batchsize = int(options.get('batchsize', 10000))
@@ -11187,15 +11248,17 @@ class Interpreter:
                     if batch: cursor.executemany(insert_sql, batch)
                 if dest_info.get('db_mode') == 'IGNORE':
                     inserted = cursor.execute(count_sql).fetchone()[0] - rows_before
-                    print(f"{inserted} records loaded into table {dest_info['target']} ({total_rows - inserted} ignored)")
+                    print(f"{inserted} records loaded into table {dest_info['target']} ({total_rows - inserted} ignored){rejects_note()}")
                 else:
-                    print(f"{total_rows} records loaded into table {dest_info['target']}")
+                    print(f"{total_rows} records loaded into table {dest_info['target']}{rejects_note()}")
             
         except FileNotFoundError:
             self._drop_failed_load_table(created_table)
+            self._drop_failed_load_table(created_rejects)
             self._error(f"File not found: {filename}")
         except Exception as e:
             self._drop_failed_load_table(created_table)
+            self._drop_failed_load_table(created_rejects)
             self.variables['ERR'], self.variables['ERRMSG$'] = 1.0, str(e)
             self._error(f"An error occurred during the LOAD operation: {e}")
 
@@ -11274,8 +11337,10 @@ class Interpreter:
 
         filename = self._parse_expression()
         
-        dest_info = self._parse_load_destination_clause() 
-        dest_info['load_type'] = load_type 
+        dest_info = self._parse_load_destination_clause()
+        dest_info['load_type'] = load_type
+        dest_info['rejects'] = None
+        self._parse_load_rejects_clause(dest_info)
         options = self._parse_load_options()
 
         # --- Parse optional first-class TRANSFORM and VALIDATE clauses ---
@@ -11292,6 +11357,8 @@ class Interpreter:
         row_validates  = []
         while self._current_token() is not None:
             tok = self._current_token()
+            if self._parse_load_rejects_clause(dest_info):
+                continue
             if tok[0] == 'ID' and tok[1].upper() in ('TRANSFORM', 'VALIDATE'):
                 kind = tok[1].upper()
                 self._next_token()  # consume TRANSFORM or VALIDATE
@@ -11368,6 +11435,12 @@ class Interpreter:
             except Exception as e:
                 self._error(f"Error reading schema file: {e}")
                 
+        if dest_info['rejects']:
+            if str(options.get('normalize', 'false')).lower() in ['true', '1', 'y']:
+                self._error("REJECTS INTO is not supported with normalize=true.")
+            if schema is not None and load_type == 'CSV':
+                self._error("REJECTS INTO is not supported with USING SCHEMA.")
+
         # --- MODIFIED: Unified NORMALIZE Logic ---
         if str(options.get('normalize', 'false')).lower() in ['true', '1', 'y']:
             if load_type not in ['JSON', 'XML']:
