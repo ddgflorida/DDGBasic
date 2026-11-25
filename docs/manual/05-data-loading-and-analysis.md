@@ -894,7 +894,82 @@ LOAD CSV "orders.csv" INTO TABLE orders REJECTS INTO orders_rejects _
 - It works with every mode: `CREATE TABLE` and `INTO TABLE` with `APPEND`, `TRUNCATE`, `IGNORE` or `UPSERT`. Rows skipped by `IGNORE` because of a key conflict are not rejects; they are counted as `ignored`.
 - The rejects table must not be the target table. `REJECTS INTO` is not supported with `normalize=true` ([5.12](#512-normalising-json-and-xml-into-related-tables)) or `USING SCHEMA` ([5.11](#511-load-csv--using-schema)); both give an error.
 
-**Errors** are different from rejections. A database error such as a constraint violation or a field-count mismatch, an unreadable file, or a bad option aborts the whole statement. It rolls back the inserts, sets `ERR=1` and `ERRMSG$`, and raises a runtime error.
+### Example: rejected rows and file problems
+
+`orders.csv` has a header line, so its data starts on line 2:
+
+```
+id,name,email,qty
+1,ann,ann@x.com,5
+2,bob,,3
+3,cy,cy@x.com,-1
+4,di
+5,ed,ed@x.com,7,extra
+```
+
+Line 3 has an empty email, line 4 a negative quantity, line 5 only two fields and line 6 one field too many.
+
+```basic
+FUNCTION qty_ok(r)
+    qty_ok = VAL(r.qty) >= 0
+END FUNCTION
+
+LOAD CSV "orders.csv" CREATE TABLE orders REJECTS INTO orders_rejects _
+  OPTIONS "header=true, transform=name:upper, validate=email:REQUIRED" _
+  VALIDATE ROW WITH qty_ok
+SELECT * FROM orders;
+SELECT * FROM orders_rejects;
+```
+
+The warnings and validation messages go to stderr; the rest is the program's output:
+
+```
+Validation failed on line 3: Column 'email' is REQUIRED but is empty.
+Warning: line 5 has 2 fields, expected 4; the missing fields are loaded as NULL.
+Validation failed on line 5: Column 'email' is REQUIRED but is empty.
+Warning: line 6 has 5 fields, expected 4; the extra fields are ignored.
+2 records loaded into table orders, 3 rejected into orders_rejects
++----+------+-----------+-----+
+| id | name |   email   | qty |
++----+------+-----------+-----+
+| 1  | ANN  | ann@x.com | 5   |
+| 5  | ED   | ed@x.com  | 7   |
++----+------+-----------+-----+
+(2 rows returned)
++----------+----------------------------------------------------+----+------+----------+------+
+| _linenum |                      _reason                       | id | name |  email   | qty  |
++----------+----------------------------------------------------+----+------+----------+------+
+| 3        | validate: Column 'email' is REQUIRED but is empty. | 2  | bob  |          | 3    |
+| 4        | VALIDATE ROW WITH QTY_OK                           | 3  | cy   | cy@x.com | -1   |
+| 5        | validate: Column 'email' is REQUIRED but is empty. | 4  | di   | NULL     | NULL |
++----------+----------------------------------------------------+----+------+----------+------+
+(3 rows returned)
+```
+
+- `_linenum` is the line in the file: bob is on line 3.
+- The rejected rows keep the values as read. The names are still `bob` and `cy` because `transform=name:upper` only changed the rows that were loaded, and bob's email is the empty text from the file, not `NULL`.
+- Line 5 was not rejected for being short. Its missing fields became `NULL`, and then the empty email failed `REQUIRED`. Without that rule the row would have been loaded with `NULL`s.
+- Line 6 was not rejected either. Its extra field was dropped and the row was loaded.
+
+So the rejects table holds the rows your own rules turned down. Problems with the file give a warning, as for lines 5 and 6, or stop the whole load with an error, as described next.
+
+**Errors** are different from rejections. An unreadable or missing file, a bad option, or a database error such as a `NOT NULL` or type constraint violation aborts the whole statement. It rolls back the inserts and the rejects, drops any table the load created (the target and the rejects table), sets `ERR=1` and `ERRMSG$`, and raises a runtime error. Rows with too few or too many fields are not errors: they give the warnings shown above.
+
+```basic
+ON ERROR GOTO oops
+LOAD CSV "missing.csv" CREATE TABLE o2 REJECTS INTO r2 OPTIONS "header=true"
+END
+oops:
+PRINT "ERR="; ERR; " "; ERRMSG$
+```
+
+```
+ERR= 1 File not found: missing.csv at line 2, col 77.
+  Context: '"header=true"' -> ['
+' (NEWLINE)] <- 'END'
+```
+
+`ERRMSG$` holds the message with its position and context. After this, neither `o2` nor `r2` exists.
 
 `LOAD` sets `ERR` to 0 and `ERRMSG$` to `""` when it starts, so `IF ERR <> 0` after a successful `LOAD` is false.
 
