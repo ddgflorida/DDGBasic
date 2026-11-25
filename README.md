@@ -7,7 +7,7 @@
 
 **DDGBasic wraps a procedural language around SQLite and DuckDB.** SQL is written straight into the program, query results come back as rows you can loop over, and program variables go into queries as bind variables (`:name`). Around the SQL you get what SQL lacks: variables, `IF` rules, loops, functions, error handling, files, HTTP and a text-mode UI.
 
-- **Load, clean and check data in one statement:** `LOAD CSV` calls your own BASIC functions on every cell (`TRANSFORM phone WITH normalize_phone$`) and drops rows that fail a check (`VALIDATE email WITH is_valid_email`).
+- **Load, clean and check data in one statement:** `LOAD CSV` calls your own BASIC functions on every cell (`TRANSFORM phone WITH normalize_phone$`) and drops rows that fail a check (`VALIDATE email WITH is_valid_email`). `REJECTS INTO bad_leads` keeps the dropped rows, with their line number and the reason.
 - **Rules over query results:** `FOR row IN (SELECT ...)` loops apply logic that is awkward in SQL (tiers, allocations, alerts) and write back with bind variables, inside transactions.
 - **Two engines in one program:** SQLite for records (a file, constraints, transactions), DuckDB for analytics (columnar, fast, querying Parquet and CSV files directly), with `DATABASE ENGINE` to switch.
 - **Results anywhere:** the same query to the console, CSV, JSON, Excel, Parquet, HTML or SQL, or to a grouped `REPORT`.
@@ -28,6 +28,7 @@ DDGBasic combines the simplicity of classic BASIC syntax with powerful, modern f
 * ### Powerful Data Ingestion & Transformation
     * **`LOAD` Command:** Ingest data from `.csv`, fixed-width, `.json`, `.jsonl`, `.xml`, `.parquet`, `.html`, and `.xls`/`.xlsx` (**Excel**) files into database tables or for file-to-file conversion.
     * **First-class TRANSFORM and VALIDATE clauses:** Apply user-defined functions (UDFs) or built-ins per cell or per row during loading: `LOAD CSV "raw.csv" CREATE TABLE clean TRANSFORM phone WITH normalize_phone$ VALIDATE email WITH is_valid_email TRANSFORM ROW WITH derive_full_name`.
+    * **REJECTS INTO:** `LOAD ... REJECTS INTO rejects_table` writes every row that fails a check to a table, with `_linenum`, `_reason` (which check failed) and the values as read from the file, instead of dropping it silently.
     * **OPTIONS string:** Headers, delimiters, encoding, and simple built-in transform/validate rules (upper, lower, trim, REQUIRED, MINLENGTH, REGEX).
     * **Field manipulation:** Select, rename (`fields=[Name] as N`), and exclude (`fields=*,-[Name]`) columns on the fly during data loading.
 
@@ -150,12 +151,14 @@ DATABASE ENGINE SQLITE
 DATABASE OPEN "leads.sqlite"
 
 LOAD CSV "raw_leads.csv" CREATE TABLE leads _
+  REJECTS INTO bad_leads _
   OPTIONS "header=true" _
   TRANSFORM name  WITH PROPER$ _
   TRANSFORM phone WITH normalize_phone$ _
   VALIDATE  email WITH is_valid_email
 
 PRINT `Imported ${(SELECT COUNT(*) FROM leads;)} clean rows.`
+SELECT _linenum, _reason, email FROM bad_leads;
 ```
 
 ---
@@ -229,7 +232,7 @@ A summary. The [Programmer's Reference Manual](https://github.com/ddgflorida/DDG
 | KILL                    | Deletes a file from the filesystem. |
 | LET                     | Assigns a value to a variable (the LET keyword is optional). |
 | LINE INPUT              | Reads a single line of text from an open file into a variable. |
-| LOAD                    | Loads data from a file (CSV, JSON, JSONL, XML, HTML, FIXED, EXCEL, PARQUET, TEXT) into a database table. Supports first-class `TRANSFORM col WITH fn`, `VALIDATE col WITH fn`, `TRANSFORM ROW WITH fn`, `VALIDATE ROW WITH fn` clauses. |
+| LOAD                    | Loads data from a file (CSV, JSON, JSONL, XML, HTML, FIXED, EXCEL, PARQUET, TEXT) into a database table. Supports first-class `TRANSFORM col WITH fn`, `VALIDATE col WITH fn`, `TRANSFORM ROW WITH fn`, `VALIDATE ROW WITH fn` clauses, and `REJECTS INTO table` to keep the rows that fail. |
 | LOCATE                  | Moves the cursor to a row and column. |
 | MAKE FORM               | Writes a complete data-entry program for a table: menu bar, editable grid, and an entry form with fields chosen from the column types (dates, number masks, check boxes, drop-downs for foreign keys). |
 | MKDIR                   | Creates a new directory. |
