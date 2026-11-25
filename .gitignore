@@ -20,3 +20,7 @@ dist/
 *.egg-info/
 # A maintainer's release script, kept out of the repository
 publish.bat
+
+# VS Code extension builds
+vscode/*.vsix
+vscode/node_modules/

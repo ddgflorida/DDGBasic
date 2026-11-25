@@ -1,0 +1,82 @@
+{
+  "comments": {
+    "lineComment": "REM",
+    "blockComment": [
+      "/*",
+      "*/"
+    ]
+  },
+  "brackets": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "{",
+      "}"
+    ]
+  ],
+  "autoClosingPairs": [
+    {
+      "open": "(",
+      "close": ")"
+    },
+    {
+      "open": "[",
+      "close": "]"
+    },
+    {
+      "open": "{",
+      "close": "}"
+    },
+    {
+      "open": "\"",
+      "close": "\"",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    },
+    {
+      "open": "`",
+      "close": "`",
+      "notIn": [
+        "string",
+        "comment"
+      ]
+    }
+  ],
+  "surroundingPairs": [
+    [
+      "(",
+      ")"
+    ],
+    [
+      "[",
+      "]"
+    ],
+    [
+      "\"",
+      "\""
+    ],
+    [
+      "`",
+      "`"
+    ]
+  ],
+  "wordPattern": "[A-Za-z_][A-Za-z0-9_]*\\$?|-?\\d+(\\.\\d+)?",
+  "indentationRules": {
+    "increaseIndentPattern": {
+      "pattern": "^\\s*(FOR\\b.*|WHILE\\b.*|DO\\b.*|FUNCTION\\b.*|ELSE\\s*$|ELSEIF\\b.*\\bTHEN\\s*$|IF\\b.*\\bTHEN\\s*$|FOREACH\\b.*)$",
+      "flags": "i"
+    },
+    "decreaseIndentPattern": {
+      "pattern": "^\\s*(NEXT\\b|WEND\\b|LOOP\\b|END\\s+(IF|FUNCTION)\\b|ENDIF\\b|ELSE\\b|ELSEIF\\b)",
+      "flags": "i"
+    }
+  }
+}

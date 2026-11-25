@@ -1,0 +1,117 @@
+{
+  "name": "ddgbasic",
+  "displayName": "DDGBasic",
+  "description": "DDGBasic language support: syntax highlighting, hover help and running programs",
+  "version": "0.1.1",
+  "publisher": "ddgflorida",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ddgflorida/DDGBasic"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "languages": [
+      {
+        "id": "ddgbasic",
+        "aliases": [
+          "DDGBasic",
+          "ddgbasic"
+        ],
+        "extensions": [
+          ".bas"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ddgbasic",
+        "scopeName": "source.ddgbasic",
+        "path": "./syntaxes/ddgbasic.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "ddgbasic.run",
+        "title": "Run DDGBasic Program",
+        "category": "DDGBasic",
+        "icon": "$(play)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "ddgbasic.run",
+          "when": "editorLangId == ddgbasic"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "ddgbasic.run",
+          "when": "editorLangId == ddgbasic"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "DDGBasic",
+      "properties": {
+        "ddgbasic.command": {
+          "type": "string",
+          "default": "ddgbasic",
+          "markdownDescription": "The command that runs a program; the file name is added after it. The default `ddgbasic` is the command `pip install ddgbasic` puts on the PATH. Examples: `ddgbasic.exe`, `python C:\\DDGBasic\\src\\ddgbasic.py`."
+        }
+      }
+    },
+    "debuggers": [
+      {
+        "type": "ddgbasic",
+        "label": "DDGBasic",
+        "languages": [
+          "ddgbasic"
+        ],
+        "configurationAttributes": {
+          "launch": {
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "The .bas program to run. ${file} (the default) runs the file in the editor.",
+                "default": "${file}"
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "type": "ddgbasic",
+            "request": "launch",
+            "name": "Run DDGBasic program",
+            "program": "${file}"
+          }
+        ],
+        "configurationSnippets": [
+          {
+            "label": "DDGBasic: Run program",
+            "description": "Runs a DDGBasic program in the terminal",
+            "body": {
+              "type": "ddgbasic",
+              "request": "launch",
+              "name": "Run DDGBasic program",
+              "program": "^\"\\${file}\""
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "activationEvents": [
+    "onDebugResolve:ddgbasic",
+    "onDebugInitialConfigurations"
+  ]
+}
