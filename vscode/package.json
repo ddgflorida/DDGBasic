@@ -2,7 +2,7 @@
   "name": "ddgbasic",
   "displayName": "DDGBasic",
   "description": "DDGBasic language support: syntax highlighting, hover help and running programs",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "publisher": "ddgflorida",
   "license": "MIT",
   "repository": {
@@ -66,6 +66,19 @@
           "type": "string",
           "default": "ddgbasic",
           "markdownDescription": "The command that runs a program; the file name is added after it. The default `ddgbasic` is the command `pip install ddgbasic` puts on the PATH. Examples: `ddgbasic.exe`, `python C:\\DDGBasic\\src\\ddgbasic.py`."
+        },
+        "ddgbasic.terminalLocation": {
+          "type": "string",
+          "enum": [
+            "editor",
+            "panel"
+          ],
+          "default": "editor",
+          "enumDescriptions": [
+            "An editor tab, with the editor's full height (screen programs need about 24 rows).",
+            "The terminal panel at the bottom of the window."
+          ],
+          "markdownDescription": "Where the DDGBasic terminal opens when a program runs."
         }
       }
     },

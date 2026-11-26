@@ -38,12 +38,18 @@ async function runProgram(program) {
   const open = vscode.workspace.textDocuments.find(d => d.fileName === fileName);
   if (open && open.isDirty && !(await open.save())) return;
 
-  const command = vscode.workspace.getConfiguration('ddgbasic').get('command') || 'ddgbasic';
+  const config = vscode.workspace.getConfiguration('ddgbasic');
+  const command = config.get('command') || 'ddgbasic';
+  // In an editor tab the terminal gets the editor's full height: screen programs (forms,
+  // BROWSE, QR AT) need about 24 rows, more than the terminal panel usually has
+  const location = config.get('terminalLocation') === 'panel'
+    ? vscode.TerminalLocation.Panel
+    : { viewColumn: vscode.ViewColumn.Active };
   // A new terminal in the program's folder, so relative file names in the program work
   for (const t of vscode.window.terminals) {
     if (t.name === TERMINAL_NAME) t.dispose();
   }
-  const terminal = vscode.window.createTerminal({ name: TERMINAL_NAME, cwd: path.dirname(fileName) });
+  const terminal = vscode.window.createTerminal({ name: TERMINAL_NAME, cwd: path.dirname(fileName), location });
   terminal.show();
   terminal.sendText(runCommandLine(command, path.basename(fileName)));
 }
