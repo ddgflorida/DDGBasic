@@ -51,7 +51,7 @@ DDGBasic combines the simplicity of classic BASIC syntax with powerful, modern f
     * `ddgbasic --ide program.bas` opens a full-screen editor with syntax colouring, a menu bar, and text selection with cut, copy and paste (Shift+arrows or the mouse; Ctrl-X/C/V, using the system clipboard). F5 runs the program and, if it stops with an error, puts the cursor on the error's line; F1 shows the help for the keyword under the cursor, the Immediate window (F6) runs a line at a time (`? x`, a quick `SELECT`), and F9/F8 set breakpoints and step through the program, with the Immediate window seeing its variables.
 
 * ### VS Code support
-    * The extension in [`vscode/`](https://github.com/ddgflorida/DDGBasic/blob/main/vscode/README.md) gives `.bas` files syntax highlighting, hover help (the `HELP` text for the statement under the mouse) and a Run command (F5, Ctrl+F5 or the ▷ button) that runs the program in VS Code's terminal. Its keyword lists are generated from the interpreter, so they match the language. It has no debugger yet; use the IDE's F9/F8 for breakpoints and stepping.
+    * The extension, a `.vsix` file on the [releases page](https://github.com/ddgflorida/DDGBasic/releases/latest) (source in [`vscode/`](https://github.com/ddgflorida/DDGBasic/blob/main/vscode/README.md)), gives `.bas` files syntax highlighting, hover help (the `HELP` text for the statement under the mouse) and a Run command (F5, Ctrl+F5 or the ▷ button) that runs the program in VS Code's terminal. Its keyword lists are generated from the interpreter, so they match the language. It has no debugger yet; use the IDE's F9/F8 for breakpoints and stepping.
 
 * ### String Interpolation
     * Backtick-delimited strings (`` ` ``) support `${expr}` interpolation: `` `Hello, ${name$}! Total: ${FORMAT$(amount, "$#,##0.00")}` ``.
@@ -90,12 +90,11 @@ To run from a copy of the source instead, install the dependencies with `pip ins
 
 To build a standalone executable, install `requirements-build.txt` and run `./compilenuitka.sh` (macOS/Linux; installs to `~/.local/bin`) or `compilenuitka.bat` (Windows; installs to `%USERPROFILE%\bin`). Both build `src/ddgbasic.py` from any folder and take another install folder as an argument, for example `compilenuitka.bat d:\tools`. Add the install folder to your `PATH` to run `ddgbasic` from anywhere. The build bundles the DuckDB of the Python that runs it, so both scripts stop if that DuckDB is older than 1.2 (`pip install --upgrade duckdb` fixes it).
 
-For **VS Code**, build the extension from a copy of the source and install it (it needs Node.js for the build):
+For **VS Code**, download `ddgbasic-<version>.vsix` from the [latest release](https://github.com/ddgflorida/DDGBasic/releases/latest) and install it with `code --install-extension ddgbasic-<version>.vsix`, or in VS Code's Extensions view: **⋯ > Install from VSIX...**. To build it from a copy of the source instead (it needs Node.js):
 
 ```bash
 cd vscode
 npx @vscode/vsce package                       # makes ddgbasic-<version>.vsix
-code --install-extension ddgbasic-0.1.2.vsix   # or Extensions view: ... > Install from VSIX
 ```
 
 If another BASIC extension also opens `.bas` files, see the extension's [README](https://github.com/ddgflorida/DDGBasic/blob/main/vscode/README.md) for choosing DDGBasic.
@@ -457,5 +456,7 @@ PRINT `Row ${i}: ${row("city$")} (${CARDINAL$(row("count"))})`
 ---
 
 ## 📄 License
+
+Copyright © 2025-2026 Data Design Group, Inc.
 
 DDGBasic is released under the [MIT License](https://github.com/ddgflorida/DDGBasic/blob/main/LICENSE). The sample data in `examples/dotgov.csv` is the public list of .gov domains published by CISA, and `examples/data/chinook.sqlite` is the [Chinook sample database](https://github.com/lerocha/chinook-database) by Luis Rocha (MIT License).
