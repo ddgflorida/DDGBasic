@@ -186,7 +186,7 @@ The `examples/` folder has some 60 programs; [`examples/README.md`](https://gith
 | [`two_engines.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/two_engines.bas) | SQLite keeps the records (constraints, a transaction), DuckDB analyses them from a Parquet file (median, best month), and the results go back to SQLite |
 | [`row_logic.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/row_logic.bas) | Allocating limited stock to orders by priority, row by row, with all-or-nothing and partial rules, in a transaction that `ON ERROR` rolls back |
 | [`invoice_demo.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/invoice_demo.bas) | A traditional invoice screen on the Chinook database: a header form, a lines grid, business rules |
-| [`qr_demo.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/qr_demo.bas) | A product screen with a QR code a phone can scan, and a printable QR label for every product, from a query |
+| [`qr_demo.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/qr_demo.bas) | QR codes for retail: UPC check digits and GS1 Digital Link codes (GTIN, lot and expiry) on a product screen a phone or checkout can scan, and a printable QR label for every product, from a query |
 | [`retro_contacts.bas`](https://github.com/ddgflorida/DDGBasic/blob/main/examples/retro_contacts.bas) | A complete text-mode application: menu bar, editable grid, forms, memo editor, report |
 
 Run one with `ddgbasic examples/etl_pipeline.bas`, or open it in the IDE with `ddgbasic --ide examples/etl_pipeline.bas`.
